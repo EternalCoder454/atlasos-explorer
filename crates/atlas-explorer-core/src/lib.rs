@@ -2,4 +2,9 @@
 //! decided from data alone, so it is tested without a display and shared by
 //! the app's C++ adapters through one bridge. See docs/DESIGN.md, "Layout".
 
+pub mod address;
 pub mod launch;
+pub mod names;
+pub mod queue;
+pub mod sort;
+pub mod undo;

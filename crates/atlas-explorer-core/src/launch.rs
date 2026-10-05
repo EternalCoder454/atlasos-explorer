@@ -103,7 +103,7 @@ fn location(arg: &str, cwd: &Path) -> Result<String, &'static str> {
 
 /// The scheme of `arg` when it starts like a URL (`scheme:`), per RFC 3986:
 /// a letter, then letters, digits, `+`, `-` or `.`.
-fn scheme_of(arg: &str) -> Option<&str> {
+pub(crate) fn scheme_of(arg: &str) -> Option<&str> {
     let colon = arg.find(':')?;
     let scheme = &arg[..colon];
     let mut chars = scheme.chars();
@@ -118,7 +118,7 @@ fn scheme_of(arg: &str) -> Option<&str> {
 
 /// A `file:` URL is kept only as `file:///abs/path` (or `file://localhost/`),
 /// so a host can't sneak in.
-fn file_url(arg: &str) -> Result<String, &'static str> {
+pub(crate) fn file_url(arg: &str) -> Result<String, &'static str> {
     let rest = &arg[5..];
     let path = if let Some(p) = rest.strip_prefix("//localhost/") {
         format!("/{p}")
@@ -134,7 +134,7 @@ fn file_url(arg: &str) -> Result<String, &'static str> {
 
 /// Removes `.` and resolves `..` lexically, as a shell would for a typed
 /// path; symlinks are left to KIO.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
