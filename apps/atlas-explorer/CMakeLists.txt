@@ -17,7 +17,12 @@ find_package(KF6DBusAddons REQUIRED)
 find_package(KF6WindowSystem REQUIRED)
 # Files, jobs, thumbnails, Open With and service menus (KIO); places and
 # drives (KIO's KFilePlacesModel, Solid); applications (KService).
-find_package(KF6 6.30 REQUIRED COMPONENTS KIO Solid Service CoreAddons Config)
+# KF6 has no umbrella package: one find_package per framework.
+find_package(KF6KIO 6.30 REQUIRED)
+find_package(KF6Solid 6.30 REQUIRED)
+find_package(KF6Service 6.30 REQUIRED)
+find_package(KF6CoreAddons 6.30 REQUIRED)
+find_package(KF6Config 6.30 REQUIRED)
 find_package(Corrosion REQUIRED)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
