@@ -3,6 +3,7 @@
 //! here as QObjects exposed to QML, over the Qt-free `atlas-explorer-core`.
 
 mod backend;
+mod ffi;
 
 atlas_framework_ui::app! {
     name: "Files",

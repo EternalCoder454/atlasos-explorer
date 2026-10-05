@@ -12,10 +12,48 @@ AtlasWindow {
     // The Rust backend (src/backend.rs); main.cpp sets it.
     required property var backend
 
-    // The place shown, a key of `places`.
-    property string place: "home"
-    // What the last launch asked to open, shown until the views exist.
+    // The folder shown (FolderView.url follows redirects and removed folders).
+    readonly property url currentUrl: view.url
+    property var backStack: []
+    property var forwardStack: []
+    // The place whose URL is the folder shown, if any.
+    readonly property string place: {
+        const cur = currentUrl.toString();
+        for (const p of places) {
+            if (StandardPlaces.place(p.key).toString() === cur) {
+                return p.key;
+            }
+        }
+        return "";
+    }
+    // What the last launch asked for that Explorer refused, shown over the view.
     property string launchText
+
+    // Goes to `target`, remembering where it was.
+    function navigate(target) {
+        if (!target || target.toString() === currentUrl.toString()) {
+            return;
+        }
+        backStack = backStack.concat([currentUrl]);
+        forwardStack = [];
+        view.url = target;
+    }
+    function goBack() {
+        if (backStack.length === 0) {
+            return;
+        }
+        forwardStack = forwardStack.concat([currentUrl]);
+        view.url = backStack[backStack.length - 1];
+        backStack = backStack.slice(0, -1);
+    }
+    function goForward() {
+        if (forwardStack.length === 0) {
+            return;
+        }
+        backStack = backStack.concat([currentUrl]);
+        view.url = forwardStack[forwardStack.length - 1];
+        forwardStack = forwardStack.slice(0, -1);
+    }
 
     title: AtlasApp.name
     width: Kirigami.Units.gridUnit * 64
@@ -44,7 +82,9 @@ AtlasWindow {
         target: root.backend
         function onOpen(locations, select, newWindow, split) {
             if (locations.length > 0) {
-                root.launchText = locations.join("\n");
+                root.launchText = "";
+                // Tabs and split view come later: the first location is shown.
+                root.navigate(locations[0]);
             }
         }
         function onRefused(text) {
@@ -71,7 +111,7 @@ AtlasWindow {
                     text: modelData.text
                     symbol: modelData.symbol
                     selected: root.place === modelData.key
-                    onClicked: root.place = modelData.key
+                    onClicked: root.navigate(StandardPlaces.place(modelData.key))
                 }
             }
         }
@@ -82,12 +122,67 @@ AtlasWindow {
             color: Qt.alpha(Kirigami.Theme.textColor, 0.12)
         }
 
-        PlaceholderPage {
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            title: root.places.find(p => p.key === root.place)?.text ?? ""
-            heading: root.launchText.length > 0 ? qsTr("Opening Locations") : qsTr("Not Built Yet")
-            text: root.launchText.length > 0 ? root.launchText : qsTr("Folders and files arrive with the first usable version.")
+            spacing: 0
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: Kirigami.Units.smallSpacing
+                spacing: Kirigami.Units.smallSpacing
+
+                ToolbarButton {
+                    symbol: Symbols.ArrowBack
+                    text: qsTr("Back")
+                    enabled: root.backStack.length > 0
+                    focusable: true
+                    onClicked: root.goBack()
+                }
+                ToolbarButton {
+                    symbol: Symbols.ArrowForward
+                    text: qsTr("Forward")
+                    enabled: root.forwardStack.length > 0
+                    focusable: true
+                    onClicked: root.goForward()
+                }
+                ToolbarButton {
+                    symbol: Symbols.ArrowUpward
+                    text: qsTr("Up")
+                    focusable: true
+                    onClicked: root.navigate(StandardPlaces.parentUrl(root.currentUrl))
+                }
+                // The address bar replaces this label in the next part.
+                Text {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    textFormat: Text.PlainText
+                    elide: Text.ElideMiddle
+                    text: StandardPlaces.displayLocation(root.currentUrl)
+                    color: Kirigami.Theme.textColor
+                }
+            }
+
+            Text {
+                visible: root.launchText.length > 0
+                Layout.fillWidth: true
+                Layout.margins: Kirigami.Units.smallSpacing
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                text: root.launchText
+                color: Kirigami.Theme.negativeTextColor
+            }
+
+            FolderView {
+                id: view
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                focus: true
+                url: StandardPlaces.place("home")
+                onNavigateRequested: target => root.navigate(target)
+                // Opening files, with the trust prompts, is wired by another part.
+                onOpenRequested: urls => console.info("open requested:", urls.length)
+            }
         }
     }
 }

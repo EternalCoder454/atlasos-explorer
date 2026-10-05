@@ -70,7 +70,8 @@ endif()
 
 qt_add_executable(atlas-explorer-app cpp/main.cpp)
 set_target_properties(atlas-explorer-app PROPERTIES OUTPUT_NAME atlas-explorer)
-target_include_directories(atlas-explorer-app PRIVATE "${ATLAS_UI_CRATE_DIR}/include")
+target_include_directories(atlas-explorer-app PRIVATE "${ATLAS_UI_CRATE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cpp/kio")
 
 # qmlcachegen compiles every QML file to C++ at build time; the app reads no
 # .qml from disk at run time.
@@ -80,6 +81,14 @@ qt_add_qml_module(atlas-explorer-app
     QML_FILES
         qml/Main.qml
         qml/PlaceholderPage.qml
+        qml/FolderView.qml
+        qml/DetailsView.qml
+        qml/IconsView.qml
+    SOURCES
+        cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
+        cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
+        cpp/kio/ThumbnailProvider.h cpp/kio/ThumbnailProvider.cpp
+        cpp/kio/RustBridge.h
 )
 
 target_link_libraries(atlas-explorer-app PRIVATE
