@@ -48,6 +48,8 @@ public:
         ModifiedRole,
         TypeTextRole,
         ThumbnailSourceRole,
+        SizeTextRole,
+        ModifiedTextRole,
     };
 
     explicit FolderModel(QObject *parent = nullptr);
@@ -82,6 +84,8 @@ public:
     // First row at or after startRow (wrapping) whose display name starts with prefix; -1 for none.
     Q_INVOKABLE int findPrefix(const QString &prefix, int startRow) const;
     Q_INVOKABLE bool isDirAt(int row) const;
+    // The KFileItem of the shown entry with this URL (null when it isn't listed).
+    KFileItem fileItemOf(const QUrl &url) const;
     Q_INVOKABLE QItemSelection rangeSelection(int from, int to) const;
 
 Q_SIGNALS:

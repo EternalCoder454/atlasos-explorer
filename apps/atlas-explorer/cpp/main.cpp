@@ -2,6 +2,7 @@
 // launch (the launcher icon, a folder opened from another app,
 // `atlas-explorer --select <file>`) hands its arguments to this one and
 // exits; they are read in Rust (src/backend.rs), never here.
+#include "FileManager1.h"
 #include "kio/ThumbnailProvider.h"
 
 #include <atlas/app.h>
@@ -121,6 +122,27 @@ int main(int argc, char *argv[])
         }
         activate(b, arguments, QString());
     });
+    // org.freedesktop.FileManager1: "show this folder / item / its properties"
+    // from any app in the session. Everything goes through the backend's launch
+    // parsing; `--` first so nothing sent is read as an option.
+    auto viaBackend = [e = engine.get(), b = backend.get()](const QStringList &uris, const QString &, const QString &option) {
+        raise(e);
+        QStringList arguments;
+        if (!option.isEmpty()) {
+            arguments << option;
+        }
+        arguments << QStringLiteral("--") << uris;
+        activate(b, arguments, QString());
+    };
+    FileManager1::registerOn(
+        backend.get(), [viaBackend](const QStringList &u, const QString &id) { viaBackend(u, id, QString()); },
+        [viaBackend](const QStringList &u, const QString &id) { viaBackend(u, id, QStringLiteral("--select")); },
+        [e = engine.get(), b = backend.get()](const QStringList &uris, const QString &) {
+            raise(e);
+            QStringList arguments{QStringLiteral("--")};
+            arguments << uris;
+            QMetaObject::invokeMethod(b, "inspect", Q_ARG(QStringList, arguments));
+        });
     activate(backend.get(), QCoreApplication::arguments().mid(1), QDir::currentPath());
 
     const int code = app.exec();

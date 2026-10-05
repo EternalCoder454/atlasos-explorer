@@ -9,7 +9,7 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX /usr CACHE PATH "" FORCE)
 endif()
 include(GNUInstallDirs)
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets DBus)
 qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
 # atlas-framework-ui's startup code (single instance, window activation)
@@ -23,6 +23,7 @@ find_package(KF6Solid 6.30 REQUIRED)
 find_package(KF6Service 6.30 REQUIRED)
 find_package(KF6CoreAddons 6.30 REQUIRED)
 find_package(KF6Config 6.30 REQUIRED)
+find_package(KF6GuiAddons 6.30 REQUIRED)
 find_package(Corrosion REQUIRED)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
@@ -68,7 +69,7 @@ if(NOT EXISTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}/Atlas/Ui/qmldir")
     message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui (atlas-framework)")
 endif()
 
-qt_add_executable(atlas-explorer-app cpp/main.cpp)
+qt_add_executable(atlas-explorer-app cpp/main.cpp cpp/FileManager1.h cpp/FileManager1.cpp)
 set_target_properties(atlas-explorer-app PROPERTIES OUTPUT_NAME atlas-explorer)
 target_include_directories(atlas-explorer-app PRIVATE "${ATLAS_UI_CRATE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/cpp/kio")
@@ -88,13 +89,14 @@ qt_add_qml_module(atlas-explorer-app
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
         cpp/kio/ThumbnailProvider.h cpp/kio/ThumbnailProvider.cpp
+        cpp/kio/FileActions.h cpp/kio/FileActions.cpp
         cpp/kio/RustBridge.h
 )
 
 target_link_libraries(atlas-explorer-app PRIVATE
     atlas_explorer
-    Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets
-    KF6::DBusAddons KF6::WindowSystem
+    Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets Qt6::DBus
+    KF6::DBusAddons KF6::WindowSystem KF6::GuiAddons
     KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::KIOFileWidgets
     KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore)
 
@@ -105,6 +107,8 @@ install(IMPORTED_RUNTIME_ARTIFACTS atlas-explorer-indexd atlas-explorer-search
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/net.eterneon.atlas.explorer.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES data/dbus/org.freedesktop.FileManager1.service
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services)
 install(FILES data/net.eterneon.atlas.explorer.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
 install(FILES data/net.eterneon.atlas.explorer.svg

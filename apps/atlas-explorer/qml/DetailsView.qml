@@ -26,6 +26,11 @@ Item {
         list.positionViewAtIndex(row, ListView.Contain);
     }
 
+    // The row at a point in this item's coordinates, -1 for none.
+    function rowAt(x, y) {
+        return list.indexAt(x + list.contentX, y + list.contentY);
+    }
+
     function neighbor(row, dir) {
         switch (dir) {
         case "up":
@@ -131,8 +136,8 @@ Item {
             required property string iconName
             required property bool isDir
             required property bool isHidden
-            required property var size
-            required property var modified
+            required property string sizeText
+            required property string modifiedText
             required property string typeText
             width: Math.max(list.width, root.totalWidth)
             height: root.rowHeight
@@ -180,7 +185,7 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
-                    text: row.isDir ? "" : Qt.locale().formattedDataSize(row.size)
+                    text: row.sizeText
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
                 Text {
@@ -200,7 +205,7 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
-                    text: row.modified ? Qt.formatDateTime(row.modified, Locale.ShortFormat) : ""
+                    text: row.modifiedText
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
             }
@@ -208,9 +213,30 @@ Item {
                 id: mouse
                 anchors.fill: parent
                 hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                property point start
+                property bool narrow: false
+                property bool dragged: false
                 onPressed: mouseEvent => {
-                    root.fv.forceActiveFocus();
-                    root.fv.chooseRow(row.index, mouseEvent.modifiers, false);
+                    if (mouseEvent.button === Qt.RightButton) {
+                        root.fv.rowMenu(row.index);
+                        return;
+                    }
+                    start = Qt.point(mouseEvent.x, mouseEvent.y);
+                    dragged = false;
+                    narrow = !root.fv.pressRow(row.index, mouseEvent.modifiers);
+                }
+                onPositionChanged: mouseEvent => {
+                    if (pressed && !dragged && (pressedButtons & Qt.LeftButton) && Math.hypot(mouseEvent.x - start.x, mouseEvent.y - start.y) > Application.styleHints.startDragDistance) {
+                        dragged = true;
+                        root.fv.beginDrag();
+                    }
+                }
+                onReleased: mouseEvent => {
+                    if (narrow && !dragged) {
+                        root.fv.chooseRow(row.index, 0, false);
+                    }
+                    narrow = false;
                 }
                 onDoubleClicked: root.fv.activateRow(row.index)
             }

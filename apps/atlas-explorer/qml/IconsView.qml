@@ -21,6 +21,11 @@ Item {
         grid.positionViewAtIndex(row, GridView.Contain);
     }
 
+    // The row at a point in this item's coordinates, -1 for none.
+    function rowAt(x, y) {
+        return grid.indexAt(x + grid.contentX, y + grid.contentY);
+    }
+
     function neighbor(row, dir) {
         const page = compact ? perColumn * Math.max(1, Math.floor(grid.width / cellW) - 1) : perRow * Math.max(1, perColumn - 1);
         switch (dir) {
@@ -114,9 +119,30 @@ Item {
                 id: mouse
                 anchors.fill: parent
                 hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                property point start
+                property bool narrow: false
+                property bool dragged: false
                 onPressed: mouseEvent => {
-                    root.fv.forceActiveFocus();
-                    root.fv.chooseRow(cell.index, mouseEvent.modifiers, false);
+                    if (mouseEvent.button === Qt.RightButton) {
+                        root.fv.rowMenu(cell.index);
+                        return;
+                    }
+                    start = Qt.point(mouseEvent.x, mouseEvent.y);
+                    dragged = false;
+                    narrow = !root.fv.pressRow(cell.index, mouseEvent.modifiers);
+                }
+                onPositionChanged: mouseEvent => {
+                    if (pressed && !dragged && (pressedButtons & Qt.LeftButton) && Math.hypot(mouseEvent.x - start.x, mouseEvent.y - start.y) > Application.styleHints.startDragDistance) {
+                        dragged = true;
+                        root.fv.beginDrag();
+                    }
+                }
+                onReleased: mouseEvent => {
+                    if (narrow && !dragged) {
+                        root.fv.chooseRow(cell.index, 0, false);
+                    }
+                    narrow = false;
                 }
                 onDoubleClicked: root.fv.activateRow(cell.index)
             }

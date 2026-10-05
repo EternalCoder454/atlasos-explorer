@@ -344,6 +344,9 @@ trash, delete, rename, new folder, restore from trash and empty trash.
   both files side by side (thumbnail, size, date, which is newer), Replace,
   Skip, Keep Both (KIO's suggested name, editable), and "Do this for all
   conflicts" for multi-item operations. Folders get Merge or Skip.
+- **v0.1 note:** v0.1 uses KIO's `FileUndoManager` (every job is recorded
+  with it) and KIO's own delegate for conflicts and job progress; the core's
+  own undo record and the QML conflict dialog below come later.
 - **Undo** (Ctrl+Z) undoes the last operation: copy (trash the copies),
   move and rename (move back), new folder (remove if still empty), trash
   (restore from the trash). Explorer keeps its own undo record in the core,

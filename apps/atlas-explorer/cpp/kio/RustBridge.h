@@ -22,6 +22,9 @@ struct AtlasSortRow {
 };
 size_t atlas_display_name(const uint8_t *name, size_t len, uint8_t *out, size_t cap);
 size_t atlas_name_key(const uint8_t *name, size_t len, uint8_t *out, size_t cap);
+int atlas_validate_name(const uint8_t *name, size_t len, uint8_t *out, size_t cap, size_t *textLen);
+int atlas_parse_address(const uint8_t *text, size_t len, const uint8_t *current, size_t currentLen, const uint8_t *home, size_t homeLen, uint8_t *out,
+                        size_t cap, size_t *textLen);
 bool atlas_sort_permutation(const AtlasSortRow *rows, size_t n, uint32_t column, bool descending, bool foldersFirst, uint32_t *out);
 }
 
@@ -49,4 +52,43 @@ inline QString rustDisplayName(const QByteArray &name)
 inline QByteArray rustNameKey(const QByteArray &name)
 {
     return rustBytes(atlas_name_key, name);
+}
+
+// The result of a core check: ok, and the text (warnings, the refusal, the URL).
+struct RustCheck {
+    bool ok = false;
+    QString text;
+};
+
+// `fn` is atlas_validate_name-shaped: ok is false when the core refused.
+inline RustCheck rustValidateName(const QString &name)
+{
+    const QByteArray in = name.toUtf8();
+    QByteArray buf(512, 0);
+    size_t n = 0;
+    const auto *p = reinterpret_cast<const uint8_t *>(in.constData());
+    int rc = atlas_validate_name(p, size_t(in.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()), &n);
+    if (n > size_t(buf.size())) {
+        buf.resize(qsizetype(n));
+        rc = atlas_validate_name(p, size_t(in.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()), &n);
+    }
+    return {rc == 0, QString::fromUtf8(buf.constData(), qsizetype(qMin(n, size_t(buf.size()))))};
+}
+
+inline RustCheck rustParseAddress(const QString &text, const QString &current, const QString &home)
+{
+    const QByteArray t = text.toUtf8(), c = current.toUtf8(), h = home.toUtf8();
+    QByteArray buf(1024, 0);
+    size_t n = 0;
+    auto call = [&] {
+        return atlas_parse_address(reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), reinterpret_cast<const uint8_t *>(c.constData()),
+                                   size_t(c.size()), reinterpret_cast<const uint8_t *>(h.constData()), size_t(h.size()),
+                                   reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()), &n);
+    };
+    int rc = call();
+    if (n > size_t(buf.size())) {
+        buf.resize(qsizetype(n));
+        rc = call();
+    }
+    return {rc == 0, QString::fromUtf8(buf.constData(), qsizetype(qMin(n, size_t(buf.size()))))};
 }

@@ -4,6 +4,7 @@
 
 use atlas_explorer_core::display_name;
 use atlas_explorer_core::sort::{Column, SortRow, name_key, sort_permutation};
+use atlas_explorer_core::{address, names};
 
 /// One row for `atlas_sort_permutation`; the C++ twin is in FolderModel.cpp.
 #[repr(C)]
@@ -131,6 +132,79 @@ pub unsafe extern "C" fn atlas_sort_permutation(
     true
 }
 
+/// Checks a new file or folder name. Returns 0 when it is fine (the text, if
+/// any, lists warnings, one per line), 1 when it is refused (the text says why).
+/// The text's length is stored in `*text_len`, as `atlas_display_name` does.
+///
+/// # Safety
+/// As for `atlas_display_name`; `text_len` points to a writable usize.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn atlas_validate_name(
+    name: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+    text_len: *mut usize,
+) -> i32 {
+    if text_len.is_null() {
+        return 1;
+    }
+    // SAFETY: forwarded from this function's contract.
+    let name = String::from_utf8_lossy(unsafe { bytes(name, len) }).into_owned();
+    let (code, text) = match names::validate(&name) {
+        Ok(w) => (
+            0,
+            w.iter()
+                .map(|w| w.describe())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Err(e) => (1, e.describe().to_string()),
+    };
+    // SAFETY: `out` and `text_len` as promised above.
+    unsafe { *text_len = put(text.as_bytes(), out, cap) };
+    code
+}
+
+/// Reads typed address text. Returns 0 and the URL in `out`, or 1 and the
+/// reason in plain words; the length is stored in `*text_len`.
+///
+/// # Safety
+/// Each pointer pair covers its length (or is null with length 0); `out`
+/// points to `cap` writable bytes (or is null); `text_len` is writable.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn atlas_parse_address(
+    text: *const u8,
+    len: usize,
+    current: *const u8,
+    current_len: usize,
+    home: *const u8,
+    home_len: usize,
+    out: *mut u8,
+    cap: usize,
+    text_len: *mut usize,
+) -> i32 {
+    if text_len.is_null() {
+        return 1;
+    }
+    // SAFETY: forwarded from this function's contract.
+    let (text, current, home) = unsafe {
+        (
+            String::from_utf8_lossy(bytes(text, len)).into_owned(),
+            String::from_utf8_lossy(bytes(current, current_len)).into_owned(),
+            String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
+        )
+    };
+    let (code, msg) = match address::parse(&text, &current, std::path::Path::new(&home)) {
+        Ok(url) => (0, url),
+        Err(why) => (1, why.to_string()),
+    };
+    // SAFETY: `out` and `text_len` as promised above.
+    unsafe { *text_len = put(msg.as_bytes(), out, cap) };
+    code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +218,39 @@ mod tests {
         let got = unsafe { atlas_display_name(name.as_ptr(), name.len(), buf.as_mut_ptr(), need) };
         assert_eq!(got, need);
         assert!(!String::from_utf8(buf).unwrap().contains('\n'));
+    }
+
+    #[test]
+    fn validate_and_parse_report_through_the_abi() {
+        let mut n = 0usize;
+        let bad = b"a/b";
+        let mut buf = [0u8; 256];
+        let r = unsafe {
+            atlas_validate_name(bad.as_ptr(), bad.len(), buf.as_mut_ptr(), buf.len(), &mut n)
+        };
+        assert_eq!(r, 1);
+        assert!(n > 0);
+        let ok = b"fine";
+        let r = unsafe {
+            atlas_validate_name(ok.as_ptr(), ok.len(), buf.as_mut_ptr(), buf.len(), &mut n)
+        };
+        assert_eq!((r, n), (0, 0));
+        let t = b"/tmp/x";
+        let r = unsafe {
+            atlas_parse_address(
+                t.as_ptr(),
+                t.len(),
+                std::ptr::null(),
+                0,
+                b"/home/u".as_ptr(),
+                7,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(&buf[..n], b"file:///tmp/x");
     }
 
     #[test]

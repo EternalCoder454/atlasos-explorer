@@ -23,8 +23,16 @@ FocusScope {
     property int anchorRow: -1
     property string typed: ""
     readonly property var activeView: viewMode === "details" ? details : icons
+    // The FileActions that drags and drops go to.
+    property var actions
+    // The URLs of the selected rows.
+    readonly property var selectedUrls: {
+        top.selRevision;
+        return folderModel.urlsOf(top.selectedRows());
+    }
 
     signal openRequested(var urls)
+    signal contextMenuRequested(var urls)
     signal navigateRequested(url target)
 
     FolderModel {
@@ -68,6 +76,51 @@ FocusScope {
             out.push(list[i].row);
         }
         return out;
+    }
+
+    // Selects the listed items (the ones that are shown) and scrolls to the last.
+    function selectUrls(urls) {
+        sel.clearSelection();
+        let last = -1;
+        for (const u of urls) {
+            const r = folderModel.rowOfUrl(u);
+            if (r >= 0) {
+                sel.select(folderModel.index(r, 0), ItemSelectionModel.Select);
+                last = r;
+            }
+        }
+        if (last >= 0) {
+            anchorRow = last;
+            setCurrent(last);
+        }
+    }
+
+    // A press on a row. Pressing a selected row with no modifier keeps the
+    // selection, so a drag can take all of it; the release then narrows it.
+    function pressRow(row, mods) {
+        forceActiveFocus();
+        if (mods === 0 && isSelected(row, selRevision)) {
+            setCurrent(row);
+            return false;
+        }
+        chooseRow(row, mods, false);
+        return true;
+    }
+
+    // A right click on a row: the menu is for the selection, which first
+    // becomes this row when it wasn't part of it.
+    function rowMenu(row) {
+        forceActiveFocus();
+        if (!isSelected(row, selRevision)) {
+            chooseRow(row, 0, false);
+        }
+        contextMenuRequested(selectedUrls);
+    }
+
+    function beginDrag() {
+        if (actions) {
+            actions.startDrag(selectedUrls);
+        }
     }
 
     function setCurrent(row) {
@@ -198,6 +251,28 @@ FocusScope {
                 chooseRow(hit, 0, false);
             }
             event.accepted = true;
+        }
+    }
+
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        onTapped: {
+            top.forceActiveFocus();
+            sel.clearSelection();
+            top.contextMenuRequested([]);
+        }
+    }
+
+    DropArea {
+        anchors.fill: parent
+        onDropped: drop => {
+            if (!top.actions || !drop.hasUrls) {
+                return;
+            }
+            const row = top.activeView.rowAt(drop.x, drop.y);
+            const target = row >= 0 && folderModel.isDirAt(row) ? folderModel.urlAt(row) : folderModel.url;
+            drop.accepted = true;
+            top.actions.drop(drop.urls, target);
         }
     }
 

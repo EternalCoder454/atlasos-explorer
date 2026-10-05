@@ -1,10 +1,13 @@
 #include "FolderModel.h"
+
 #include "RustBridge.h"
 
+#include <KIO/Global>
 #include <KIO/Job>
 #include <KIO/UDSEntry>
 
 #include <QFileInfo>
+#include <QLocale>
 
 #include <algorithm>
 
@@ -76,6 +79,8 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {IsHiddenRole, "isHidden"},
         {SizeRole, "size"},
         {ModifiedRole, "modified"},
+        {SizeTextRole, "sizeText"},
+        {ModifiedTextRole, "modifiedText"},
         {TypeTextRole, "typeText"},
         {ThumbnailSourceRole, "thumbnailSource"},
     };
@@ -143,6 +148,11 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         return e.size;
     case ModifiedRole:
         return e.mtime > 0 ? QVariant(QDateTime::fromSecsSinceEpoch(e.mtime)) : QVariant();
+    case SizeTextRole:
+        // Folders show nothing: their size is the directory entry's, not a count.
+        return e.isDir ? QString() : KIO::convertSize(KIO::filesize_t(e.size));
+    case ModifiedTextRole:
+        return e.mtime > 0 ? QLocale().toString(QDateTime::fromSecsSinceEpoch(e.mtime), QLocale::ShortFormat) : QString();
     case TypeTextRole:
         fillType(e);
         return e.type;
@@ -596,4 +606,10 @@ QItemSelection FolderModel::rangeSelection(int from, int to) const
     from = std::clamp(from, 0, n - 1);
     to = std::clamp(to, 0, n - 1);
     return QItemSelection(index(std::min(from, to)), index(std::max(from, to)));
+}
+
+KFileItem FolderModel::fileItemOf(const QUrl &url) const
+{
+    const int row = rowOfUrl(url);
+    return row >= 0 ? m_rows.at(row).item : KFileItem();
 }

@@ -132,6 +132,7 @@ appstream-util validate-relax --nonet \
 %{_bindir}/atlas-explorer-indexd
 %{_bindir}/atlas-explorer-search
 %{_datadir}/dbus-1/services/net.eterneon.atlas.explorer.Search.service
+%{_datadir}/dbus-1/services/org.freedesktop.FileManager1.service
 %{_datadir}/dbus-1/interfaces/net.eterneon.atlas.explorer.Search1.xml
 %{_userunitdir}/atlas-explorer-indexd.service
 %{_datadir}/applications/net.eterneon.atlas.explorer.desktop
