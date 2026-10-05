@@ -26,7 +26,9 @@ there.
   (`CARGO_TARGET_DIR=/work/target/<name> scripts/dev.sh ...`). Iterative
   compiles go through `~/.claude/heavy/run.sh` with `-j 8` at most; the first
   dev image build, full suites, RPMs and UI stress runs go to the "AtlasOS"
-  coordinator session.
+  coordinator session. run.sh stops a job after 4 hours (`HEAVY_TIMEOUT=<s>`
+  for a longer one); every GUI launch, spawned process and wait in a test or
+  script has its own timeout, so a hang fails instead of blocking the queue.
 - **Never touch Zach's files.** Tests use generated trees and disk images
   under `/work`, with `HOME` and every `XDG_*` dir pointed there. Never the
   real home, drives, Trash, `user-places.xbel`, mounts or KIO settings.
