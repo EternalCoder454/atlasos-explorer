@@ -3,8 +3,8 @@
 //! `org.freedesktop.Application.Open` and `org.freedesktop.FileManager1`.
 //! Every caller is untrusted: arguments are capped, and a location is kept
 //! only when it is a plain absolute path or a URL with a well-formed scheme
-//! and no control or bidi characters. Whether KIO knows the scheme is checked
-//! by the app (`KProtocolInfo`), which this crate cannot ask.
+//! and no control or bidi characters. Only the schemes in [`LAUNCH_SCHEMES`]
+//! are opened, so another app can't point Files at an arbitrary KIO worker.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -88,6 +88,12 @@ fn location(arg: &str, cwd: &Path) -> Result<String, &'static str> {
         if scheme.eq_ignore_ascii_case("file") {
             return file_url(arg);
         }
+        if !LAUNCH_SCHEMES
+            .iter()
+            .any(|k| scheme.eq_ignore_ascii_case(k))
+        {
+            return Err("not a kind of location Files opens");
+        }
         return Ok(arg.to_string());
     }
     let path = Path::new(arg);
@@ -100,6 +106,31 @@ fn location(arg: &str, cwd: &Path) -> Result<String, &'static str> {
     };
     Ok(path_to_url(&normalize(&absolute)))
 }
+
+/// The non-`file` schemes a launch (command line or FileManager1) may open:
+/// the places, devices, network shares and archives Files browses.
+pub const LAUNCH_SCHEMES: &[&str] = &[
+    "trash",
+    "recentlyused",
+    "network",
+    "remote",
+    "desktop",
+    "mtp",
+    "afc",
+    "smb",
+    "sftp",
+    "fish",
+    "ftp",
+    "ftps",
+    "webdav",
+    "webdavs",
+    "nfs",
+    "zip",
+    "tar",
+    "sevenz",
+    "ar",
+    "iso",
+];
 
 /// The scheme of `arg` when it starts like a URL (`scheme:`), per RFC 3986:
 /// a letter, then letters, digits, `+`, `-` or `.`.
@@ -233,6 +264,17 @@ mod tests {
             l.refused[0].reason,
             "relative path with no folder to read it from"
         );
+    }
+
+    #[test]
+    fn unknown_schemes_are_refused() {
+        let l = p(
+            &["http://example.com/", "exec:/bin/sh", "SFTP://host/x"],
+            "/x",
+        );
+        assert_eq!(l.locations, vec!["SFTP://host/x".to_string()]);
+        assert_eq!(l.refused.len(), 2);
+        assert_eq!(l.refused[0].reason, "not a kind of location Files opens");
     }
 
     #[test]

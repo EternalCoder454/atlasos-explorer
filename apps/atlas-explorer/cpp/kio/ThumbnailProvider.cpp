@@ -3,6 +3,7 @@
 #include <KFileItem>
 #include <KIO/PreviewJob>
 
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <algorithm>
 #include <QPointer>
@@ -26,6 +27,17 @@ public:
             QTimer::singleShot(0, this, [this] { finish(QImage()); });
             return;
         }
+        // Qt asks from its image reader thread; KIO jobs belong on the GUI
+        // thread, so the response moves there and starts the job from it.
+        moveToThread(QCoreApplication::instance()->thread());
+        QTimer::singleShot(0, this, [this, url, side] { start(url, side); });
+    }
+
+    void start(const QUrl &url, int side)
+    {
+        if (m_done) {
+            return;
+        }
         // A regular file; KIO's PreviewJob does the MIME check and size caps.
         const KFileItem item(url, QString(), S_IFREG);
         m_job = KIO::filePreview(KFileItemList{item}, QSize(side, side), &plugins());
@@ -46,12 +58,15 @@ public:
     QQuickTextureFactory *textureFactory() const override { return QQuickTextureFactory::textureFactoryForImage(m_image); }
     QString errorString() const override { return QString(); }
 
+    // Called from Qt's reader thread: the kill runs on the GUI thread.
     void cancel() override
     {
-        m_done = true;
-        if (m_job) {
-            m_job->kill();
-        }
+        QMetaObject::invokeMethod(this, [this] {
+            m_done = true;
+            if (m_job) {
+                m_job->kill();
+            }
+        });
     }
 
 private:

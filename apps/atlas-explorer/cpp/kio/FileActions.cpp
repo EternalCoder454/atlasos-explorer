@@ -33,6 +33,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMimeDatabase>
 #include <QTimer>
 
 
@@ -227,7 +228,8 @@ void FileActions::rename(const QUrl &url)
             return;
         }
         const QUrl target = childUrl(url.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash), name);
-        KIO::SimpleJob *job = KIO::rename(url, target);
+        // A move job, not KIO::rename: the undo manager records only copy jobs.
+        KIO::CopyJob *job = KIO::moveAs(url, target, KIO::HideProgressInfo);
         setup(job);
         KIO::FileUndoManager::self()->recordJob(KIO::FileUndoManager::Rename, {url}, target, job);
     });
@@ -289,9 +291,26 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
     };
     if (!urls.isEmpty()) {
         KFileItemList items;
+        // The type by name only: an item whose type isn't known yet would
+        // otherwise read its contents on the GUI thread (slow on a network or
+        // FUSE mount). An item no longer listed is left out.
+        static const QMimeDatabase mimeDb;
         for (const QUrl &u : urls.mid(0, 64)) {
             const KFileItem it = m_folder ? m_folder->fileItemOf(u) : KFileItem();
-            items << (it.isNull() ? KFileItem(u) : it);
+            if (it.isNull()) {
+                continue;
+            }
+            if (it.isMimeTypeKnown() || it.isDir()) {
+                items << it;
+                continue;
+            }
+            KIO::UDSEntry entry = it.entry();
+            entry.replace(KIO::UDSEntry::UDS_MIME_TYPE, mimeDb.mimeTypeForFile(it.name(), QMimeDatabase::MatchExtension).name());
+            items << KFileItem(entry, it.url());
+        }
+        if (items.isEmpty()) {
+            delete menu;
+            return;
         }
         const bool single = urls.size() == 1;
         add(QStringLiteral("document-open"), tr("Open"), [this, urls, items, single] {

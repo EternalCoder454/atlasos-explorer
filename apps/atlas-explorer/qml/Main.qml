@@ -138,7 +138,7 @@ AtlasWindow {
             if (locations.length > 0) {
                 root.launchText = "";
                 // Tabs and split view come later: the first location is shown.
-                if (select) {
+                if (select || StandardPlaces.isLocalFile(Qt.url(locations[0]))) {
                     // Its folder, with it (and the others in that folder) selected.
                     const folder = StandardPlaces.parentUrl(Qt.url(locations[0]));
                     const same = locations.filter(l => StandardPlaces.parentUrl(Qt.url(l)).toString() === folder.toString());
@@ -182,7 +182,6 @@ AtlasWindow {
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.editingAddress; onActivated: actions.undo() }
     Shortcut { sequence: "Delete"; enabled: !root.editingAddress && root.hasSelection && root.canWrite; onActivated: actions.trash(root.selected) }
     Shortcut { sequence: "Shift+Delete"; enabled: !root.editingAddress && root.hasSelection && root.canWrite; onActivated: actions.deleteForGood(root.selected) }
-    Shortcut { sequence: "F2"; enabled: !root.editingAddress && root.selected.length === 1 && root.canWrite; onActivated: actions.rename(root.selected[0]) }
     Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite; onActivated: actions.newFolder() }
     Shortcut { sequence: "Ctrl+H"; enabled: !root.editingAddress; onActivated: root.toggleHidden() }
     Shortcut { sequence: "Shift+F4"; onActivated: actions.openTerminal() }
@@ -395,6 +394,11 @@ AtlasWindow {
                 actions: actions
                 // KIO's own prompts apply (Run or open?, untrusted .desktop files).
                 onOpenRequested: urls => actions.openUrls(urls)
+                onRenameRequested: {
+                    if (root.selected.length === 1 && root.canWrite) {
+                        actions.rename(root.selected[0]);
+                    }
+                }
                 onContextMenuRequested: urls => actions.contextMenu(urls)
             }
         }

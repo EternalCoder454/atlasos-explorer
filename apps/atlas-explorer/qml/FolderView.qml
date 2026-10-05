@@ -34,6 +34,7 @@ FocusScope {
     signal openRequested(var urls)
     signal contextMenuRequested(var urls)
     signal navigateRequested(url target)
+    signal renameRequested()
 
     FolderModel {
         id: folderModel
@@ -216,6 +217,10 @@ FocusScope {
             navigateRequested(StandardPlaces.parentUrl(folderModel.url));
             event.accepted = true;
             return;
+        case Qt.Key_F2:
+            renameRequested();
+            event.accepted = true;
+            return;
         case Qt.Key_Escape:
             sel.clearSelection();
             event.accepted = true;
@@ -256,7 +261,11 @@ FocusScope {
 
     TapHandler {
         acceptedButtons: Qt.RightButton
-        onTapped: {
+        onTapped: (point, button) => {
+            // A row's own handler shows its menu.
+            if (top.activeView.rowAt(point.position.x, point.position.y) >= 0) {
+                return;
+            }
             top.forceActiveFocus();
             sel.clearSelection();
             top.contextMenuRequested([]);

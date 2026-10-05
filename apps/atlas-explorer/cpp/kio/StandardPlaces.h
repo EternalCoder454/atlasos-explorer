@@ -19,6 +19,8 @@ public:
     Q_INVOKABLE QUrl place(const QString &key) const;
     // The folder above url (url itself at the top).
     Q_INVOKABLE QUrl parentUrl(const QUrl &url) const;
+    // True for a local URL that exists and is not a folder (one stat).
+    Q_INVOKABLE bool isLocalFile(const QUrl &url) const;
     // A location as plain text safe to show: every path segment goes through
     // the core crate's display names.
     Q_INVOKABLE QString displayLocation(const QUrl &url) const;

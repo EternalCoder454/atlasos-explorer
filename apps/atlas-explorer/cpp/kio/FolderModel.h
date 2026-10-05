@@ -165,6 +165,8 @@ private:
     bool m_sortDirty = false;
     bool m_sortRunning = false;
     bool m_gone = false;
+    // The last URL that finished listing: only a folder seen before can be "removed".
+    QUrl m_listedUrl;
     QTimer m_sortTimer;
     QThreadPool m_pool;
 };

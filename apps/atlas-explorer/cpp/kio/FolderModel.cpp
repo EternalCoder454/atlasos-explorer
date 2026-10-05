@@ -341,6 +341,7 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
 void FolderModel::onCompleted()
 {
     setLoading(false);
+    m_listedUrl = m_url;
     const KFileItem root = m_lister->rootItem();
     const bool w = !root.isNull() && root.isWritable();
     if (w != m_canWrite) {
@@ -360,7 +361,7 @@ void FolderModel::onJobError(KIO::Job *job)
     }
     const int code = job->error();
     setLoading(false);
-    if (code == KIO::ERR_DOES_NOT_EXIST && m_url.isLocalFile() && !m_gone) {
+    if (code == KIO::ERR_DOES_NOT_EXIST && m_url.isLocalFile() && !m_gone && m_listedUrl == m_url) {
         folderGone(QString());
         return;
     }

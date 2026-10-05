@@ -4,6 +4,7 @@
 #include <KIO/Global>
 
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 StandardPlaces::StandardPlaces(QObject *parent)
@@ -46,6 +47,15 @@ QUrl StandardPlaces::place(const QString &key) const
 QUrl StandardPlaces::parentUrl(const QUrl &url) const
 {
     return url.isValid() ? KIO::upUrl(url) : url;
+}
+
+bool StandardPlaces::isLocalFile(const QUrl &url) const
+{
+    if (!url.isLocalFile()) {
+        return false;
+    }
+    const QFileInfo info(url.toLocalFile());
+    return info.exists() && !info.isDir();
 }
 
 QString StandardPlaces::displayLocation(const QUrl &url) const
