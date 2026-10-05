@@ -1,0 +1,11 @@
+[package]
+name = "atlas-file-index"
+description = "The file-name index behind net.eterneon.atlas.explorer.Search1: scanner, watcher, snapshot, matcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+log.workspace = true
