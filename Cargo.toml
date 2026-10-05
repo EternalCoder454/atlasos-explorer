@@ -4,6 +4,8 @@ members = [
     "crates/atlas-explorer-core",
     "crates/atlas-file-index",
     "apps/atlas-explorer",
+    "apps/atlas-explorer-indexd",
+    "apps/atlas-explorer-search",
 ]
 
 [workspace.package]
@@ -20,6 +22,15 @@ rust-version = "1.89"
 atlas-framework-ui = { git = "https://github.com/EternalCoder454/atlas-framework", tag = "v1.4.0" }
 log = { version = "0.4", features = ["std"] }
 libc = "0.2"
+# The D-Bus service and its CLI client (Search1). zbus is pure Rust, talks to
+# the session bus directly and has the blocking API the CLI wants.
+zbus = "5"
+# Fast byte-substring search: the index's matcher scans 200k names per query.
+memchr = "2"
+# NFKD for the diacritic-insensitive match (Resume matches Resume with an acute).
+unicode-normalization = "0.1"
+# Checksum of the index snapshot (corruption check; the file is also bounds-checked).
+crc32fast = "1"
 
 [profile.release]
 lto = "thin"

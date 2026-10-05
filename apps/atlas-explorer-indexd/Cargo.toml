@@ -1,0 +1,20 @@
+[package]
+name = "atlas-explorer-indexd"
+description = "Atlas Explorer's file-name index service (D-Bus net.eterneon.atlas.explorer.Search1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# Test hooks (a first-scan delay) are always on in debug builds; this turns
+# them on in a release build too. Never enabled for packages.
+test-hooks = []
+
+[dependencies]
+atlas-file-index = { path = "../../crates/atlas-file-index" }
+atlas-explorer-core = { path = "../../crates/atlas-explorer-core" }
+log.workspace = true
+libc.workspace = true
+zbus.workspace = true

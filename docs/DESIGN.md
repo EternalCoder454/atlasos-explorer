@@ -252,7 +252,10 @@ signal StatusChanged(a{sv} status)
 - **Storage:** a snapshot file at `~/.cache/atlas-explorer/index/v1.idx`
   (folder 0700, file 0600, written atomically), a documented flat format:
   header with version, checksum and counts, then a string arena and fixed-size
-  records. It is a cache: deleting it only costs a rescan. No private data
+  records. It is read into memory and decoded (not mapped), checked as
+  untrusted input, and must load within the 100 ms cold-start budget. It also
+  records the exclusion rules it was made under: changed rules mean a rescan.
+  It is a cache: deleting it only costs a rescan. No private data
   leaves the user's cache folder.
 - **CLI:** `atlas-explorer-search [--kind K] [--in DIR] [--modified 7d]
   [--larger 10M] [--smaller 1G] [--limit N] [--json] QUERY`, a thin client of
@@ -260,7 +263,8 @@ signal StatusChanged(a{sv} status)
 - **Service unit:** a systemd user unit, `Type=dbus`, `Nice=19`,
   `CPUSchedulingPolicy=idle`, `IOSchedulingClass=idle`, `MemoryHigh=96M`,
   `NoNewPrivileges=yes`, `PrivateNetwork=yes`, `ProtectSystem=strict`,
-  `ReadWritePaths=%C/atlas-explorer`, `RestrictAddressFamilies=AF_UNIX`,
+  `CacheDirectory=atlas-explorer` (0700; the service reads `$CACHE_DIRECTORY`),
+  `RestrictAddressFamilies=AF_UNIX`, a system-call filter, `TasksMax` and `MemoryMax`,
   `Restart=on-failure` with backoff. Not started at login; the first query
   starts it, and it stays to keep the watches.
 
@@ -390,7 +394,11 @@ Untrusted input, checked where it enters:
   visible (U+2400 control pictures, newline as ␊), shows bidi overrides,
   embeddings and isolates (U+202A to U+202E, U+2066 to U+2069, U+200E,
   U+200F, U+061C) as a visible marker instead of letting them reorder the
-  text, shows invalid UTF-8 bytes as `\xNN`, and caps the shown length. Every
+  text, does the same for characters that show nothing or pass for something
+  else (zero-width and other format characters, soft hyphen, tag characters,
+  variation selectors, blank fillers such as U+3164 and U+2800), allows only
+  one no-break or width space in a row (more are marked, so a run cannot hide
+  an extension), shows invalid UTF-8 bytes as `\xNN`, and caps the shown length. Every
   QML `Text`/`Label` showing a name, path, or file content sets
   `textFormat: Text.PlainText`. The rename field shows the true name;
   saving a name with a `/`, NUL, or only dots is refused, a name with

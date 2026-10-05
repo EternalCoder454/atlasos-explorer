@@ -31,7 +31,7 @@ set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 # cxx-qt-build finds Qt via $QMAKE.
 find_program(QMAKE6 NAMES qmake6 qmake REQUIRED)
 corrosion_import_crate(MANIFEST_PATH ${WORKSPACE_DIR}/Cargo.toml
-    CRATES atlas-explorer LOCKED)
+    CRATES atlas-explorer atlas-explorer-indexd atlas-explorer-search LOCKED)
 corrosion_set_env_vars(atlas_explorer QMAKE=${QMAKE6})
 
 # The framework's C header (atlas/app.h) comes with the crate's sources,
@@ -90,6 +90,10 @@ target_link_libraries(atlas-explorer-app PRIVATE
     KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore)
 
 install(TARGETS atlas-explorer-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# The file index service and its command-line client are cargo binaries that
+# Corrosion builds with the app (one cargo invocation, one lock file).
+install(IMPORTED_RUNTIME_ARTIFACTS atlas-explorer-indexd atlas-explorer-search
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/net.eterneon.atlas.explorer.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES data/net.eterneon.atlas.explorer.metainfo.xml

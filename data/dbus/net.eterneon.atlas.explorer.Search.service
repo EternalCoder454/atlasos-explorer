@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=net.eterneon.atlas.explorer.Search
+Exec=/usr/bin/atlas-explorer-indexd
+SystemdService=atlas-explorer-indexd.service

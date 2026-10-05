@@ -8,4 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+atlas-explorer-core = { path = "../atlas-explorer-core" }
 log.workspace = true
+# inotify, ioprio_set, setpriority, openat/renameat on the cache folder
+libc.workspace = true
+memchr.workspace = true
+unicode-normalization.workspace = true
+crc32fast.workspace = true

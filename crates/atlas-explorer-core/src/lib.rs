@@ -2,4 +2,7 @@
 //! decided from data alone, so it is tested without a display and shared by
 //! the app's C++ adapters through one bridge. See docs/DESIGN.md, "Layout".
 
+pub mod display;
 pub mod launch;
+
+pub use display::{MAX_DISPLAY_CHARS, NameBytes, display_name};

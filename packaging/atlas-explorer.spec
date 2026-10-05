@@ -24,6 +24,8 @@ BuildRequires:  corrosion
 # Cargo fetches the atlas-framework crates from GitHub.
 BuildRequires:  git-core
 BuildRequires:  desktop-file-utils
+# %%{_userunitdir}
+BuildRequires:  systemd-rpm-macros
 BuildRequires:  libappstream-glib
 BuildRequires:  cmake(Qt6Core)
 BuildRequires:  cmake(Qt6Gui)
@@ -102,6 +104,14 @@ export CARGO_PROFILE_RELEASE_STRIP=none
 # AtlasOS needs its file manager: dnf refuses to remove it.
 install -Dpm0644 apps/atlas-explorer/data/dnf/protected.d/atlas-explorer.conf \
     %{buildroot}%{_sysconfdir}/dnf/protected.d/atlas-explorer.conf
+# The file index service: D-Bus activation file and interface XML, the user
+# unit.
+install -Dpm0644 data/dbus/net.eterneon.atlas.explorer.Search.service \
+    %{buildroot}%{_datadir}/dbus-1/services/net.eterneon.atlas.explorer.Search.service
+install -Dpm0644 data/dbus/net.eterneon.atlas.explorer.Search1.xml \
+    %{buildroot}%{_datadir}/dbus-1/interfaces/net.eterneon.atlas.explorer.Search1.xml
+install -Dpm0644 data/systemd/atlas-explorer-indexd.service \
+    %{buildroot}%{_userunitdir}/atlas-explorer-indexd.service
 
 %check
 # No path into the build tree (checked as well as set: see %%build).
@@ -119,6 +129,11 @@ appstream-util validate-relax --nonet \
 %files
 %license LICENSE
 %{_bindir}/atlas-explorer
+%{_bindir}/atlas-explorer-indexd
+%{_bindir}/atlas-explorer-search
+%{_datadir}/dbus-1/services/net.eterneon.atlas.explorer.Search.service
+%{_datadir}/dbus-1/interfaces/net.eterneon.atlas.explorer.Search1.xml
+%{_userunitdir}/atlas-explorer-indexd.service
 %{_datadir}/applications/net.eterneon.atlas.explorer.desktop
 %{_datadir}/metainfo/net.eterneon.atlas.explorer.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/net.eterneon.atlas.explorer.svg
