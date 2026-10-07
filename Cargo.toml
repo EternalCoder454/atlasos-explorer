@@ -3,13 +3,13 @@ resolver = "3"
 members = [
     "crates/atlas-explorer-core",
     "crates/atlas-file-index",
-    "apps/atlas-explorer",
-    "apps/atlas-explorer-indexd",
-    "apps/atlas-explorer-search",
+    "apps/telamon-explorer",
+    "apps/telamon-explorer-indexd",
+    "apps/telamon-explorer-search",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/EternalCoder454/atlasos-explorer"

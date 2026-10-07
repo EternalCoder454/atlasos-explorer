@@ -1,6 +1,6 @@
 [package]
 name = "atlas-file-index"
-description = "The file-name index behind net.eterneon.atlas.explorer.Search1: scanner, watcher, snapshot, matcher"
+description = "The file-name index behind net.eterneon.telamon.explorer.Search1: scanner, watcher, snapshot, matcher"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

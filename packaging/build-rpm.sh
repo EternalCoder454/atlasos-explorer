@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the Atlas Explorer RPM inside a fedora:44 container, as root.
+# Build the Telamon Explorer RPM inside a fedora:44 container, as root.
 #   packaging/build-rpm.sh <out dir> [rpmbuild options]
 # The binary RPM (no source, no debuginfo) is copied to <out dir>.
 # Cargo needs network access.
@@ -24,16 +24,16 @@ main() {
     # RPM is exactly that commit; ATLAS_RPM_WORKTREE=1 takes both from the
     # working tree. safe.directory: the checkout belongs to another uid in a
     # container; no fsmonitor hook from its config runs.
-    spec=$top/SPECS/atlas-explorer.spec
+    spec=$top/SPECS/telamon-explorer.spec
     git=(git -c safe.directory="$src" -c core.fsmonitor=false -C "$src")
     if [ -n "${ATLAS_RPM_WORKTREE:-}" ]; then
-        cp "$here/atlas-explorer.spec" "$spec"
+        cp "$here/telamon-explorer.spec" "$spec"
     else
         if ! commit=$("${git[@]}" rev-parse --verify HEAD); then
             echo "build-rpm.sh: $src is not a usable git checkout (ATLAS_RPM_WORKTREE=1 builds the working tree)" >&2
             return 1
         fi
-        "${git[@]}" show HEAD:packaging/atlas-explorer.spec >"$spec"
+        "${git[@]}" show HEAD:packaging/telamon-explorer.spec >"$spec"
     fi
     version=$(awk '/^Version:/ {print $2; exit}' "$spec")
 
@@ -48,20 +48,20 @@ main() {
     fi
     dnf -y builddep "$spec" >&2
 
-    tarball=$top/SOURCES/atlas-explorer-$version.tar.gz
+    tarball=$top/SOURCES/telamon-explorer-$version.tar.gz
     if [ -n "${ATLAS_RPM_WORKTREE:-}" ]; then
         # Local testing only: the working tree as it is, uncommitted edits
         # included.
         echo "build-rpm.sh: building from the working tree, not a commit" >&2
         tar -C "$src" \
             --exclude=./.git --exclude=./.claude --exclude=./target --exclude=./out --exclude=./build \
-            --transform "s,^\./,atlas-explorer-$version/," \
+            --transform "s,^\./,telamon-explorer-$version/," \
             -czf "$tarball" .
     else
         if [ -n "$("${git[@]}" status --porcelain --untracked-files=no)" ]; then
             echo "build-rpm.sh: uncommitted changes are left out; building $commit" >&2
         fi
-        "${git[@]}" archive --format=tar.gz --prefix="atlas-explorer-$version/" -o "$tarball" HEAD
+        "${git[@]}" archive --format=tar.gz --prefix="telamon-explorer-$version/" -o "$tarball" HEAD
     fi
 
     rpmbuild -bb "$@" --define "_topdir $top" "$spec"
