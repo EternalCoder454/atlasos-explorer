@@ -213,13 +213,17 @@ Item {
                 id: mouse
                 anchors.fill: parent
                 hoverEnabled: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 property point start
                 property bool narrow: false
                 property bool dragged: false
                 onPressed: mouseEvent => {
                     if (mouseEvent.button === Qt.RightButton) {
                         root.fv.rowMenu(row.index);
+                        return;
+                    }
+                    if (mouseEvent.button === Qt.MiddleButton) {
+                        root.fv.middleRow(row.index);
                         return;
                     }
                     start = Qt.point(mouseEvent.x, mouseEvent.y);

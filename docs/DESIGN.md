@@ -11,6 +11,20 @@ App ID `net.eterneon.telamon.explorer`, binary `telamon-explorer`, shown name
 Kirigami over CXX-Qt, Telamon.Ui from the installed `telamon-ui`, KF6 6.30 (KIO,
 Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
+## Status
+
+This file describes the finished Files. The code is smaller, and
+`docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
+0.2.0 plus wave 1 (tabs) only these parts of the sections below exist: a tab
+strip with one folder per tab (Details, Icons and Compact views), a plain-text
+location that becomes a text field, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
+with View and Sort menus, ten fixed sidebar places, KIO jobs with KIO's own
+dialogs, `FileManager1`, the launch parser and the index service. Everything
+else (breadcrumb, search field, preview and details panes, Quick
+Look, status line, the operations popover and queue wiring, Columns and Gallery
+views, split view, drives and pins) is design, not behaviour. Sections that
+have been built say so in a "Built" line.
+
 ## Scope
 
 Explorer replaces Dolphin completely.
@@ -67,6 +81,55 @@ Explorer replaces Dolphin completely.
   the **tab strip**: closable, reorderable by drag, drop files on a tab to
   move them into it, middle-click closes, Ctrl+T, Ctrl+W, Ctrl+Shift+T
   reopens, Ctrl+Tab cycles, a folder dragged out of the window opens there.
+
+  **Built (wave 1):** the strip is Telamon.Ui's `TabBar` over a `ListModel`
+  in `qml/Main.qml`; each tab is a `qml/FilesTabPage.qml` (own folder, back
+  and forward history, view mode, selection and scroll position, because the
+  page and its `FolderView` stay alive while the tab is hidden). The decisions
+  that are not drawing live in `atlas_explorer_core::tabs` (index arithmetic
+  after close, move and cycle, Alt+1..9, where an opened tab goes, limits,
+  checking a saved session) behind a C ABI (`src/ffi.rs`) and the `TabLogic`
+  QML singleton (`cpp/kio/TabLogic.*`), which also keeps the settings.
+  - New tab (Ctrl+T, the + button) opens Home at the end of the strip. A tab
+    opened from another (middle click on a folder row or a sidebar place,
+    Ctrl+click or Ctrl+Enter on a sidebar place, Ctrl+Enter on selected
+    folders, "Open in New Tab" in the context menu) opens behind the current
+    tab, in click order, without switching; its title shows a small dot until
+    it is shown. Ctrl+click on a folder row stays multi-select.
+  - Ctrl+W, the close button or a middle click on the tab closes it; the tab
+    to its right (else left) is shown. Closing the last tab closes the window.
+    Ctrl+Shift+T reopens the last 10 closed tabs, newest first, in their old
+    place, with their back and forward history (50 entries each) and view mode;
+    selection and scroll position are not kept for a closed tab.
+  - Ctrl+Tab and Ctrl+PgDown go to the next tab, Ctrl+Shift+Tab and Ctrl+PgUp
+    to the previous (wrapping); Alt+1..8 the nth tab, Alt+9 the last. (Ctrl+1..9
+    stay free for view modes.) At most 64 tabs per window, shown as a plain
+    message beyond that.
+  - Tab title: the folder's name (Home, Trash, Recent, Network by their own
+    names) made safe to show; the tooltip is the full location.
+  - A tab's right-click menu: New Tab, Duplicate Tab, Close Tab, Close Other
+    Tabs, Close Tabs to the Right, Reopen Closed Tab. The strip's "..." menu has
+    New Tab, Reopen Closed Tab and **Restore Tabs on Start** (off by default).
+  - Back and Forward are per tab: the buttons, Alt+Left, Alt+Right and the
+    mouse side buttons.
+  - Files dragged onto a tab go to that tab's folder through the same KIO drop
+    menu as a drop on a folder (Move Here, Copy Here, Link Here); holding the
+    drag over another tab for 0.8 s shows it first.
+  - **Restore Tabs on Start:** with the setting on, the window keeps its tabs'
+    locations and the shown tab in `telamon-explorerrc` (`[Tabs]`, written
+    half a second after a change and at close, the last tab included), and the
+    next start without a location to open brings them back; only the tab shown
+    lists its folder at once, the others when first shown. The saved list is
+    read through the launch parser (`tabs::restore`), so a hand-edited file
+    can't open a kind of location a launch would refuse. Turning it off deletes
+    what was kept.
+  - **Framework gaps** (for the Telamon OS Framework session): Telamon.Ui's
+    `TabBar` takes no drops and has no way to find the tab under a point, so
+    Files overlays a `DropArea` and walks the bar's items for the delegate
+    (`qml/Main.qml`, `tabAt`); it also has no "new content" marker, so the
+    background-tab dot reuses `modified`, which a screen reader announces as
+    "modified". It has no drag-out to a new window either (needs the multiple
+    windows of a later wave).
 - **Toolbar row:** Back, Forward, Up, Refresh; the **address bar**; the
   **search field** ("Search Documents").
   - Address bar: a Telamon breadcrumb (segments with chevrons; a chevron opens
@@ -127,7 +190,8 @@ Explorer replaces Dolphin completely.
 `telamon-explorer [--new-window] [--select] [--split] [URL|PATH ...]`. One
 process (KDBusService Unique); a second launch hands its arguments and
 working directory to the first, which opens them in new tabs of the active
-window (or a new window with `--new-window`) and raises it with the launcher's
+window (the first is shown, the others open behind it; `--new-window` is read but
+still opens tabs until multiple windows exist) and raises it with the launcher's
 activation token. Arguments are parsed in Rust (`atlas_explorer_core::launch`):
 at most 64 read, local paths resolved against the caller's working directory,
 URLs must have a scheme KIO knows (`KProtocolInfo::isKnownProtocol`) and no
@@ -142,7 +206,7 @@ D-Bus activated through `/usr/share/dbus-1/services/org.freedesktop.FileManager1
 
 | Method | Behaviour |
 |---|---|
-| `ShowFolders(as URIs, s StartupId)` | Each URI opens in a new tab of the active window |
+| `ShowFolders(as URIs, s StartupId)` | Each URI opens in a new tab of the active window (the first is shown) |
 | `ShowItems(as URIs, s StartupId)` | Opens each item's parent folder (one tab per parent) with the items selected and scrolled into view |
 | `ShowItemProperties(as URIs, s StartupId)` | Opens the Properties dialog for the URIs |
 

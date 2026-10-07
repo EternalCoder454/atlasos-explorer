@@ -320,6 +320,15 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
                 openUrls(urls);
             }
         });
+        QList<QUrl> folders;
+        for (const KFileItem &it : items) {
+            if (it.isDir()) {
+                folders << it.url();
+            }
+        }
+        if (!folders.isEmpty()) {
+            add(QStringLiteral("tab-new"), folders.size() == 1 ? tr("Open in New Tab") : tr("Open in New Tabs"), [this, folders] { Q_EMIT openInNewTabRequested(folders); });
+        }
         auto *actions = new KFileItemActions(menu);
         actions->setItemListProperties(KFileItemListProperties(items));
         actions->insertOpenWithActionsTo(nullptr, menu, {});

@@ -34,6 +34,8 @@ FocusScope {
     signal openRequested(var urls)
     signal contextMenuRequested(var urls)
     signal navigateRequested(url target)
+    // A folder to open in a new background tab (middle click, Ctrl+Enter).
+    signal openInNewTabRequested(url target)
     signal renameRequested()
 
     FolderModel {
@@ -161,9 +163,33 @@ FocusScope {
         }
     }
 
-    function activateSelection() {
+    // A middle click on a row: a folder opens in a new background tab.
+    function middleRow(row) {
+        if (row >= 0 && folderModel.isDirAt(row)) {
+            openInNewTabRequested(folderModel.urlAt(row));
+        }
+    }
+
+    // Enter on the selection. With Ctrl held its folders open in new tabs
+    // (in the order shown) and the rest opens as usual.
+    function activateSelection(inNewTab) {
         const rows = selectedRows();
         if (rows.length === 0) {
+            return;
+        }
+        if (inNewTab) {
+            rows.sort((a, b) => a - b);
+            const files = [];
+            for (const r of rows) {
+                if (folderModel.isDirAt(r)) {
+                    openInNewTabRequested(folderModel.urlAt(r));
+                } else {
+                    files.push(folderModel.urlAt(r));
+                }
+            }
+            if (files.length > 0) {
+                openRequested(files);
+            }
             return;
         }
         if (rows.length === 1) {
@@ -191,10 +217,12 @@ FocusScope {
             target = activeView.neighbor(cur, "down");
             break;
         case Qt.Key_Left:
-            target = activeView.neighbor(cur, "left");
-            break;
         case Qt.Key_Right:
-            target = activeView.neighbor(cur, "right");
+            // Alt+Left and Alt+Right are Back and Forward (the window's).
+            if (mods & Qt.AltModifier) {
+                return;
+            }
+            target = activeView.neighbor(cur, event.key === Qt.Key_Left ? "left" : "right");
             break;
         case Qt.Key_PageUp:
             target = activeView.neighbor(cur, "pageUp");
@@ -210,7 +238,7 @@ FocusScope {
             break;
         case Qt.Key_Return:
         case Qt.Key_Enter:
-            activateSelection();
+            activateSelection(!!(mods & Qt.ControlModifier));
             event.accepted = true;
             return;
         case Qt.Key_Backspace:

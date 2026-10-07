@@ -24,4 +24,7 @@ public:
     // A location as plain text safe to show: every path segment goes through
     // the core crate's display names.
     Q_INVOKABLE QString displayLocation(const QUrl &url) const;
+    // A tab's title for a folder: its name (Home, Trash, Recent and Network by
+    // their own names), made safe to show like displayLocation.
+    Q_INVOKABLE QString tabTitle(const QUrl &url) const;
 };

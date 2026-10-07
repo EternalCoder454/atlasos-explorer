@@ -26,6 +26,14 @@ int telamon_validate_name(const uint8_t *name, size_t len, uint8_t *out, size_t 
 int telamon_parse_address(const uint8_t *text, size_t len, const uint8_t *current, size_t currentLen, const uint8_t *home, size_t homeLen, uint8_t *out,
                         size_t cap, size_t *textLen);
 bool telamon_sort_permutation(const TelamonSortRow *rows, size_t n, uint32_t column, bool descending, bool foldersFirst, uint32_t *out);
+int64_t telamon_tabs_after_close(size_t len, size_t current, size_t closed);
+size_t telamon_tabs_after_move(size_t len, size_t current, size_t from, size_t to);
+size_t telamon_tabs_cycle(size_t len, size_t current, int64_t step);
+int64_t telamon_tabs_jump(size_t len, size_t n);
+size_t telamon_tabs_insert_after_opener(size_t len, size_t opener, size_t run);
+size_t telamon_tabs_reopen_index(size_t len, size_t original);
+size_t telamon_tabs_limit(uint32_t which);
+size_t telamon_tabs_restore(const uint8_t *saved, size_t len, size_t current, uint8_t *out, size_t cap, size_t *currentOut);
 }
 
 using RustFn = size_t (*)(const uint8_t *, size_t, uint8_t *, size_t);
