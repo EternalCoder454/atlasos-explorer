@@ -1,16 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <title>Files</title>
-  <!-- The Atlas apps' tile, as Atlas Store's icon has it, with a folder on
-       it: Atlas Notes' white, lavender and purple. -->
+  <!-- An amber folder with depth: the back with its tab, a sheet of paper
+       inside and the front, lit from above. Atlas violet label. Part
+       of the Atlas app icons: no tile, own hue, same corners, light
+       and shadow. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8a7af4"/>
-      <stop offset="1" stop-color="#5b4bd8"/>
+    <radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="back" gradientUnits="userSpaceOnUse" x1="0" y1="22" x2="0" y2="106">
+      <stop offset="0" stop-color="#E8A124"/>
+      <stop offset="1" stop-color="#C97C0B"/>
+    </linearGradient>
+    <linearGradient id="front" gradientUnits="userSpaceOnUse" x1="0" y1="50" x2="0" y2="106">
+      <stop offset="0" stop-color="#FFCE54"/>
+      <stop offset="1" stop-color="#F5A31A"/>
     </linearGradient>
   </defs>
-  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="25.5" fill="none" stroke="#ffffff" stroke-opacity="0.18"/>
-  <path d="M30 42a6 6 0 0 1 6-6h17l7 8h32a6 6 0 0 1 6 6v6H30z" fill="#d9d2ff"/>
-  <rect x="30" y="50" width="68" height="44" rx="6" fill="#ffffff"/>
-  <rect x="40" y="64" width="30" height="5" rx="2.5" fill="#8a7af4"/>
+  <g transform="translate(64 64) scale(1.06) translate(-64 -64)">
+    <ellipse cx="64" cy="114" rx="46" ry="6" fill="url(#shadow)"/>
+    <path fill="url(#back)" d="M22 22H45.5Q49 22 51.5 24.6L58 32H106A8 8 0 0 1 114 40V98A8 8 0 0 1 106 106H22A8 8 0 0 1 14 98V30A8 8 0 0 1 22 22Z"/>
+    <rect x="24" y="38" width="76" height="40" rx="4" fill="#FFF4DC"/>
+    <rect x="30" y="44" width="76" height="40" rx="4" fill="#FFFFFF"/>
+    <path fill="url(#front)" d="M14 60A8 8 0 0 1 22 52H106A8 8 0 0 1 114 60V98A8 8 0 0 1 106 106H22A8 8 0 0 1 14 98Z"/>
+    <path fill="none" stroke="#FFE7A6" stroke-width="3" stroke-linecap="round" d="M22 55.5H106"/>
+    <rect x="26" y="88" width="28" height="8" rx="4" fill="#6858E2"/>
+  </g>
 </svg>
