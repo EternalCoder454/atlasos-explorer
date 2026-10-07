@@ -6,6 +6,7 @@ pub mod address;
 pub mod display;
 pub mod launch;
 pub mod legacy;
+pub mod location;
 pub mod names;
 pub mod queue;
 pub mod sort;
