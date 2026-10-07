@@ -222,8 +222,8 @@ for the current code (section 0). Item numbers (F1...) are this spec's own and a
 
 | ID | Feature | Verdict | Why and best-of design | Status |
 |---|---|---|---|---|
-| F1 | Tabs: new, close, reorder, reopen closed, Ctrl+T/W/Shift+T/Tab | **Keep** | Explorer's tabs after drag-out/reorder, Dolphin's "rename tab". Per-tab folder, history, view, selection. Closed tabs list (last 10). | Missing |
-| F2 | Middle-click opens folder in a new tab (also on breadcrumb segments and sidebar places); Ctrl+click too | **Keep** | Browser habit, zero learning. Opens in the background; a small "Opened in new tab" cue on the tab. | Missing |
+| F1 | Tabs: new, close, reorder, reopen closed, Ctrl+T/W/Shift+T/Tab | **Keep** | Explorer's tabs after drag-out/reorder, Dolphin's "rename tab". Per-tab folder, history, view, selection. Closed tabs list (last 10). | Done (W1) |
+| F2 | Middle-click opens folder in a new tab (also on breadcrumb segments and sidebar places); Ctrl+click too | **Keep** | Browser habit, zero learning. Opens in the background; a small "Opened in new tab" cue on the tab. | Partial (W1: folder rows by middle click, sidebar places; breadcrumb waits for W2) |
 | F3 | Split view (two panes in one tab), copy/move to the other pane | **Keep** | Dolphin's best feature; make it a toolbar toggle and F3. Open the second pane at the same folder; "Copy to Other Pane" / "Move to Other Pane" in the context menu; F5 / F6 do the same *only while split* (assumption: F6 stops meaning "edit address" then; Ctrl+L stays). Active pane has a clear accent line (Dolphin asks "which pane?"). Close the *inactive* pane (KDE wishlist). | Missing |
 | F4 | Breadcrumb path bar, editable on click | **Keep / Improve** | Always shown; chevron after a segment opens a menu of sibling subfolders (Explorer); each segment accepts drops (Finder's loved trick); Ctrl+L / Alt+D / F4 edit as text with folder-name completion (local: worker lists; remote: bounded). Path is shown as plain words (`Home > Documents`) with the full path in the edit box. | Partial (label + text edit only) |
 | F5 | Back / Forward / Up, Alt+Left/Right/Up, mouse side buttons | **Keep** | Back/Forward long-press (or right-click) shows the history list (browser style). Side buttons (Qt.BackButton/ForwardButton) in every view. | Partial (buttons and Alt+Up/Backspace only; no side buttons, no history list, no Alt+Left/Right) |
@@ -500,6 +500,12 @@ Needs: Wave 7 (menu), others for content.
 - Every service menu and built-in menu entry can be hidden.
 - Optional Git status badges (off by default; `git` run by argument list with a timeout).
 - Accessibility: Orca reads each row's name, type, size and selected state; every feature is reachable with the keyboard alone; reduced-motion and high-contrast respected; RTL checked.
+
+### Wave status
+| Wave | Status |
+|---|---|
+| W1 Tabs | **Done** (PR `files/w1-tabs`). Deviations: Alt+1..9 only (Ctrl+1..9 left for view modes); Ctrl+click on a folder row stays multi-select (middle click, Ctrl+Enter and "Open in New Tab" open it in a tab); a file dropped on a tab uses KIO's drop menu (Move, Copy, Link) instead of a silent move; closed tabs keep URL, view mode and history but not selection or scroll; no breadcrumb segments yet (wave 2), so none to middle-click; dragging a tab out into its own window waits for multiple windows. Added: tab context menu, Duplicate Tab, opt-in Restore Tabs on Start, 64-tab limit. |
+| W2 to W16 | Not started. |
 
 ### Later (not scheduled)
 Mount `.iso`/`.img` through udisks; Share menu (F61); embedded terminal panel (F55); restore previous versions (F94, when Backups exists); selection mode (F31).
