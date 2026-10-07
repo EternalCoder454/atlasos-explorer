@@ -1,0 +1,150 @@
+pragma ComponentBehavior: Bound
+import QtQuick
+
+// One tab of the window: a folder with its own back and forward history, view
+// mode, selection and scroll position (they live in the FolderView, which
+// stays alive while the tab is hidden). The window owns the strip and the
+// toolbar; this page answers navigate, goBack and goForward for the tab shown.
+FocusScope {
+    id: page
+
+    // The window's FileActions (jobs, dialogs, context menus).
+    required property var actions
+    // The tab's number in the window; it does not change when tabs move.
+    required property int tabId
+    // Where the tab starts, how it is shown and what its history was.
+    property url startUrl
+    property string startViewMode: "details"
+    property var startBack: []
+    property var startForward: []
+    // A restored background tab loads its folder when it is first shown, so a
+    // session of many tabs (or of slow servers) doesn't list them all at start.
+    property bool lazy: false
+    // Items to select once the folder has loaded (ShowItems, --select).
+    property var pendingSelect: []
+
+    anchors.fill: parent
+
+    property alias view: view
+    property bool loaded: false
+    property var backStack: []
+    property var forwardStack: []
+    // The folder shown, or where the tab will start while it is not loaded yet.
+    readonly property url location: loaded ? view.url : startUrl
+    readonly property string title: StandardPlaces.tabTitle(location)
+    readonly property string toolTip: StandardPlaces.displayLocation(location)
+    readonly property bool canGoBack: backStack.length > 0
+    readonly property bool canGoForward: forwardStack.length > 0
+
+    // A folder to open in a new background tab.
+    signal openInNewTab(url target)
+    // The user moved this tab to another folder (not a restore or a launch).
+    signal navigated
+
+    function load() {
+        if (loaded) {
+            return;
+        }
+        loaded = true;
+        view.viewMode = startViewMode;
+        view.folder.showHidden = actions.savedShowHidden();
+        backStack = startBack;
+        forwardStack = startForward;
+        view.url = startUrl;
+    }
+
+    // Goes to `target`, remembering where it was.
+    function navigate(target) {
+        load();
+        if (!target || target.toString() === view.url.toString()) {
+            return;
+        }
+        backStack = backStack.concat([view.url]);
+        forwardStack = [];
+        view.url = target;
+        navigated();
+    }
+    function goBack() {
+        if (backStack.length === 0) {
+            return;
+        }
+        forwardStack = forwardStack.concat([view.url]);
+        view.url = backStack[backStack.length - 1];
+        backStack = backStack.slice(0, -1);
+        navigated();
+    }
+    function goForward() {
+        if (forwardStack.length === 0) {
+            return;
+        }
+        backStack = backStack.concat([view.url]);
+        view.url = forwardStack[forwardStack.length - 1];
+        forwardStack = forwardStack.slice(0, -1);
+        navigated();
+    }
+    // Shows `target` without a history entry: the tab was never used (a first
+    // launch with a folder to show).
+    function showHere(target) {
+        load();
+        view.url = target;
+    }
+
+    // The sort lands after the listing: the selection is made again when the
+    // rows move, until the timer ends it.
+    function showItems(urls) {
+        load();
+        pendingSelect = urls;
+        if (!view.folder.loading) {
+            view.selectUrls(urls);
+        }
+        pendingTimer.restart();
+    }
+
+    Component.onCompleted: {
+        if (!lazy) {
+            load();
+        }
+    }
+    onVisibleChanged: {
+        if (visible) {
+            load();
+        }
+    }
+
+    Timer {
+        id: pendingTimer
+        interval: 1500
+        onTriggered: page.pendingSelect = []
+    }
+
+    Connections {
+        target: view.folder
+        function onLoadingChanged() {
+            if (!view.folder.loading && page.pendingSelect.length > 0) {
+                view.selectUrls(page.pendingSelect);
+            }
+        }
+        function onLayoutChanged() {
+            if (page.pendingSelect.length > 0) {
+                view.selectUrls(page.pendingSelect);
+            }
+        }
+    }
+
+    FolderView {
+        id: view
+        anchors.fill: parent
+        focus: true
+        actions: page.actions
+        onNavigateRequested: target => page.navigate(target)
+        onOpenInNewTabRequested: target => page.openInNewTab(target)
+        // KIO's own prompts apply (Run or open?, untrusted .desktop files).
+        onOpenRequested: urls => page.actions.openUrls(urls)
+        onRenameRequested: {
+            if (view.selectedUrls.length === 1 && view.folder.canWrite) {
+                page.actions.rename(view.selectedUrls[0]);
+            }
+        }
+        onContextMenuRequested: urls => page.actions.contextMenu(urls)
+    }
+}

@@ -79,3 +79,31 @@ QString StandardPlaces::displayLocation(const QUrl &url) const
     }
     return out.isEmpty() ? QStringLiteral("/") : out;
 }
+
+QString StandardPlaces::tabTitle(const QUrl &url) const
+{
+    if (!url.isValid()) {
+        return QString();
+    }
+    if (url.scheme() == QLatin1String("trash") && url.path().size() <= 1) {
+        return tr("Trash");
+    }
+    if (url.scheme() == QLatin1String("recentlyused")) {
+        return tr("Recent");
+    }
+    if (url.scheme() == QLatin1String("network") && url.path().size() <= 1) {
+        return tr("Network");
+    }
+    if (url.isLocalFile() && QDir::cleanPath(url.path()) == QDir::cleanPath(QDir::homePath())) {
+        return tr("Home");
+    }
+    const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (!parts.isEmpty()) {
+        return rustDisplayName(parts.last().toUtf8());
+    }
+    // The top of a server (smb://nas/) is the server; the top of a disk is "/".
+    if (!url.isLocalFile() && !url.host().isEmpty()) {
+        return rustDisplayName(url.host().toUtf8());
+    }
+    return url.isLocalFile() ? QStringLiteral("/") : url.scheme();
+}

@@ -61,6 +61,8 @@ Q_SIGNALS:
     // For the window to show in plain words.
     void failed(const QString &text);
     void navigateRequested(const QUrl &target);
+    // "Open in New Tab" in the context menu: the folders chosen.
+    void openInNewTabRequested(const QList<QUrl> &folders);
 
 private:
     void setup(KJob *job);
