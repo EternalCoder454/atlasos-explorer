@@ -1,0 +1,61 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  net.eterneon.telamon.explorer.Search1: Telamon Explorer's file-name index
+  (service telamon-explorer-indexd). The interface is fixed; see docs/DESIGN.md,
+  "File index". Names in hits are display names (control and bidi characters
+  made visible); the URI is the lossless identity of a file.
+-->
+<node>
+  <interface name="net.eterneon.telamon.explorer.Search1">
+    <!--
+      Search(query, limit, options) -> hits
+        query    words separated by spaces; every word must match
+        limit    most hits to return (capped at 500)
+        options  all optional; unknown keys are ignored, a wrong type is an error
+          "kind"            s   "folder" | "file"
+          "kinds"           as  folder, document, spreadsheet, presentation, pdf,
+                                image, audio, video, archive, code, text,
+                                executable, font, disk-image
+          "root"            s   a file:// URI; only hits under it
+          "include_hidden"  b   default false
+          "modified_after"  x   seconds since the epoch
+          "modified_before" x
+          "size_min"        t
+          "size_max"        t
+          "match"           s   "name" (default) | "path"
+      hit = (uri, name, kind, mime, icon, mtime, size, score)
+        uri    file:// URI, percent-encoded
+        name   display name
+        kind   "folder" or "file"
+        mime   MIME type from the name
+        icon   freedesktop icon name for the MIME type
+        mtime  seconds since the epoch
+        size   bytes (0 for folders)
+        score  higher is better; hits come sorted
+    -->
+    <method name="Search">
+      <arg name="query" type="s" direction="in"/>
+      <arg name="limit" type="u" direction="in"/>
+      <arg name="options" type="a{sv}" direction="in"/>
+      <arg name="hits" type="a(sssssxtd)" direction="out"/>
+    </method>
+    <!--
+      Status() -> {"state": s ("ready" | "scanning" | "stale" | "disabled" | "error"),
+                   "entries": u, "updated": x, "roots": as, "error": s}
+    -->
+    <method name="Status">
+      <arg name="status" type="a{sv}" direction="out"/>
+    </method>
+    <!-- Hint from Explorer after its own operations: rescan these folders
+         (file:// URIs only, at most 256). -->
+    <method name="NotifyChanged">
+      <arg name="uris" type="as" direction="in"/>
+    </method>
+    <!-- Rescan now (the Settings "Rebuild" button). -->
+    <method name="Refresh"/>
+    <signal name="StatusChanged">
+      <arg name="status" type="a{sv}"/>
+    </signal>
+  </interface>
+</node>

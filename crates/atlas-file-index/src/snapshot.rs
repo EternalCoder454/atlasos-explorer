@@ -1,4 +1,4 @@
-//! The snapshot file `$XDG_CACHE_HOME/atlas-explorer/index/v1.idx`: a cache, so
+//! The snapshot file `$XDG_CACHE_HOME/telamon-explorer/index/v1.idx`: a cache, so
 //! deleting it only costs a rescan. Flat and little-endian:
 //!
 //! ```text
@@ -20,7 +20,7 @@
 //! arena, and the records must form a valid depth-first tree (`Index::from_parts`).
 //! Anything wrong means "no snapshot": the caller scans again.
 //!
-//! The folder follows the Store's cache rules: `atlas-explorer/index` under the
+//! The folder follows the Store's cache rules: `telamon-explorer/index` under the
 //! cache home must be a real folder (not a symlink), owned by the user, with no
 //! group or other write bit (set back to 0700 on a write, refused on a read);
 //! the file is opened with `O_NOFOLLOW` and must be a regular file of the user's
@@ -207,9 +207,9 @@ fn check_dir(fd: RawFd, what: &str, fix: bool) -> io::Result<()> {
 }
 
 impl CacheDir {
-    /// Open `<cache_home>/atlas-explorer/index`; with `create`, make it (0700).
+    /// Open `<cache_home>/telamon-explorer/index`; with `create`, make it (0700).
     /// `Ok(None)` when it does not exist and `create` is false. Folders above
-    /// `atlas-explorer` may be symlinks (a moved `~/.cache`); the two below may not.
+    /// `telamon-explorer` may be symlinks (a moved `~/.cache`); the two below may not.
     pub fn open(cache_home: &Path, create: bool) -> io::Result<Option<CacheDir>> {
         use std::os::unix::fs::DirBuilderExt;
         if create {
@@ -224,7 +224,7 @@ impl CacheDir {
             Err(e) => return Err(e),
         };
         let mut cur = base;
-        for name in ["atlas-explorer", "index"] {
+        for name in ["telamon-explorer", "index"] {
             let c = cstr(name)?;
             if create {
                 // SAFETY: cur is an open directory; c is NUL-terminated.
@@ -483,7 +483,7 @@ mod tests {
         let bytes = encode(&sample(), 5);
         cd.write(&bytes).unwrap();
         assert_eq!(cd.read().unwrap().unwrap(), bytes);
-        let dir = t.0.join("atlas-explorer/index");
+        let dir = t.0.join("telamon-explorer/index");
         assert_eq!(
             std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
             0o700
@@ -508,16 +508,16 @@ mod tests {
         let t = Scratch::new("snap-link");
         let cd = CacheDir::open(&t.0, true).unwrap().unwrap();
         cd.write(&encode(&sample(), 5)).unwrap();
-        let dir = t.0.join("atlas-explorer/index");
+        let dir = t.0.join("telamon-explorer/index");
         // the file as a symlink
         std::fs::rename(dir.join(FILE_NAME), t.0.join("real")).unwrap();
         symlink(t.0.join("real"), dir.join(FILE_NAME)).unwrap();
         assert!(cd.read().is_err());
         // the folder as a symlink
         let t2 = Scratch::new("snap-link2");
-        std::fs::create_dir_all(t2.0.join("atlas-explorer")).unwrap();
+        std::fs::create_dir_all(t2.0.join("telamon-explorer")).unwrap();
         std::fs::create_dir_all(t2.0.join("elsewhere")).unwrap();
-        symlink(t2.0.join("elsewhere"), t2.0.join("atlas-explorer/index")).unwrap();
+        symlink(t2.0.join("elsewhere"), t2.0.join("telamon-explorer/index")).unwrap();
         assert!(CacheDir::open(&t2.0, true).is_err());
         assert!(CacheDir::open(&t2.0, false).is_err());
         // a cache home that is itself a symlink is allowed (a moved ~/.cache)
@@ -535,7 +535,7 @@ mod tests {
         let t = Scratch::new("snap-mode");
         let cd = CacheDir::open(&t.0, true).unwrap().unwrap();
         cd.write(&encode(&sample(), 5)).unwrap();
-        let dir = t.0.join("atlas-explorer/index");
+        let dir = t.0.join("telamon-explorer/index");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o775)).unwrap();
         assert!(
             CacheDir::open(&t.0, false).is_err(),

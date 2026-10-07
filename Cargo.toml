@@ -3,13 +3,13 @@ resolver = "3"
 members = [
     "crates/atlas-explorer-core",
     "crates/atlas-file-index",
-    "apps/atlas-explorer",
-    "apps/atlas-explorer-indexd",
-    "apps/atlas-explorer-search",
+    "apps/telamon-explorer",
+    "apps/telamon-explorer-indexd",
+    "apps/telamon-explorer-search",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/EternalCoder454/atlasos-explorer"
@@ -17,9 +17,9 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 # The atlas-framework crates (startup, settings, logging, crash reports); to
-# move the pin, see CLAUDE.md. Atlas.Ui is not pinned here: it is the
-# installed atlas-ui package.
-atlas-framework-ui = { git = "https://github.com/EternalCoder454/atlas-framework", tag = "v1.6.0" }
+# move the pin, see CLAUDE.md. Telamon.Ui is not pinned here: it is the
+# installed telamon-ui package.
+telamon-framework-ui = { git = "https://github.com/EternalCoder454/atlas-framework", tag = "v2.0.0" }
 log = { version = "0.4", features = ["std"] }
 libc = "0.2"
 # The D-Bus service and its CLI client (Search1). zbus is pure Rust, talks to

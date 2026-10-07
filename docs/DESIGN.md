@@ -1,4 +1,4 @@
-# Atlas Explorer: design
+# Telamon Explorer: design
 
 What this file fixes: the layout, the threading rule, what is trusted, the
 APIs Explorer exports and consumes, who owns what, the failure modes and the
@@ -6,16 +6,16 @@ budgets. Change it together with the code that changes them. The full plan
 and its reasons are the Atlas Notes note "AtlasOS/Explorer/Plan"; the
 checklist is "AtlasOS/Explorer/Roadmap".
 
-App ID `net.eterneon.atlas.explorer`, binary `atlas-explorer`, shown name
+App ID `net.eterneon.telamon.explorer`, binary `telamon-explorer`, shown name
 **Files** (the name the image already gives Dolphin). Rust + Qt 6.11 Quick +
-Kirigami over CXX-Qt, Atlas.Ui from the installed `atlas-ui`, KF6 6.30 (KIO,
+Kirigami over CXX-Qt, Telamon.Ui from the installed `telamon-ui`, KF6 6.30 (KIO,
 Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 ## Scope
 
 Explorer replaces Dolphin completely.
 
-| Dolphin today on AtlasOS | Who covers it |
+| Dolphin today on Telamon OS | Who covers it |
 |---|---|
 | Browse any KIO URL (file, smb, sftp, ftp, webdav, mtp, trash, recentlyused, network, archives through kio-extras) | Explorer, through KIO |
 | Places panel (`user-places.xbel`), devices, mount, unmount, eject | Explorer: KFilePlacesModel and Solid |
@@ -42,7 +42,7 @@ Explorer replaces Dolphin completely.
 - `crates/atlas-file-index`: no Qt. The index (scanner, inotify watcher,
   on-disk snapshot, matcher and ranking) as a library, so tests and the
   service share it.
-- `apps/atlas-explorer`: the app.
+- `apps/telamon-explorer`: the app.
   - `src/*.rs`: CXX-Qt QObjects (app state, settings, search, operation
     queue front, index client).
   - `cpp/kio/*`: thin C++ adapters over KF6, which only C++ can call:
@@ -54,22 +54,22 @@ Explorer replaces Dolphin completely.
     (KIO::OpenUrlJob, KTerminalLauncherJob), `DragHelper` (QDrag).
     Heavy or pure logic is called from these through a `cxx` bridge into the
     core crate, never written twice.
-  - `cpp/main.cpp`: Qt start, atlas-framework-ui startup, single instance,
+  - `cpp/main.cpp`: Qt start, telamon-framework-ui startup, single instance,
     FileManager1.
-  - `qml/`: the window, views and dialogs, all from Atlas.Ui.
-- `apps/atlas-explorer-indexd`: the index service binary (zbus), plus its
+  - `qml/`: the window, views and dialogs, all from Telamon.Ui.
+- `apps/telamon-explorer-indexd`: the index service binary (zbus), plus its
   systemd user unit and D-Bus activation file.
-- `apps/atlas-explorer-search`: the index CLI.
+- `apps/telamon-explorer-search`: the index CLI.
 
 ## Window
 
-- Title bar with Windows 11 caption buttons (the AtlasOS decoration), then
+- Title bar with Windows 11 caption buttons (the Telamon OS decoration), then
   the **tab strip**: closable, reorderable by drag, drop files on a tab to
   move them into it, middle-click closes, Ctrl+T, Ctrl+W, Ctrl+Shift+T
   reopens, Ctrl+Tab cycles, a folder dragged out of the window opens there.
 - **Toolbar row:** Back, Forward, Up, Refresh; the **address bar**; the
   **search field** ("Search Documents").
-  - Address bar: an Atlas breadcrumb (segments with chevrons; a chevron opens
+  - Address bar: a Telamon breadcrumb (segments with chevrons; a chevron opens
     the subfolder menu; drop files on a segment). A click on the empty part,
     Ctrl+L, F4 or Alt+D turns it into a text field holding the URL or path,
     with completion of folder names (local: a worker lists the folder; remote:
@@ -83,7 +83,7 @@ Explorer replaces Dolphin completely.
   (select all, invert selection, hidden files, file extensions, Properties,
   Open Terminal Here). Disabled states follow the selection and the folder's
   write access.
-- **Sidebar** (AtlasSidebar): Home (a Windows-style home: pinned folders,
+- **Sidebar** (TelamonSidebar): Home (a Windows-style home: pinned folders,
   recent files, frequent folders), Recent (`recentlyused:/`), pinned
   favourites (`user-places.xbel`, drag to pin and reorder), Desktop,
   Documents, Downloads, Pictures, Music, Videos, then Drives (Solid: internal
@@ -124,7 +124,7 @@ Explorer replaces Dolphin completely.
 
 ### Launch and single instance
 
-`atlas-explorer [--new-window] [--select] [--split] [URL|PATH ...]`. One
+`telamon-explorer [--new-window] [--select] [--split] [URL|PATH ...]`. One
 process (KDBusService Unique); a second launch hands its arguments and
 working directory to the first, which opens them in new tabs of the active
 window (or a new window with `--new-window`) and raises it with the launcher's
@@ -138,7 +138,7 @@ control or bidi characters. Anything else is refused and shown as plain text.
 Bus name `org.freedesktop.FileManager1`, object `/org/freedesktop/FileManager1`,
 interface `org.freedesktop.FileManager1`, registered by the running app and
 D-Bus activated through `/usr/share/dbus-1/services/org.freedesktop.FileManager1.service`
-(Exec=`atlas-explorer --daemon-activation`; KDBusService takes the name).
+(Exec=`telamon-explorer --daemon-activation`; KDBusService takes the name).
 
 | Method | Behaviour |
 |---|---|
@@ -151,29 +151,42 @@ by the same launch rules, never executed or opened with an app, only shown.
 StartupId is used to activate the window (KWindowSystem) and otherwise
 ignored.
 
-### Explorer's own D-Bus API (net.eterneon.atlas.explorer)
+### Explorer's own D-Bus API (net.eterneon.telamon.explorer)
 
-Object `/net/eterneon/atlas/explorer`, interface
-`net.eterneon.atlas.explorer.Window1`, for the other Atlas apps:
+Object `/net/eterneon/telamon/explorer`, interface
+`net.eterneon.telamon.explorer.Window1`, for the other Atlas apps:
 
 - `OpenLocation(s uri, as select, a{sv} options)` (options: `new_window` b,
   `split` b, `view` s)
 - `ShowOperations()` (raise the operations popover; Archive may call it after
   handing over a job)
 
-### File index: net.eterneon.atlas.explorer.Search1
+### File index: net.eterneon.telamon.explorer.Search1
 
-A separate user service, `atlas-explorer-indexd`, so search works when the
+A separate user service, `telamon-explorer-indexd`, so search works when the
 window is closed and Atlas Launcher can use it. It replaces Baloo's file
 indexer for file names and metadata. No content indexing.
 
-- Bus name `net.eterneon.atlas.explorer.Search`, object
+- Bus name `net.eterneon.telamon.explorer.Search`, object
+  `/net/eterneon/telamon/explorer/Search`, interface
+  `net.eterneon.telamon.explorer.Search1`. D-Bus activated
+  (`/usr/share/dbus-1/services/net.eterneon.telamon.explorer.Search.service`,
+  `SystemdService=telamon-explorer-indexd.service`).
+- **Also, for one release, under the old name** (before Telamon Explorer, the
+  Launcher and any app that has not moved use it): bus name
+  `net.eterneon.atlas.explorer.Search`, object
   `/net/eterneon/atlas/explorer/Search`, interface
-  `net.eterneon.atlas.explorer.Search1`. D-Bus activated
-  (`/usr/share/dbus-1/services/net.eterneon.atlas.explorer.Search.service`,
-  `SystemdService=atlas-explorer-indexd.service`).
+  `net.eterneon.atlas.explorer.Search1`, the same methods and signal, answered
+  by the same process (`LegacySearch1` in the service) and with the same limit
+  on running searches. The service claims the new name first, the old one
+  right after (the old one is best effort: an `atlas-explorer-indexd` of the
+  previous package may still hold it). Its own activation file
+  (`net.eterneon.atlas.explorer.Search.service`) starts the same unit, and the
+  old unit name `atlas-explorer-indexd.service` is a link to the new unit.
+  Remove all of it, and `data/dbus/net.eterneon.atlas.explorer.Search1.xml`,
+  in the release after.
 - The introspection XML is installed in `/usr/share/dbus-1/interfaces/`
-  and kept in the repo at `data/dbus/net.eterneon.atlas.explorer.Search1.xml`.
+  and kept in the repo at `data/dbus/net.eterneon.telamon.explorer.Search1.xml`.
 
 ```
 Search(s query, u limit, a{sv} options) -> (a(sssssxtd) hits)
@@ -239,7 +252,7 @@ signal StatusChanged(a{sv} status)
   names listed in a folder's `.hidden` file; folders holding `CACHEDIR.TAG`
   (cargo's `target`, many caches); `node_modules`, `__pycache__`; folders
   holding `pyvenv.cfg`. The list lives in
-  `~/.config/atlas-explorer/indexrc` (`[Index] Roots=`, `Exclude=`), a plain
+  `~/.config/telamon-explorer/indexrc` (`[Index] Roots=`, `Exclude=`), a plain
   INI file.
 - **Freshness with no idle CPU:** the service blocks on inotify (no timers,
   no polling). It watches every indexed folder up to a budget (64k watches
@@ -249,7 +262,7 @@ signal StatusChanged(a{sv} status)
   folders that changed, run at idle priority while the query is answered
   from the current index. On start it loads the last snapshot (answering at
   once) and does the same mtime walk.
-- **Storage:** a snapshot file at `~/.cache/atlas-explorer/index/v1.idx`
+- **Storage:** a snapshot file at `~/.cache/telamon-explorer/index/v1.idx`
   (folder 0700, file 0600, written atomically), a documented flat format:
   header with version, checksum and counts, then a string arena and fixed-size
   records. It is read into memory and decoded (not mapped), checked as
@@ -257,16 +270,47 @@ signal StatusChanged(a{sv} status)
   records the exclusion rules it was made under: changed rules mean a rescan.
   It is a cache: deleting it only costs a rescan. No private data
   leaves the user's cache folder.
-- **CLI:** `atlas-explorer-search [--kind K] [--in DIR] [--modified 7d]
+- **CLI:** `telamon-explorer-search [--kind K] [--in DIR] [--modified 7d]
   [--larger 10M] [--smaller 1G] [--limit N] [--json] QUERY`, a thin client of
   the D-Bus API.
 - **Service unit:** a systemd user unit, `Type=dbus`, `Nice=19`,
   `CPUSchedulingPolicy=idle`, `IOSchedulingClass=idle`, `MemoryHigh=96M`,
   `NoNewPrivileges=yes`, `PrivateNetwork=yes`, `ProtectSystem=strict`,
-  `CacheDirectory=atlas-explorer` (0700; the service reads `$CACHE_DIRECTORY`),
+  `CacheDirectory=telamon-explorer` (0700; the service reads `$CACHE_DIRECTORY`),
   `RestrictAddressFamilies=AF_UNIX`, a system-call filter, `TasksMax` and `MemoryMax`,
   `Restart=on-failure` with backoff. Not started at login; the first query
   starts it, and it stays to keep the watches.
+
+## Renamed from Atlas Explorer (0.2.0)
+
+Explorer was `atlas-explorer` (`net.eterneon.atlas.explorer`) until 0.2.0;
+its shown name, Files, did not change. What it kept under the old name comes
+over once, one way, never replacing anything (`atlas_explorer_core::legacy`,
+run by the app at start through `telamon_adopt_legacy`):
+
+- `~/.config/atlas-explorerrc` is copied to `telamon-explorerrc` by the
+  framework (`Settings::for_app`, which the app asks for first), so `ShowHidden`
+  and the rest stay; the old file is left, as a framework app that has not
+  moved still reads it.
+- `~/.config/atlas-explorer/` (`indexrc`) is moved to `telamon-explorer/`,
+  or just its `indexrc` into a new folder that has none. The index service
+  can't move it (it may write only its cache folder), so until the app has,
+  it reads `atlas-explorer/indexrc` when the new file is absent.
+- `~/.cache/atlas-explorer/` (the snapshot `index/v1.idx`) is moved to
+  `telamon-explorer/`, so the first query after the upgrade is answered at
+  once; when systemd has already made the new folder, only the snapshot is
+  moved into it, if it has none. A snapshot that stays costs a rescan at worst
+  (it is a cache). The snapshot's magic, `ATLASIDX`, is the format's and stays.
+- The journal of operations (`~/.local/state/…/journal`, not written yet)
+  is `telamon-explorer` from the start.
+
+Kept for this release besides the bus names above: `/usr/bin/atlas-explorer`,
+`atlas-explorer-indexd` and `atlas-explorer-search` (links to the new
+commands), the hidden `net.eterneon.atlas.explorer.desktop` (the image's
+`inode/directory` default and the Launcher's pinned apps name it), `Provides:
+atlas-explorer`, and `ATLAS_EXPLORER_LOG` (read when `TELAMON_EXPLORER_LOG` is
+not set). `org.freedesktop.FileManager1` is unchanged: a still-running
+`atlas-explorer` keeps it until it exits.
 
 ## Consumed interfaces
 
@@ -368,7 +412,7 @@ its copy succeeded. What Explorer adds:
 
 - **Journal.** Before an operation starts, a record (operation, sources,
   destination, what existed before) is appended to
-  `~/.local/state/atlas-explorer/journal` (0600, fsync'd). The file being
+  `~/.local/state/telamon-explorer/journal` (0600, fsync'd). The file being
   copied is recorded from CopyJob's `copying` signal (appended, fsync'd at
   most every 250 ms on a worker). A finished operation is marked done.
 - **After a crash** (an unfinished record at start), Explorer removes only
@@ -450,8 +494,8 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Settings file unreadable | Defaults, with a warning in the log |
 | Peer app missing (Archive, Backups, Disks) | Its menu items are hidden |
 
-Logging: `atlas-framework-ui` logging to the journal as `atlas-explorer` and
-`atlas-explorer-indexd`: every operation's start, end, error and recovery;
+Logging: `telamon-framework-ui` logging to the journal as `telamon-explorer` and
+`telamon-explorer-indexd`: every operation's start, end, error and recovery;
 URLs without credentials; never file contents.
 
 ## Budgets

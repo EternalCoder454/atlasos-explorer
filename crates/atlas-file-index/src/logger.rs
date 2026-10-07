@@ -1,6 +1,7 @@
 //! A minimal `log` logger for the service and the CLI: one line per record on
 //! stderr (the journal collects the service's). The level comes from
-//! `ATLAS_EXPLORER_LOG` (`error`, `warn`, `info` (default), `debug`, `trace`).
+//! `TELAMON_EXPLORER_LOG` (`error`, `warn`, `info` (default), `debug`, `trace`);
+//! `ATLAS_EXPLORER_LOG`, its name before the rename, is read when that is not set.
 
 use std::io::Write;
 
@@ -38,7 +39,8 @@ impl Log for Stderr {
 
 /// Install the logger; `default` is used when the variable is unset or bad.
 pub fn init(default: LevelFilter) {
-    let level = std::env::var("ATLAS_EXPLORER_LOG")
+    let level = std::env::var("TELAMON_EXPLORER_LOG")
+        .or_else(|_| std::env::var("ATLAS_EXPLORER_LOG"))
         .ok()
         .and_then(|v| v.parse::<LevelFilter>().ok())
         .unwrap_or(default);

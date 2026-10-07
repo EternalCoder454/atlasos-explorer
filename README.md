@@ -1,6 +1,6 @@
-# Atlas Explorer (Files)
+# Telamon Explorer (Files)
 
-The file manager of [AtlasOS](https://github.com/EternalCoder454/AtlasOS),
+The file manager of [Telamon OS](https://github.com/EternalCoder454/AtlasOS),
 shown as **Files**. It replaces Dolphin: Windows 11's File Explorer and macOS
 Finder, built on KDE's KIO.
 
@@ -14,7 +14,7 @@ Finder, built on KDE's KIO.
   cancel, a clear conflict dialog and undo. A full disk, a pulled drive or a
   crash never loses your files.
 - Fast search with filters for kind, date and size, through its own light
-  file-name index (`atlas-explorer-indexd`), which Atlas Launcher uses too.
+  file-name index (`telamon-explorer-indexd`), which Atlas Launcher uses too.
 
 Built with Rust, Qt 6 Quick and Kirigami on
 [atlas-framework](https://github.com/EternalCoder454/atlas-framework). See

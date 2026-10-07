@@ -1,8 +1,11 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <!--
-  net.eterneon.atlas.explorer.Search1: Atlas Explorer's file-name index
-  (service atlas-explorer-indexd). The interface is fixed; see docs/DESIGN.md,
+  net.eterneon.atlas.explorer.Search1: the name Telamon Explorer's file-name
+  index had before the rename, kept for one release (see
+  net.eterneon.telamon.explorer.Search1.xml, the same interface under its new
+  name; the service, telamon-explorer-indexd, answers to both). The interface is
+  fixed; see docs/DESIGN.md,
   "File index". Names in hits are display names (control and bidi characters
   made visible); the URI is the lossless identity of a file.
 -->

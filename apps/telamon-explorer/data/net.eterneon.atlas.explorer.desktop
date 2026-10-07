@@ -1,0 +1,18 @@
+[Desktop Entry]
+# The name Files had before Telamon Explorer (net.eterneon.telamon.explorer):
+# a hidden alias, for this release, so what still names it (the image's
+# default-application lists, the Launcher's pinned apps, panel launchers) keeps
+# opening Files.
+Type=Application
+Name=Files
+GenericName=File Manager
+NoDisplay=true
+Exec=telamon-explorer %U
+Icon=net.eterneon.telamon.explorer
+Terminal=false
+Categories=Qt;KDE;System;FileTools;FileManager;
+MimeType=inode/directory;
+StartupNotify=true
+X-KDE-StartupNotify=true
+X-DBUS-StartupType=Unique
+StartupWMClass=net.eterneon.telamon.explorer

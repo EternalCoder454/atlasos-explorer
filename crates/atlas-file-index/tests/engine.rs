@@ -195,7 +195,7 @@ fn snapshot_serves_a_restart_before_any_scan() {
     let eng = start(cfg(&e));
     ready(&eng);
     eng.shutdown(); // writes the pending snapshot
-    let snap = e.home.join(".cache/atlas-explorer/index/v1.idx");
+    let snap = e.home.join(".cache/telamon-explorer/index/v1.idx");
     assert!(snap.exists());
     // a second start answers from the snapshot straight away, even if the scan is slow
     let mut c = cfg(&e);
@@ -223,7 +223,7 @@ fn damaged_snapshots_mean_a_rescan() {
     let eng = start(cfg(&e));
     ready(&eng);
     eng.shutdown();
-    let snap = e.home.join(".cache/atlas-explorer/index/v1.idx");
+    let snap = e.home.join(".cache/telamon-explorer/index/v1.idx");
     let good = fs::read(&snap).unwrap();
     for bad in [
         good[..good.len() / 2].to_vec(),

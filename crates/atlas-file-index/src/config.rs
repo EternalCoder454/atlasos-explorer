@@ -1,4 +1,4 @@
-//! `~/.config/atlas-explorer/indexrc`, a plain INI file:
+//! `~/.config/telamon-explorer/indexrc`, a plain INI file:
 //!
 //! ```ini
 //! [Index]
@@ -38,11 +38,19 @@ impl Config {
         }
     }
 
-    /// Read `<config_home>/atlas-explorer/indexrc`. A missing file gives the
+    /// Read `<config_home>/telamon-explorer/indexrc`. A missing file gives the
     /// defaults; an unreadable one gives the defaults and a warning.
     pub fn load(config_home: &Path, home: &Path) -> Config {
-        let path = config_home.join("atlas-explorer").join("indexrc");
-        let text = match read_capped(&path) {
+        let path = config_home.join("telamon-explorer").join("indexrc");
+        let mut text = read_capped(&path);
+        // Before the rename it was `atlas-explorer/indexrc`: read it until the
+        // app has moved it (this service can't: it writes only its cache).
+        if matches!(text, Ok(None))
+            && let Some(old) = atlas_explorer_core::legacy::legacy_of(&path)
+        {
+            text = read_capped(&old);
+        }
+        let text = match text {
             Ok(Some(t)) => t,
             Ok(None) => return Config::defaults(home),
             Err(e) => {
@@ -328,7 +336,7 @@ mod tests {
             Config::load(&base, Path::new(HOME)).roots,
             vec![PathBuf::from(HOME)]
         );
-        let d = base.join("atlas-explorer");
+        let d = base.join("telamon-explorer");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("indexrc"), "[Index]\nRoots=/x\n").unwrap();
         assert_eq!(
@@ -339,6 +347,26 @@ mod tests {
         assert_eq!(
             Config::load(&base, Path::new(HOME)).roots,
             vec![PathBuf::from(HOME)]
+        );
+    }
+
+    #[test]
+    fn load_reads_the_old_folder_until_it_is_moved() {
+        let base = crate::testdir::new("config-legacy");
+        let old = base.join("atlas-explorer");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("indexrc"), "[Index]\nRoots=/old\n").unwrap();
+        assert_eq!(
+            Config::load(&base, Path::new(HOME)).roots,
+            vec![PathBuf::from("/old")]
+        );
+        // The new file wins as soon as there is one.
+        let new = base.join("telamon-explorer");
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("indexrc"), "[Index]\nRoots=/new\n").unwrap();
+        assert_eq!(
+            Config::load(&base, Path::new(HOME)).roots,
+            vec![PathBuf::from("/new")]
         );
     }
 

@@ -1,4 +1,4 @@
-//! Launch arguments: `atlas-explorer [--new-window] [--select] [--split]
+//! Launch arguments: `telamon-explorer [--new-window] [--select] [--split]
 //! [URL|PATH ...]`, from the first launch, a forwarded second launch,
 //! `org.freedesktop.Application.Open` and `org.freedesktop.FileManager1`.
 //! Every caller is untrusted: arguments are capped, and a location is kept

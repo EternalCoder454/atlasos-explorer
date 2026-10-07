@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=net.eterneon.telamon.explorer.Search
+Exec=/usr/bin/telamon-explorer-indexd
+SystemdService=telamon-explorer-indexd.service

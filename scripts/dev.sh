@@ -4,27 +4,27 @@
 # /src, the build output at /work and the cargo cache in named podman volumes.
 #   scripts/dev.sh <command...>     e.g. scripts/dev.sh cargo test --workspace
 #   scripts/dev.sh                  an interactive shell
-# /work is $ATLAS_EXPLORER_WORK, by default ~/.cache/claude-builds/atlas-explorer:
+# /work is $TELAMON_EXPLORER_WORK, by default ~/.cache/claude-builds/telamon-explorer:
 # on disk, outside the repo (cargo's target dirs, CMake build dirs, test trees
 # and disk images). Set CARGO_TARGET_DIR to /work/target/<name> to keep one
 # target dir per task.
 # The image is built from ci/Containerfile on first use, and again whenever the
 # Containerfile, the spec's BuildRequires or the atlas-framework tag in
 # Cargo.toml change (ci/image-tag.sh). It needs network access: it builds
-# atlas-ui from atlas-framework's tag. ATLAS_FRAMEWORK_REF=<tag or branch>
+# telamon-ui from atlas-framework's tag. ATLAS_FRAMEWORK_REF=<tag or branch>
 # builds from another ref (the image is rebuilt when it changes).
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-image=localhost/atlas-explorer-dev:44
-work=${ATLAS_EXPLORER_WORK:-$HOME/.cache/claude-builds/atlas-explorer}
+image=localhost/telamon-explorer-dev:44
+work=${TELAMON_EXPLORER_WORK:-$HOME/.cache/claude-builds/telamon-explorer}
 mkdir -p "$work"
 pinned=$("$repo/ci/framework-ref.sh")
 ref=${ATLAS_FRAMEWORK_REF:-$pinned}
 want=$("$repo/ci/image-tag.sh")
 [ "$ref" = "$pinned" ] || want=$want-$ref
 
-have=$(podman image inspect --format '{{ index .Labels "net.eterneon.atlas.explorer.image-tag" }}' "$image" 2>/dev/null || true)
+have=$(podman image inspect --format '{{ index .Labels "net.eterneon.telamon.explorer.image-tag" }}' "$image" 2>/dev/null || true)
 if [ "$have" != "$want" ]; then
     podman build -f "$repo/ci/Containerfile" --target dev \
         --build-arg ATLAS_FRAMEWORK_REF="$ref" --build-arg IMAGE_TAG="$want" \

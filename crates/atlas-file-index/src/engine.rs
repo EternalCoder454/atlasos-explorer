@@ -95,7 +95,7 @@ impl EngineConfig {
 }
 
 /// The folder the snapshot lives below. systemd sets `$CACHE_DIRECTORY` for a
-/// unit with `CacheDirectory=atlas-explorer` (the folder itself, made 0700);
+/// unit with `CacheDirectory=telamon-explorer` (the folder itself, made 0700);
 /// it is used when it is absolute and so named, else `xdg_cache`.
 fn cache_home_from(cache_directory: Option<std::ffi::OsString>, xdg_cache: PathBuf) -> PathBuf {
     let first = cache_directory
@@ -103,7 +103,7 @@ fn cache_home_from(cache_directory: Option<std::ffi::OsString>, xdg_cache: PathB
         .and_then(|v| v.as_bytes().split(|&b| b == b':').next())
         .map(|b| PathBuf::from(std::ffi::OsStr::from_bytes(b)));
     match first {
-        Some(p) if p.is_absolute() && p.file_name().is_some_and(|n| n == "atlas-explorer") => {
+        Some(p) if p.is_absolute() && p.file_name().is_some_and(|n| n == "telamon-explorer") => {
             p.parent().map_or(xdg_cache, Path::to_path_buf)
         }
         _ => xdg_cache,
@@ -1147,11 +1147,11 @@ mod tests {
     #[test]
     fn cache_home_prefers_systemd_cache_directory() {
         let x = PathBuf::from("/home/u/.cache");
-        let got = cache_home_from(Some("/var/c/atlas-explorer".into()), x.clone());
+        let got = cache_home_from(Some("/var/c/telamon-explorer".into()), x.clone());
         assert_eq!(got, PathBuf::from("/var/c"));
         assert_eq!(cache_home_from(None, x.clone()), x);
         assert_eq!(
-            cache_home_from(Some("rel/atlas-explorer".into()), x.clone()),
+            cache_home_from(Some("rel/telamon-explorer".into()), x.clone()),
             x
         );
         assert_eq!(cache_home_from(Some("/var/c/other".into()), x.clone()), x);
