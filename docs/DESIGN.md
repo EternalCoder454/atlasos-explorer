@@ -8,7 +8,7 @@ checklist is "AtlasOS/Explorer/Roadmap".
 
 App ID `net.eterneon.atlas.explorer`, binary `atlas-explorer`, shown name
 **Files** (the name the image already gives Dolphin). Rust + Qt 6.11 Quick +
-Kirigami over CXX-Qt, Atlas.Ui from the installed `atlas-ui`, KF6 6.30 (KIO,
+Kirigami over CXX-Qt, Telamon.Ui from the installed `telamon-ui`, KF6 6.30 (KIO,
 Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 ## Scope
@@ -54,9 +54,9 @@ Explorer replaces Dolphin completely.
     (KIO::OpenUrlJob, KTerminalLauncherJob), `DragHelper` (QDrag).
     Heavy or pure logic is called from these through a `cxx` bridge into the
     core crate, never written twice.
-  - `cpp/main.cpp`: Qt start, atlas-framework-ui startup, single instance,
+  - `cpp/main.cpp`: Qt start, telamon-framework-ui startup, single instance,
     FileManager1.
-  - `qml/`: the window, views and dialogs, all from Atlas.Ui.
+  - `qml/`: the window, views and dialogs, all from Telamon.Ui.
 - `apps/atlas-explorer-indexd`: the index service binary (zbus), plus its
   systemd user unit and D-Bus activation file.
 - `apps/atlas-explorer-search`: the index CLI.
@@ -83,7 +83,7 @@ Explorer replaces Dolphin completely.
   (select all, invert selection, hidden files, file extensions, Properties,
   Open Terminal Here). Disabled states follow the selection and the folder's
   write access.
-- **Sidebar** (AtlasSidebar): Home (a Windows-style home: pinned folders,
+- **Sidebar** (TelamonSidebar): Home (a Windows-style home: pinned folders,
   recent files, frequent folders), Recent (`recentlyused:/`), pinned
   favourites (`user-places.xbel`, drag to pin and reorder), Desktop,
   Documents, Downloads, Pictures, Music, Videos, then Drives (Solid: internal
@@ -450,7 +450,7 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Settings file unreadable | Defaults, with a warning in the log |
 | Peer app missing (Archive, Backups, Disks) | Its menu items are hidden |
 
-Logging: `atlas-framework-ui` logging to the journal as `atlas-explorer` and
+Logging: `telamon-framework-ui` logging to the journal as `atlas-explorer` and
 `atlas-explorer-indexd`: every operation's start, end, error and recovery;
 URLs without credentials; never file contents.
 

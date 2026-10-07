@@ -51,8 +51,8 @@ there.
   `qt_thread().queue` or queued signals.
 - **One operation queue** runs every copy, move, link, trash, delete, rename
   and new folder; nothing changes files outside it.
-- **Atlas.Ui is the installed `atlas-ui` package** from atlas-framework
-  (`~/Documents/Atlas Framework`, read-only from here). Never fork Atlas.Ui
+- **Telamon.Ui is the installed `telamon-ui` package** from atlas-framework
+  (`~/Documents/Atlas Framework`, read-only from here). Never fork Telamon.Ui
   components into this repo: ask the "AtlasOS Framework" session. Pieces it
   hasn't shipped yet live in `qml/` with the requested API shape, and move
   upstream later.
@@ -89,9 +89,9 @@ file's `ci` target, published as `ghcr.io/eternalcoder454/atlas-explorer-dev:44`
 ## Moving the atlas-framework pin
 
 1. Change `tag` in `Cargo.toml`, then
-   `scripts/dev.sh cargo update -p atlas-framework-ui`.
+   `scripts/dev.sh cargo update -p telamon-framework-ui`.
 2. Move the pin in `.github/workflows/ci.yml` if it names one, and when the
-   app uses something new in Atlas.Ui, `ui:` in `apps/atlas-explorer/src/lib.rs`
-   and `atlas-ui >=` in the spec (Requires and BuildRequires).
+   app uses something new in Telamon.Ui, `ui:` in `apps/atlas-explorer/src/lib.rs`
+   and `telamon-ui >=` in the spec (Requires and BuildRequires).
 3. `scripts/dev.sh` rebuilds the dev image (the tag is part of its hash).
 4. Commit `Cargo.toml` and `Cargo.lock` together.

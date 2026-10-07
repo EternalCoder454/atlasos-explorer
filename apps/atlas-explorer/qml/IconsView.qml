@@ -2,7 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 
 // The Icons view (a grid of large icons or thumbnails) and, with `compact`,
 // the compact list (small icons, names beside them, filling top to bottom).
@@ -55,8 +55,8 @@ Item {
         cellWidth: root.cellW
         cellHeight: root.cellH
         cacheBuffer: root.cellH * 4
-        QQC2.ScrollBar.vertical: AtlasScrollBar {}
-        QQC2.ScrollBar.horizontal: AtlasScrollBar {}
+        QQC2.ScrollBar.vertical: TelamonScrollBar {}
+        QQC2.ScrollBar.horizontal: TelamonScrollBar {}
 
         delegate: Item {
             id: cell

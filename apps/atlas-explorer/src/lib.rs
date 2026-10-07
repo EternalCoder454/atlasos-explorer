@@ -5,11 +5,11 @@
 mod backend;
 mod ffi;
 
-atlas_framework_ui::app! {
+telamon_framework_ui::app! {
     name: "Files",
     id: "net.eterneon.atlas.explorer",
     repo: "atlasos-explorer",
-    ui: "1.4.0",
+    ui: "2.0.0",
 }
 
 use std::ffi::c_void;
@@ -17,6 +17,6 @@ use std::ffi::c_void;
 /// Called once from `main.cpp`. Returns the `Backend` QObject, which C++ hands
 /// to the QML engine. Ownership passes to the caller (a QObject with no parent).
 #[unsafe(no_mangle)]
-pub extern "C" fn atlas_backend_new() -> *mut c_void {
+pub extern "C" fn telamon_backend_new() -> *mut c_void {
     backend::qobject::backend_make_unique().into_raw().cast()
 }

@@ -1,12 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 
 // Explorer's window. The skeleton: the sidebar's places and a page for the
 // place shown. Tabs, the address bar, the command bar and the views come
 // with M2 (docs/DESIGN.md, "Window").
-AtlasWindow {
+TelamonWindow {
     id: root
 
     // The Rust backend (src/backend.rs); main.cpp sets it.
@@ -109,7 +109,7 @@ AtlasWindow {
         forwardStack = forwardStack.slice(0, -1);
     }
 
-    title: AtlasApp.name
+    title: TelamonApp.name
     width: Kirigami.Units.gridUnit * 64
     height: Kirigami.Units.gridUnit * 40
     minimumWidth: Kirigami.Units.gridUnit * 24
@@ -223,7 +223,7 @@ AtlasWindow {
         anchors.fill: parent
         spacing: 0
 
-        AtlasSidebar {
+        TelamonSidebar {
             id: sidebar
             Layout.fillHeight: true
             Layout.preferredWidth: Kirigami.Units.gridUnit * 12.5
@@ -293,7 +293,7 @@ AtlasWindow {
                         onClicked: root.startAddressEdit()
                     }
                 }
-                AtlasTextField {
+                TelamonTextField {
                     id: address
                     visible: root.editingAddress
                     Layout.fillWidth: true

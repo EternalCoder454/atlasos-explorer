@@ -15,7 +15,7 @@ name = "atlas_explorer"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-atlas-framework-ui.workspace = true
+telamon-framework-ui.workspace = true
 atlas-explorer-core = { path = "../../crates/atlas-explorer-core" }
 cxx = "1"
 cxx-qt = "0.10"

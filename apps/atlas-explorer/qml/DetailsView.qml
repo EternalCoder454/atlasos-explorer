@@ -2,7 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 
 // The Details view: one fixed-height row per item, a header with sortable and
 // resizable columns. Only the rows on screen exist.
@@ -57,8 +57,8 @@ Item {
         flickableDirection: Flickable.HorizontalAndVerticalFlick
         headerPositioning: ListView.OverlayHeader
         cacheBuffer: root.rowHeight * 8
-        QQC2.ScrollBar.vertical: AtlasScrollBar {}
-        QQC2.ScrollBar.horizontal: AtlasScrollBar {}
+        QQC2.ScrollBar.vertical: TelamonScrollBar {}
+        QQC2.ScrollBar.horizontal: TelamonScrollBar {}
 
         header: Rectangle {
             z: 2

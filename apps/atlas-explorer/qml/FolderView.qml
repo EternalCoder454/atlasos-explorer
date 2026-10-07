@@ -2,7 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQml.Models
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 
 // A folder shown as details, icons or a compact list: selection, keyboard
 // navigation and type-ahead live here, the views only draw rows. Opening a
@@ -300,7 +300,7 @@ FocusScope {
         fv: top
     }
 
-    AtlasEmptyState {
+    TelamonEmptyState {
         anchors.centerIn: parent
         visible: folderModel.errorText.length > 0 || (folderModel.count === 0)
         symbol: folderModel.errorText.length > 0 ? Symbols.FolderOff : (folderModel.loading ? Symbols.HourglassEmpty : Symbols.FolderOpen)
