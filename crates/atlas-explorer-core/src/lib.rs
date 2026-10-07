@@ -9,6 +9,7 @@ pub mod legacy;
 pub mod names;
 pub mod queue;
 pub mod sort;
+pub mod tabs;
 pub mod undo;
 
 pub use display::{MAX_DISPLAY_CHARS, NameBytes, display_name};
