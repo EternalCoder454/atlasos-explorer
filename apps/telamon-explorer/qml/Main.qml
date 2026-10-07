@@ -104,8 +104,12 @@ TelamonWindow {
         if (!view) {
             return;
         }
-        view.folder.showHidden = !view.folder.showHidden;
-        fileActions.saveShowHidden(view.folder.showHidden);
+        const on = !view.folder.showHidden;
+        // Every tab, so switching tabs doesn't change what is shown.
+        for (const id in pages) {
+            pages[id].view.folder.showHidden = on;
+        }
+        fileActions.saveShowHidden(on);
     }
 
     // ---- Navigation in the tab shown ----
@@ -265,14 +269,22 @@ TelamonWindow {
             return;
         }
         freshStart = false;
-        const kept = {
-            "url": p.location,
-            "viewMode": p.view.viewMode,
-            "back": p.backStack.slice(-TabLogic.maxHistory),
-            "forward": p.forwardStack.slice(-TabLogic.maxHistory),
-            "index": i
-        };
-        closedTabs = closedTabs.concat([kept]).slice(-TabLogic.maxClosed);
+        removeTab(i);
+        selectTab(next);
+    }
+    // Removes the tab at `i` without showing another one first.
+    function removeTab(i) {
+        const p = pageAt(i);
+        if (!p) {
+            return;
+        }
+        closedTabs = closedTabs.concat([{
+                    "url": p.location,
+                    "viewMode": p.view.viewMode,
+                    "back": p.backStack.slice(-TabLogic.maxHistory),
+                    "forward": p.forwardStack.slice(-TabLogic.maxHistory),
+                    "index": i
+                }]).slice(-TabLogic.maxClosed);
         if (p === page) {
             page = null;
         }
@@ -280,37 +292,50 @@ TelamonWindow {
         delete pages[p.tabId];
         p.visible = false;
         p.destroy();
-        selectTab(next);
     }
-    function closeOthers(i) {
+    // Closes every tab but `keep`, which is then shown.
+    function closeOthers(keep) {
+        if (!pageAt(keep)) {
+            return;
+        }
+        freshStart = false;
         for (let n = tabsModel.count - 1; n >= 0; --n) {
-            if (n !== i) {
-                closeTab(n);
-                if (n < i) {
-                    i--;
+            if (n !== keep) {
+                removeTab(n);
+                if (n < keep) {
+                    keep--;
                 }
             }
         }
-        selectTab(i);
+        selectTab(keep);
     }
+    // Closes the tabs after `i`; the tab shown stays unless it was one of them.
     function closeToTheRight(i) {
-        for (let n = tabsModel.count - 1; n > i; --n) {
-            closeTab(n);
+        if (!pageAt(i)) {
+            return;
         }
+        freshStart = false;
+        const wasShown = currentIndex;
+        for (let n = tabsModel.count - 1; n > i; --n) {
+            removeTab(n);
+        }
+        selectTab(wasShown > i ? i : wasShown);
     }
     function reopenClosedTab() {
         if (closedTabs.length === 0) {
             return;
         }
         const t = closedTabs[closedTabs.length - 1];
-        closedTabs = closedTabs.slice(0, -1);
         freshStart = false;
-        addTab(t.url, {
+        // Only a tab that was opened leaves the list.
+        if (addTab(t.url, {
             "index": t.index,
             "viewMode": t.viewMode,
             "back": t.back,
             "forward": t.forward
-        });
+        })) {
+            closedTabs = closedTabs.slice(0, -1);
+        }
     }
     function moveTab(from, to) {
         if (from === to || from < 0 || to < 0 || from >= tabsModel.count || to >= tabsModel.count) {

@@ -38,7 +38,7 @@ public:
 
     // Whether Ctrl is held right now (a click or Enter with Ctrl opens a new tab).
     Q_INVOKABLE bool controlHeld() const;
-    // A location as text for the saved session (percent-encoded, never "pretty").
+    // A location as text for the saved session (percent-encoded, without a password).
     Q_INVOKABLE QString encode(const QUrl &url) const;
 
     // What the window saved for the next start, checked by the core: {urls, current}

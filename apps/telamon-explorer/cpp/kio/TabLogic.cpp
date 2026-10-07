@@ -93,7 +93,8 @@ bool TabLogic::controlHeld() const
 
 QString TabLogic::encode(const QUrl &url) const
 {
-    return url.toString(QUrl::FullyEncoded);
+    // Never the password: the session lands in a settings file.
+    return url.toString(QUrl::FullyEncoded | QUrl::RemovePassword);
 }
 
 QVariantMap TabLogic::checkSession(const QStringList &saved, int current) const
