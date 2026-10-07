@@ -11,6 +11,20 @@ App ID `net.eterneon.telamon.explorer`, binary `telamon-explorer`, shown name
 Kirigami over CXX-Qt, Telamon.Ui from the installed `telamon-ui`, KF6 6.30 (KIO,
 Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
+## Status
+
+This file describes the finished Files. The code is smaller, and
+`docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
+0.2.0 only these parts of the sections below exist: one folder per window
+(Details, Icons and Compact views), a plain-text location that becomes a text
+field, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
+with View and Sort menus, ten fixed sidebar places, KIO jobs with KIO's own
+dialogs, `FileManager1`, the launch parser and the index service. Everything
+else (tab strip, breadcrumb, search field, preview and details panes, Quick
+Look, status line, the operations popover and queue wiring, Columns and Gallery
+views, split view, drives and pins) is design, not behaviour. Sections that
+have been built say so in a "Built" line.
+
 ## Scope
 
 Explorer replaces Dolphin completely.
