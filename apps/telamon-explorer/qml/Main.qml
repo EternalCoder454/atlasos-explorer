@@ -4,9 +4,9 @@ import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import Telamon.Ui
 
-// Explorer's window: the sidebar's places, the tab strip, the location, the
-// command bar and, below, the page of the tab shown (FilesTabPage). The
-// breadcrumb, search, panes and the status line come later (docs/ROADMAP.md).
+// Explorer's window: the sidebar's places, the tab strip, the path bar, the
+// command bar, the page of the tab shown (FilesTabPage) and the status line.
+// Search and the panes come later (docs/ROADMAP.md).
 TelamonWindow {
     id: root
 
@@ -48,10 +48,53 @@ TelamonWindow {
     }
     // What the last launch asked for that Explorer refused, shown over the view.
     property string launchText
-    property bool editingAddress: false
+    // Why the address typed in the path bar was refused, shown under it.
+    property string addressError
+    readonly property bool editingAddress: pathBar.editing
     readonly property var selected: view ? view.selectedUrls : []
     readonly property bool hasSelection: selected.length > 0
     readonly property bool canWrite: view ? view.folder.canWrite : false
+    // {files, folders, bytes} of the selection, for the status line.
+    readonly property var selectionStats: {
+        if (!view) {
+            return ({
+                    "files": 0,
+                    "folders": 0,
+                    "bytes": 0
+                });
+        }
+        view.selRevision;
+        view.folder.count;
+        return view.folder.selectionStats(view.selectedRows());
+    }
+    // Free space of the disk the folder is on (-1: not known), asked of a
+    // worker when the folder changes and a second after its items change.
+    property real freeBytes: -1
+    property int freeSerial: -1
+    function refreshFreeSpace() {
+        freeSerial = LocationLogic.queryFreeSpace(currentUrl);
+    }
+    onCurrentUrlChanged: refreshFreeSpace()
+
+    Connections {
+        target: LocationLogic
+        function onFreeSpaceReady(serial, bytes) {
+            if (serial === root.freeSerial) {
+                root.freeBytes = bytes;
+            }
+        }
+    }
+    Connections {
+        target: root.view ? root.view.folder : null
+        function onCountChanged() {
+            freeTimer.restart();
+        }
+    }
+    Timer {
+        id: freeTimer
+        interval: 1000
+        onTriggered: root.refreshFreeSpace()
+    }
 
     FileActions {
         id: fileActions
@@ -74,30 +117,15 @@ TelamonWindow {
     }
 
     // ---- Address ----
-    function startAddressEdit() {
-        if (!page) {
-            return;
-        }
-        const u = currentUrl;
-        address.text = u.toString().startsWith("file:") ? decodeURIComponent(u.toString().substring(7)) : u.toString();
-        editingAddress = true;
-        address.forceActiveFocus();
-        address.selectAll();
-    }
-    function endAddressEdit() {
-        editingAddress = false;
-        if (view) {
-            view.forceActiveFocus();
-        }
-    }
-    function goToAddress() {
-        const r = fileActions.parseAddress(address.text);
+    function goToAddress(text) {
+        const r = fileActions.parseAddress(text);
         if (r.ok) {
+            addressError = "";
             launchText = "";
             navigate(Qt.url(r.text));
-            endAddressEdit();
+            pathBar.endEdit();
         } else {
-            launchText = r.text;
+            addressError = r.text;
         }
     }
     function toggleHidden() {
@@ -127,6 +155,21 @@ TelamonWindow {
         if (page) {
             page.goForward();
         }
+    }
+    // The menu of Back (or Forward): the last places of the tab, nearest first.
+    property bool menuOpenedByPress: false
+    function showHistory(forward, anchor) {
+        if (!page) {
+            return;
+        }
+        const places = forward ? page.forwardPlaces() : page.backPlaces();
+        if (places.length === 0) {
+            return;
+        }
+        menuOpenedByPress = true;
+        historyMenu.forward = forward;
+        historyMenu.places = places;
+        historyMenu.popup(anchor, 0, anchor.height + Kirigami.Units.smallSpacing);
     }
 
     // ---- Tabs ----
@@ -165,7 +208,7 @@ TelamonWindow {
         p.visible = true;
         tabsModel.setProperty(i, "modified", false);
         openerId = -1;
-        editingAddress = false;
+        pathBar.endEdit();
         p.view.forceActiveFocus();
         markSession();
     }
@@ -498,9 +541,7 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite; onActivated: fileActions.newFolder() }
     Shortcut { sequence: "Ctrl+H"; enabled: !root.editingAddress; onActivated: root.toggleHidden() }
     Shortcut { sequence: "Shift+F4"; onActivated: fileActions.openTerminal() }
-    Shortcut { sequence: "Ctrl+L"; onActivated: root.startAddressEdit() }
-    Shortcut { sequence: "F6"; onActivated: root.startAddressEdit() }
-    Shortcut { sequence: "Alt+D"; onActivated: root.startAddressEdit() }
+    Shortcut { sequences: ["Ctrl+L", "F4", "F6", "Alt+D"]; onActivated: pathBar.startEdit() }
     Shortcut { sequence: "Alt+Left"; enabled: !root.editingAddress; onActivated: root.goBack() }
     Shortcut { sequence: "Alt+Right"; enabled: !root.editingAddress; onActivated: root.goForward() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
@@ -546,6 +587,29 @@ TelamonWindow {
         ContextMenuSeparator {}
         ContextMenuItem { text: qsTr("Ascending"); radio: true; checkable: true; checked: !root.view?.folder.sortDescending; onTriggered: root.view.folder.sortDescending = false }
         ContextMenuItem { text: qsTr("Descending"); radio: true; checkable: true; checked: root.view?.folder.sortDescending ?? false; onTriggered: root.view.folder.sortDescending = true }
+    }
+
+    // The places Back or Forward would go to: picking one jumps there.
+    ContextMenu {
+        id: historyMenu
+        property bool forward: false
+        property var places: []
+        Instantiator {
+            model: historyMenu.places
+            delegate: ContextMenuItem {
+                required property var modelData
+                text: StandardPlaces.displayLocation(modelData.url)
+                onTriggered: {
+                    if (historyMenu.forward) {
+                        root.page.goForwardBy(modelData.steps);
+                    } else {
+                        root.page.goBackBy(modelData.steps);
+                    }
+                }
+            }
+            onObjectAdded: (index, object) => historyMenu.insertItem(index, object)
+            onObjectRemoved: (index, object) => historyMenu.removeItem(object)
+        }
     }
 
     // The menu of the strip's "..." button.
@@ -714,22 +778,53 @@ TelamonWindow {
                 Layout.fillWidth: true
                 Layout.margins: Kirigami.Units.smallSpacing
                 spacing: Kirigami.Units.smallSpacing
+                // Above the command bar: the path bar's drop hint hangs below it.
+                z: 2
 
+                // A long press or a right click lists the last places of the tab.
                 ToolbarButton {
+                    id: backButton
                     symbol: Symbols.ArrowBack
                     text: qsTr("Back")
                     shortcutText: "Alt+Left"
                     enabled: root.page?.canGoBack ?? false
                     focusable: true
-                    onClicked: root.goBack()
+                    onPressed: root.menuOpenedByPress = false
+                    onClicked: {
+                        if (!root.menuOpenedByPress) {
+                            root.goBack();
+                        }
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: root.showHistory(false, backButton)
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton
+                        onLongPressed: root.showHistory(false, backButton)
+                    }
                 }
                 ToolbarButton {
+                    id: forwardButton
                     symbol: Symbols.ArrowForward
                     text: qsTr("Forward")
                     shortcutText: "Alt+Right"
                     enabled: root.page?.canGoForward ?? false
                     focusable: true
-                    onClicked: root.goForward()
+                    onPressed: root.menuOpenedByPress = false
+                    onClicked: {
+                        if (!root.menuOpenedByPress) {
+                            root.goForward();
+                        }
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: root.showHistory(true, forwardButton)
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton
+                        onLongPressed: root.showHistory(true, forwardButton)
+                    }
                 }
                 ToolbarButton {
                     symbol: Symbols.ArrowUpward
@@ -737,28 +832,39 @@ TelamonWindow {
                     focusable: true
                     onClicked: root.navigate(StandardPlaces.parentUrl(root.currentUrl))
                 }
-                // The location; a click turns it into a field for a path or URL.
-                Text {
-                    visible: !root.editingAddress
+                // The path: segments to click, a menu per chevron, drops on a
+                // segment; a click on the empty part edits it as text.
+                PathBar {
+                    id: pathBar
                     Layout.fillWidth: true
                     Layout.leftMargin: Kirigami.Units.largeSpacing
-                    textFormat: Text.PlainText
-                    elide: Text.ElideMiddle
-                    text: StandardPlaces.displayLocation(root.currentUrl)
-                    color: Kirigami.Theme.textColor
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: root.startAddressEdit()
+                    location: root.currentUrl
+                    showHidden: root.view?.folder.showHidden ?? false
+                    actions: fileActions
+                    onNavigateRequested: target => root.navigate(target)
+                    onOpenInNewTabRequested: target => root.openInNewTab(target)
+                    onAddressAccepted: text => root.goToAddress(text)
+                    onAddressEdited: root.addressError = ""
+                    onEditEnded: {
+                        root.addressError = "";
+                        if (root.view) {
+                            root.view.forceActiveFocus();
+                        }
                     }
                 }
-                TelamonTextField {
-                    id: address
-                    visible: root.editingAddress
-                    Layout.fillWidth: true
-                    Keys.onEscapePressed: root.endAddressEdit()
-                    onAccepted: root.goToAddress()
-                    onActiveFocusChanged: if (!activeFocus && root.editingAddress) root.editingAddress = false
-                }
+            }
+
+            Text {
+                visible: root.addressError.length > 0
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.smallSpacing * 2
+                Layout.rightMargin: Kirigami.Units.smallSpacing
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                text: root.addressError
+                color: Kirigami.Theme.negativeTextColor
+                Accessible.role: Accessible.AlertMessage
+                Accessible.name: root.addressError
             }
 
             RowLayout {
@@ -847,6 +953,13 @@ TelamonWindow {
                 id: pageHost
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+            }
+
+            StatusLine {
+                Layout.fillWidth: true
+                folder: root.view?.folder ?? null
+                selection: root.selectionStats
+                freeBytes: root.freeBytes
             }
         }
     }

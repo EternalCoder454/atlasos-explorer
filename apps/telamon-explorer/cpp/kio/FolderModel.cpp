@@ -46,6 +46,9 @@ FolderModel::FolderModel(QObject *parent)
     m_sortTimer.setSingleShot(true);
     m_sortTimer.setInterval(60);
     connect(&m_sortTimer, &QTimer::timeout, this, &FolderModel::startSort);
+    m_hiddenTimer.setSingleShot(true);
+    m_hiddenTimer.setInterval(100);
+    connect(&m_hiddenTimer, &QTimer::timeout, this, &FolderModel::recountHidden);
 
     connect(m_lister, &KCoreDirLister::itemsAdded, this, [this](const QUrl &, const KFileItemList &items) { addItems(items); });
     connect(m_lister, &KCoreDirLister::itemsDeleted, this, &FolderModel::removeItems);
@@ -228,6 +231,7 @@ void FolderModel::resetRows()
     m_folders = 0;
     endResetModel();
     Q_EMIT countChanged();
+    m_hiddenTimer.start();
 }
 
 void FolderModel::setLoading(bool on)
@@ -249,6 +253,18 @@ void FolderModel::setError(const QString &text)
 void FolderModel::updateCounts()
 {
     Q_EMIT countChanged();
+    m_hiddenTimer.start();
+}
+
+// The lister keeps the hidden items it doesn't show: what it holds beyond the
+// rows is what is hidden.
+void FolderModel::recountHidden()
+{
+    const int hidden = m_showHidden ? 0 : qMax(0, int(m_lister->items(KCoreDirLister::AllItems).size()) - int(m_rows.size()));
+    if (hidden != m_hidden) {
+        m_hidden = hidden;
+        Q_EMIT hiddenCountChanged();
+    }
 }
 
 void FolderModel::addItems(const KFileItemList &items)
@@ -341,6 +357,7 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
 void FolderModel::onCompleted()
 {
     setLoading(false);
+    m_hiddenTimer.start();
     m_listedUrl = m_url;
     const KFileItem root = m_lister->rootItem();
     const bool w = !root.isNull() && root.isWritable();
@@ -402,6 +419,7 @@ void FolderModel::setShowHidden(bool on)
     m_lister->setShowHiddenFiles(on);
     m_lister->emitChanges();
     Q_EMIT showHiddenChanged();
+    m_hiddenTimer.start();
 }
 
 void FolderModel::setSortColumn(SortColumn c)
@@ -607,6 +625,26 @@ QItemSelection FolderModel::rangeSelection(int from, int to) const
     from = std::clamp(from, 0, n - 1);
     to = std::clamp(to, 0, n - 1);
     return QItemSelection(index(std::min(from, to)), index(std::max(from, to)));
+}
+
+QVariantMap FolderModel::selectionStats(const QVariantList &rows) const
+{
+    int files = 0, folders = 0;
+    double bytes = 0;
+    for (const QVariant &v : rows) {
+        const int r = v.toInt();
+        if (r < 0 || r >= m_rows.size()) {
+            continue;
+        }
+        const Entry &e = m_rows.at(r);
+        if (e.isDir) {
+            ++folders;
+        } else {
+            ++files;
+            bytes += double(e.size);
+        }
+    }
+    return {{QStringLiteral("files"), files}, {QStringLiteral("folders"), folders}, {QStringLiteral("bytes"), bytes}};
 }
 
 KFileItem FolderModel::fileItemOf(const QUrl &url) const

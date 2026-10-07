@@ -65,22 +65,54 @@ FocusScope {
         navigated();
     }
     function goBack() {
-        if (backStack.length === 0) {
-            return;
-        }
-        forwardStack = forwardStack.concat([view.url]);
-        view.url = backStack[backStack.length - 1];
-        backStack = backStack.slice(0, -1);
-        navigated();
+        goBackBy(1);
     }
     function goForward() {
-        if (forwardStack.length === 0) {
+        goForwardBy(1);
+    }
+    // Goes `n` places back (the places passed stay in the forward list, so
+    // Forward walks them again).
+    function goBackBy(n) {
+        const len = backStack.length;
+        n = Math.min(n, len);
+        if (n < 1) {
             return;
         }
-        backStack = backStack.concat([view.url]);
-        view.url = forwardStack[forwardStack.length - 1];
-        forwardStack = forwardStack.slice(0, -1);
+        const passed = backStack.slice(len - n + 1).reverse();
+        forwardStack = forwardStack.concat([view.url], passed);
+        view.url = backStack[len - n];
+        backStack = backStack.slice(0, len - n);
         navigated();
+    }
+    function goForwardBy(n) {
+        const len = forwardStack.length;
+        n = Math.min(n, len);
+        if (n < 1) {
+            return;
+        }
+        const passed = forwardStack.slice(len - n + 1).reverse();
+        backStack = backStack.concat([view.url], passed);
+        view.url = forwardStack[len - n];
+        forwardStack = forwardStack.slice(0, len - n);
+        navigated();
+    }
+    // The last places of the lists, nearest first, as {url, steps} for the
+    // menus of Back and Forward.
+    function backPlaces() {
+        return recent(backStack);
+    }
+    function forwardPlaces() {
+        return recent(forwardStack);
+    }
+    function recent(stack) {
+        const out = [];
+        for (let i = stack.length - 1; i >= 0 && out.length < LocationLogic.historyRows; --i) {
+            out.push({
+                "url": stack[i],
+                "steps": stack.length - i
+            });
+        }
+        return out;
     }
     // Shows `target` without a history entry: the tab was never used (a first
     // launch with a folder to show).

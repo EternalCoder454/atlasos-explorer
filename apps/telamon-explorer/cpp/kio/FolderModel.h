@@ -26,6 +26,9 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(int folderCount READ folderCount NOTIFY countChanged)
     Q_PROPERTY(int fileCount READ fileCount NOTIFY countChanged)
+    // Items in the folder that are not shown because hidden files are off
+    // (0 while they are shown). Counted shortly after the listing changes.
+    Q_PROPERTY(int hiddenCount READ hiddenCount NOTIFY hiddenCountChanged)
     Q_PROPERTY(bool showHidden READ showHidden WRITE setShowHidden NOTIFY showHiddenChanged)
     Q_PROPERTY(SortColumn sortColumn READ sortColumn WRITE setSortColumn NOTIFY sortChanged)
     Q_PROPERTY(bool sortDescending READ sortDescending WRITE setSortDescending NOTIFY sortChanged)
@@ -67,6 +70,7 @@ public:
     int count() const { return int(m_rows.size()); }
     int folderCount() const { return m_folders; }
     int fileCount() const { return int(m_rows.size()) - m_folders; }
+    int hiddenCount() const { return m_hidden; }
     bool showHidden() const { return m_showHidden; }
     void setShowHidden(bool on);
     SortColumn sortColumn() const { return m_sortColumn; }
@@ -87,6 +91,8 @@ public:
     // The KFileItem of the shown entry with this URL (null when it isn't listed).
     KFileItem fileItemOf(const QUrl &url) const;
     Q_INVOKABLE QItemSelection rangeSelection(int from, int to) const;
+    // What the rows hold: {files, folders, bytes}; bytes count the files only.
+    Q_INVOKABLE QVariantMap selectionStats(const QVariantList &rows) const;
 
 Q_SIGNALS:
     void urlChanged();
@@ -94,6 +100,7 @@ Q_SIGNALS:
     void errorTextChanged();
     void noticeChanged();
     void countChanged();
+    void hiddenCountChanged();
     void showHiddenChanged();
     void sortChanged();
     void canWriteChanged();
@@ -145,6 +152,7 @@ private:
     void startSort();
     void applySort(SortResult r);
     void updateCounts();
+    void recountHidden();
 
     KCoreDirLister *m_lister;
     mutable QList<Entry> m_rows;
@@ -153,6 +161,8 @@ private:
     QString m_error;
     QString m_notice;
     int m_folders = 0;
+    int m_hidden = 0;
+    QTimer m_hiddenTimer;
     bool m_loading = false;
     bool m_canWrite = false;
     bool m_showHidden = false;
