@@ -116,6 +116,84 @@ impl Config {
     }
 }
 
+/// `indexrc` text with `Roots=` set to `roots` (absolute folders), every other
+/// line kept as it is. The `Roots=` line of `[Index]` is replaced, or added to
+/// that section, or the section is added. `Err` for a root that is not an
+/// absolute path, holds a `;` or a control character, or has `.` or `..` parts,
+/// and for more than the file reads.
+pub fn with_roots(text: &str, roots: &[String]) -> Result<String, String> {
+    if roots.len() > MAX_ITEMS {
+        return Err("too many folders".into());
+    }
+    let mut clean: Vec<String> = Vec::new();
+    for r in roots {
+        let r = r.trim();
+        let p = Path::new(r);
+        if !p.is_absolute()
+            || r.contains(';')
+            || r.chars().any(char::is_control)
+            || r.split('/').any(|seg| seg == "." || seg == "..")
+        {
+            return Err(format!("'{r}' is not a folder the index can hold"));
+        }
+        let norm = if r.len() > 1 {
+            r.trim_end_matches('/')
+        } else {
+            r
+        };
+        if !clean.iter().any(|c| c == norm) {
+            clean.push(norm.to_string());
+        }
+    }
+    let line = format!("Roots={}", clean.join(";"));
+    let mut out: Vec<String> = Vec::new();
+    let (mut in_index, mut replaced, mut index_end) = (false, false, None);
+    for l in text.lines() {
+        let t = l.trim();
+        if let Some(sec) = t.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
+            if in_index && index_end.is_none() {
+                index_end = Some(out.len());
+            }
+            in_index = sec == "Index";
+            out.push(l.to_string());
+            continue;
+        }
+        if in_index && t.split_once('=').is_some_and(|(k, _)| k.trim() == "Roots") {
+            if !replaced {
+                out.push(line.clone());
+                replaced = true;
+            }
+            continue;
+        }
+        out.push(l.to_string());
+    }
+    if !replaced {
+        if in_index && index_end.is_none() {
+            index_end = Some(out.len());
+        }
+        match index_end {
+            Some(at) => {
+                // After the last non-blank line of the section.
+                let mut at = at;
+                while at > 0 && out[at - 1].trim().is_empty() {
+                    at -= 1;
+                }
+                out.insert(at, line);
+            }
+            None => {
+                if out.last().is_some_and(|l| !l.trim().is_empty()) {
+                    out.push(String::new());
+                }
+                out.push("[Index]".to_string());
+                out.push(line);
+            }
+        }
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    Ok(s)
+}
+
 fn split_list(value: &str) -> impl Iterator<Item = &str> {
     value
         .split(';')
@@ -315,6 +393,62 @@ mod tests {
                 OsString::from("/home/t/tmp")
             ]
         );
+    }
+
+    #[test]
+    fn roots_are_written_into_the_file() {
+        let home = Path::new(HOME);
+        // No file: a section is made.
+        let t = with_roots("", &["/mnt/data".into(), "/home/t".into()]).unwrap();
+        assert_eq!(t, "[Index]\nRoots=/mnt/data;/home/t\n");
+        assert_eq!(
+            Config::parse(&t, home).roots,
+            vec![PathBuf::from("/mnt/data"), PathBuf::from(HOME)]
+        );
+        // The line is replaced, the rest is kept as it is.
+        let old =
+            "# mine\n[Other]\nRoots=/keep\n[Index]\nRoots=~\nExclude=target;*.tmp\n\n[Last]\nx=1\n";
+        let t = with_roots(old, &["/srv/a".into(), "/srv/a/".into(), "/srv/b".into()]).unwrap();
+        assert_eq!(
+            t,
+            "# mine\n[Other]\nRoots=/keep\n[Index]\nRoots=/srv/a;/srv/b\nExclude=target;*.tmp\n\n[Last]\nx=1\n"
+        );
+        let c = Config::parse(&t, home);
+        assert_eq!(
+            c.roots,
+            vec![PathBuf::from("/srv/a"), PathBuf::from("/srv/b")]
+        );
+        assert_eq!(
+            c.exclude,
+            vec![OsString::from("target"), OsString::from("*.tmp")]
+        );
+        // A section without the key gets it; one at the end too.
+        let t = with_roots("[Index]\nExclude=x\n\n[Other]\n", &["/a".into()]).unwrap();
+        assert_eq!(t, "[Index]\nExclude=x\nRoots=/a\n\n[Other]\n");
+        let t = with_roots("[Index]\nExclude=x", &["/a".into()]).unwrap();
+        assert_eq!(t, "[Index]\nExclude=x\nRoots=/a\n");
+        let t = with_roots("[Other]\nk=v\n", &["/a".into()]).unwrap();
+        assert_eq!(t, "[Other]\nk=v\n\n[Index]\nRoots=/a\n");
+        // No folders turns the index off.
+        let t = with_roots("[Index]\nRoots=~\n", &[]).unwrap();
+        assert!(Config::parse(&t, home).roots.is_empty());
+        // Twice the same key keeps one.
+        let t = with_roots("[Index]\nRoots=/a\nRoots=/b\n", &["/c".into()]).unwrap();
+        assert_eq!(t, "[Index]\nRoots=/c\n");
+        // Refusals.
+        for bad in [
+            "rel/path",
+            "~",
+            "/a;b",
+            "/a/../b",
+            "/a/./b",
+            "/a\nExclude=/",
+            "/a\u{7}",
+        ] {
+            assert!(with_roots("", &[bad.to_string()]).is_err(), "{bad:?}");
+        }
+        let many: Vec<String> = (0..300).map(|i| format!("/r{i}")).collect();
+        assert!(with_roots("", &many).is_err());
     }
 
     #[test]

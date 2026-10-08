@@ -2,6 +2,7 @@
 //! decided from data alone, so it is tested without a display and shared by
 //! the app's C++ adapters through one bridge. See docs/DESIGN.md, "Layout".
 
+pub mod actions;
 pub mod address;
 pub mod archive;
 pub mod attrs;
@@ -11,6 +12,7 @@ pub mod conflict;
 pub mod content;
 pub mod display;
 pub mod foldersize;
+pub mod gitstatus;
 pub mod group;
 pub mod history;
 pub mod home;
@@ -19,6 +21,7 @@ pub mod launch;
 pub mod legacy;
 pub mod location;
 pub mod menu;
+pub mod menuprefs;
 pub mod names;
 pub mod optext;
 pub mod pattern;

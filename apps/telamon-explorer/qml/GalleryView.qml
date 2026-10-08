@@ -157,10 +157,22 @@ Item {
             required property bool isCut
             required property string thumbnailSource
             required property var tagColours
+            required property string typeText
+            required property string sizeText
+            required property int gitBadge
             width: root.cellW
             height: strip.height
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
             readonly property bool current: root.fv.currentRow === index
+
+            // What a screen reader says: the name, then the type, size and Git state, and whether the item is selected.
+            Accessible.role: Accessible.ListItem
+            Accessible.name: cell.name
+            Accessible.description: root.fv.rowDescription(cell.typeText, cell.sizeText, cell.gitBadge)
+            Accessible.selectable: true
+            Accessible.selected: cell.selected
+            Accessible.focusable: true
+            Accessible.focused: cell.current && root.fv.activeFocus
 
             Rectangle {
                 anchors.fill: parent
@@ -198,6 +210,12 @@ Item {
                 y: iconBox.y + iconBox.height - height + Math.round(dot * 0.2)
                 colours: cell.tagColours
                 dot: 12
+            }
+            GitBadge {
+                x: iconBox.x - Math.round(dot * 0.3)
+                y: iconBox.y + iconBox.height - height + Math.round(dot * 0.2)
+                code: cell.gitBadge
+                dot: 14
             }
             Text {
                 x: Kirigami.Units.smallSpacing

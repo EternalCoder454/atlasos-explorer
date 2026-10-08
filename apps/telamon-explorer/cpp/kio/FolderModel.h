@@ -89,6 +89,11 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(int filterTotal READ filterTotal NOTIFY countChanged)
     // The results carry a matching line each (a search inside files).
     Q_PROPERTY(bool hasSnippets READ hasSnippets NOTIFY snippetsChanged)
+    // Git status badges on the items of a git work tree (Settings > View; off
+    // by default). The badge of a row is `gitBadge`: 0 none, 1 modified, 2 new,
+    // 3 ignored, 4 in conflict. Asked of `git` on a worker, only for a folder
+    // on this computer, never for search results (atlas_explorer_core::gitstatus).
+    Q_PROPERTY(bool gitBadges READ gitBadges WRITE setGitBadges NOTIFY gitBadgesChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
@@ -131,6 +136,8 @@ public:
         TakenRole,
         // The matching line of a result of a search inside files.
         SnippetRole,
+        // The Git status badge (0 none).
+        GitBadgeRole,
     };
 
     // A run of rows in one group (the groups are together): the group's
@@ -172,6 +179,8 @@ public:
     // The items' tags, attributes or permissions changed (a queue operation,
     // an undo, or another program): every folder shown reads them again.
     static void invalidateAttributes(const QList<QUrl> &urls);
+    bool gitBadges() const { return m_gitOn; }
+    void setGitBadges(bool on);
     bool wantMeta() const { return m_wantMeta; }
     void setWantMeta(bool on);
 
@@ -316,6 +325,7 @@ Q_SIGNALS:
     void wantMetaChanged();
     void filterChanged();
     void snippetsChanged();
+    void gitBadgesChanged();
 
 private:
     struct Entry {
@@ -426,6 +436,18 @@ private:
     static QSet<QString> s_cut;
     static QList<FolderModel *> s_models;
     bool isCut(const KFileItem &item) const;
+
+    // Git status badges: asked a moment after the folder or its items change,
+    // answered by a worker; an answer for a folder that has been left is dropped.
+    void scheduleGit();
+    void runGit();
+    void applyGit(quint64 serial, uint32_t status, const QByteArray &text);
+    void forgetGit();
+    bool m_gitOn = false;
+    QHash<QString, int> m_gitMap;
+    bool m_gitAll = false;
+    quint64 m_gitSerial = 0;
+    QTimer m_gitTimer;
 
     KCoreDirLister *m_lister;
     mutable QList<Entry> m_rows;

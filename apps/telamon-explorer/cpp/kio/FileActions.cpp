@@ -1,7 +1,9 @@
 #include "FileActions.h"
 
+#include "ActionsLogic.h"
 #include "ArchiveClient.h"
 #include "ArchiveGuard.h"
+#include "MenuPrefs.h"
 #include "OpsBridge.h"
 #include "PlacesLogic.h"
 #include "PropsBridge.h"
@@ -851,10 +853,13 @@ FileActions::PictureSet FileActions::pictureSet(const QList<QUrl> &urls, int act
 QVariantMap FileActions::pictureMenu(const QList<QUrl> &urls) const
 {
     static const char *const keys[] = {"rotateLeft", "rotateRight", "png", "jpeg", "webp", "combine"};
+    // The names Settings > Context Menu and Actions hides them by.
+    static const char *const hideKeys[] = {"rotateLeft", "rotateRight", "convertPng", "convertJpeg", "convertWebp", "combinePdf"};
+    const QList<QByteArray> hidden = MenuPrefs::hiddenText().split('\n');
     QVariantMap out;
     bool any = false;
     for (int a = 0; a <= ImageWork::CombinePdf; ++a) {
-        const bool ok = urls.size() <= int(telamon_image_limit(0)) && pictureSet(urls, a).ok;
+        const bool ok = !hidden.contains(hideKeys[a]) && urls.size() <= int(telamon_image_limit(0)) && pictureSet(urls, a).ok;
         out.insert(QLatin1String(keys[a]), ok);
         any = any || ok;
     }
@@ -1020,6 +1025,18 @@ void FileActions::openTerminal(const QUrl &folder)
 // is open. The window gets plain data; the entries of KFileItemActions run
 // through `runMenuAction`, by the id handed out here.
 
+// The hidden keys as a map, for the menu's QML to ask by name ({key: true}).
+static QVariantMap hiddenMap(const QList<QByteArray> &keys)
+{
+    QVariantMap m;
+    for (const QByteArray &k : keys) {
+        if (!k.isEmpty()) {
+            m.insert(QString::fromUtf8(k), true);
+        }
+    }
+    return m;
+}
+
 KFileItemList FileActions::itemsOf(const QList<QUrl> &urls) const
 {
     KFileItemList items;
@@ -1163,6 +1180,9 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
         unhideable = unhideable && hidden && !dot;
     }
 
+    // What the person hid (Settings > Context Menu and Actions), as the core takes it.
+    const QByteArray hiddenText = MenuPrefs::hiddenText();
+    const QList<QByteArray> hiddenList = hiddenText.split('\n');
     // "Open With" and the service menus, made now. The menu they are made in
     // is never shown; it only holds the actions until the next menu is made.
     m_scratch = new QMenu;
@@ -1177,7 +1197,8 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
     // Archive replaces Ark's entries, which would show twice; the Activities
     // plugin fills its submenu later ("Loading…"), and a menu must not change
     // once it is shown. Telamon has no Activities.
-    actions->addActionsTo(servicesMenu, KFileItemActions::MenuActionSource::All, {}, {QStringLiteral("compressfileitemaction"), QStringLiteral("extractfileitemaction"), QStringLiteral("kactivitymanagerd_fileitem_linking_plugin")});
+    // The entries the person hid in Settings are left out as well (service-menu actions by their name, plugins by their id).
+    actions->addActionsTo(servicesMenu, KFileItemActions::MenuActionSource::All, {}, MenuPrefs::excludedServices());
     // KFileItemActions gives the preferred application and, in a submenu of
     // its own, the others and "Other Application…": one list for our submenu.
     QVariantList openWith;
@@ -1192,7 +1213,18 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
         }
         openWith.append(inner);
     }
-    const QVariantList services = entriesOf(servicesMenu);
+    QVariantList services = entriesOf(servicesMenu);
+    // The actions the person added come first, then the service menus.
+    QVariantList custom;
+    if (!hiddenList.contains("moreActions")) {
+        custom = ActionsLogic::menuEntries(items);
+    }
+    if (!custom.isEmpty()) {
+        if (!services.isEmpty()) {
+            custom.append(QVariantMap{{QStringLiteral("separator"), true}});
+        }
+        services = custom + services;
+    }
 
     const QUrl terminal = terminalFolder(items);
     const bool single = items.size() == 1;
@@ -1230,7 +1262,7 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
     set(!terminal.isEmpty(), MenuFlag::Terminal);
 
     QVariantMap state;
-    for (const auto &e : rustMenuState(true, size_t(items.size()), size_t(folders), flags)) {
+    for (const auto &e : rustMenuState(true, size_t(items.size()), size_t(folders), flags, hiddenText)) {
         state.insert(e.first, e.second);
     }
     return {{QStringLiteral("state"), state},
@@ -1242,7 +1274,8 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
             {QStringLiteral("openWith"), openWith},
             {QStringLiteral("services"), services},
             {QStringLiteral("tags"), tagMenu(itemUrls)},
-            {QStringLiteral("pictures"), pictureMenu(itemUrls)}};
+            {QStringLiteral("pictures"), pictureMenu(itemUrls)},
+            {QStringLiteral("hidden"), hiddenMap(hiddenList)}};
 }
 
 QVariantMap FileActions::backgroundMenu()
@@ -1268,7 +1301,7 @@ QVariantMap FileActions::backgroundMenu()
     set(m_ops->canUndo(), MenuFlag::CanUndo);
     set(m_ops->canRedo(), MenuFlag::CanRedo);
     QVariantMap state;
-    for (const auto &e : rustMenuState(false, 0, 0, flags)) {
+    for (const auto &e : rustMenuState(false, 0, 0, flags, MenuPrefs::hiddenText())) {
         state.insert(e.first, e.second);
     }
     // The templates read so far (a worker keeps them up to date).
@@ -1280,6 +1313,7 @@ QVariantMap FileActions::backgroundMenu()
         templates.append(QVariantMap{{QStringLiteral("label"), rustDisplayName(t.label.toUtf8())}, {QStringLiteral("file"), t.file}});
     }
     return {{QStringLiteral("state"), state},
+            {QStringLiteral("hidden"), hiddenMap(MenuPrefs::hiddenText().split('\n'))},
             {QStringLiteral("terminalFolder"), terminal},
             {QStringLiteral("undoText"), named(tr("Undo"), m_ops->undoText())},
             {QStringLiteral("redoText"), named(tr("Redo"), m_ops->redoText())},

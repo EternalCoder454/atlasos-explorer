@@ -281,6 +281,7 @@ Item {
             required property string durationText
             required property string takenText
             required property bool groupCollapsed
+            required property int gitBadge
             width: Math.max(list.width, root.totalWidth)
             // The rows of a collapsed group take no room.
             height: groupCollapsed ? 0 : root.rowHeight
@@ -289,6 +290,15 @@ Item {
             readonly property bool current: root.fv.currentRow === index
             // The name is being edited where it is shown.
             readonly property bool editing: root.fv.renaming && root.fv.renameUrl.toString() === url.toString()
+
+            // What a screen reader says: the name, then the type, size and Git state, and whether the row is selected.
+            Accessible.role: Accessible.ListItem
+            Accessible.name: row.name
+            Accessible.description: root.fv.rowDescription(row.typeText, row.sizeText, row.gitBadge)
+            Accessible.selectable: true
+            Accessible.selected: row.selected
+            Accessible.focusable: true
+            Accessible.focused: row.current && root.fv.activeFocus
 
             Rectangle {
                 anchors.fill: parent
@@ -311,10 +321,18 @@ Item {
                         height: width
                         source: row.iconName
                     }
-                    TagDots {
-                        id: dots
+                    GitBadge {
+                        id: git
                         anchors.right: parent.right
                         anchors.rightMargin: Kirigami.Units.largeSpacing
+                        anchors.verticalCenter: parent.verticalCenter
+                        code: row.gitBadge
+                        dot: Math.round(root.iconSide * 0.6)
+                    }
+                    TagDots {
+                        id: dots
+                        anchors.right: git.visible ? git.left : parent.right
+                        anchors.rightMargin: git.visible ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
                         anchors.verticalCenter: parent.verticalCenter
                         colours: row.tagColours
                         dot: Math.round(root.iconSide * 0.5)
@@ -323,7 +341,7 @@ Item {
                         anchors.left: icon.right
                         anchors.leftMargin: Kirigami.Units.largeSpacing
                         anchors.right: parent.right
-                        anchors.rightMargin: Kirigami.Units.largeSpacing + (dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0)
+                        anchors.rightMargin: Kirigami.Units.largeSpacing + (dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0) + (git.visible ? git.width + Kirigami.Units.smallSpacing : 0)
                         height: parent.height
                         visible: !row.editing
                         verticalAlignment: Text.AlignVCenter

@@ -50,6 +50,7 @@ Item {
             sortColumn: col.fv.folder.sortColumn
             sortDescending: col.fv.folder.sortDescending
             foldersFirst: col.fv.folder.foldersFirst
+            gitBadges: col.fv.folder.gitBadges
         }
     }
     Connections {
@@ -103,6 +104,9 @@ Item {
             required property bool isHidden
             required property bool isCut
             required property var tagColours
+            required property string typeText
+            required property string sizeText
+            required property int gitBadge
             width: list.width
             height: col.rowHeight
             readonly property bool selected: col.primary && col.fv.isSelected(index, col.fv.selRevision)
@@ -110,6 +114,15 @@ Item {
             readonly property bool current: col.primary && col.fv.currentRow === index
             // The name is being edited where it is shown (the tab's own column only).
             readonly property bool editing: col.primary && col.fv.renaming && col.fv.renameUrl.toString() === url.toString()
+
+            // What a screen reader says: the name, then the type, size and Git state, and whether the row is selected.
+            Accessible.role: Accessible.ListItem
+            Accessible.name: row.name
+            Accessible.description: col.fv.rowDescription(row.typeText, row.sizeText, row.gitBadge)
+            Accessible.selectable: true
+            Accessible.selected: row.selected
+            Accessible.focusable: true
+            Accessible.focused: row.current && col.fv.activeFocus
 
             Rectangle {
                 anchors.fill: parent
@@ -142,7 +155,7 @@ Item {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - icon.width - chevron.width - dots.width - parent.spacing * 3
+                    width: parent.width - icon.width - chevron.width - dots.width - (git.visible ? git.width + parent.spacing : 0) - parent.spacing * 3
                     visible: !row.editing
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
@@ -164,6 +177,12 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     colours: row.tagColours
                     dot: Math.round(col.iconSide * 0.5)
+                }
+                GitBadge {
+                    id: git
+                    anchors.verticalCenter: parent.verticalCenter
+                    code: row.gitBadge
+                    dot: Math.round(col.iconSide * 0.6)
                 }
                 Symbol {
                     id: chevron

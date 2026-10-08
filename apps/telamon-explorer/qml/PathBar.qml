@@ -439,6 +439,8 @@ FocusScope {
 
     ContextMenu {
         id: subMenu
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         Instantiator {
             model: priv.menuRows
             delegate: ContextMenuItem {
@@ -457,6 +459,8 @@ FocusScope {
     // The segments that don't fit, nearest to the folder shown last.
     ContextMenu {
         id: hiddenMenu
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         Instantiator {
             model: priv.firstShown
             delegate: ContextMenuItem {

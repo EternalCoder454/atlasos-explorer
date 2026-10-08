@@ -21,6 +21,9 @@ Item {
     required property bool isCut
     required property string thumbnailSource
     required property var tagColours
+    required property string typeText
+    required property string sizeText
+    required property int gitBadge
 
     width: cell.view.cellW
     height: cell.view.cellH
@@ -29,6 +32,15 @@ Item {
     readonly property bool current: fv.currentRow === row
     // The name is being edited where it is shown.
     readonly property bool editing: fv.renaming && fv.renameUrl.toString() === url.toString()
+
+    // What a screen reader says: the name, then the type, size and Git state, and whether the item is selected.
+    Accessible.role: Accessible.ListItem
+    Accessible.name: cell.name
+    Accessible.description: cell.fv.rowDescription(cell.typeText, cell.sizeText, cell.gitBadge)
+    Accessible.selectable: true
+    Accessible.selected: cell.selected
+    Accessible.focusable: true
+    Accessible.focused: cell.current && cell.fv.activeFocus
 
     Rectangle {
         anchors.fill: parent
@@ -72,10 +84,18 @@ Item {
         colours: cell.tagColours
         dot: cell.view.compact ? Kirigami.Units.gridUnit * 0.7 : Math.max(9, Math.round(cell.view.icon * 0.2))
     }
+    // The Git badge: at the top of the picture's corner, or at the end of a compact row.
+    GitBadge {
+        id: git
+        x: cell.view.compact ? cell.width - width - Kirigami.Units.largeSpacing - (dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0) : iconBox.x - Math.round(dot * 0.3)
+        y: cell.view.compact ? (cell.height - height) / 2 : iconBox.y + iconBox.height - height + Math.round(dot * 0.2)
+        code: cell.gitBadge
+        dot: cell.view.compact ? Kirigami.Units.gridUnit * 0.8 : Math.max(11, Math.round(cell.view.icon * 0.24))
+    }
     Text {
         x: cell.view.compact ? iconBox.x + iconBox.width + Kirigami.Units.largeSpacing : Kirigami.Units.smallSpacing
         y: cell.view.compact ? 0 : iconBox.y + iconBox.height + Kirigami.Units.smallSpacing
-        width: cell.width - x - Kirigami.Units.smallSpacing - (cell.view.compact && dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0)
+        width: cell.width - x - Kirigami.Units.smallSpacing - (cell.view.compact && dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0) - (cell.view.compact && git.visible ? git.width + Kirigami.Units.smallSpacing : 0)
         height: cell.view.compact ? cell.height : cell.height - y
         verticalAlignment: cell.view.compact ? Text.AlignVCenter : Text.AlignTop
         horizontalAlignment: cell.view.compact ? Text.AlignLeft : Text.AlignHCenter
