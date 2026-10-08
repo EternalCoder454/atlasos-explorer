@@ -827,9 +827,9 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
     Shortcut { sequence: "Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.trash(root.selected) }
     Shortcut { sequence: "Shift+Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.deleteForGood(root.selected) }
-    Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching; onActivated: fileActions.newFolder() }
+    Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching && !quickLook.opened; onActivated: fileActions.newFolder() }
     Shortcut { sequence: "Ctrl+H"; enabled: !root.typing; onActivated: root.toggleHidden() }
-    Shortcut { sequence: "Shift+F4"; onActivated: fileActions.openTerminal() }
+    Shortcut { sequence: "Shift+F4"; enabled: !quickLook.opened; onActivated: fileActions.openTerminal() }
     Shortcut { sequences: ["Ctrl+L", "F4", "F6", "Alt+D"]; onActivated: pathBar.startEdit() }
     Shortcut { sequences: ["Ctrl+F", "Ctrl+E"]; onActivated: root.focusSearch() }
     Shortcut { sequence: "Alt+P"; enabled: !quickLook.opened; onActivated: PreviewLogic.paneShown = !PreviewLogic.paneShown }

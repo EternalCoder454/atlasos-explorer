@@ -24,6 +24,8 @@ FocusScope {
     // The files stepped through when the selection holds more than one (their
     // URLs as text, in the order of the view); empty: the whole folder.
     property var ring: []
+    // Rows went away since the ring was last checked.
+    property bool pruneRing: false
 
     readonly property int position: ring.length > 0 ? ring.indexOf(current.toString()) + 1 : row + 1
     readonly property int total: ring.length > 0 ? ring.length : (fv ? fv.folder.count : 0)
@@ -90,9 +92,10 @@ FocusScope {
             return;
         }
         const f = fv.folder;
-        if (ring.length > 0) {
-            ring = ring.filter(u => f.rowOfUrl(u) >= 0);
+        if (ring.length > 0 && pruneRing) {
+            ring = f.filterExisting(ring.map(u => Qt.url(u))).map(u => u.toString());
         }
+        pruneRing = false;
         if (row < 0 || row >= f.count || f.urlAt(row).toString() !== current.toString()) {
             row = f.rowOfUrl(current);
         }
@@ -151,6 +154,7 @@ FocusScope {
     Connections {
         target: ql.fv ? ql.fv.folder : null
         function onModelReset() {
+            ql.pruneRing = true;
             ql.sync();
         }
         function onLayoutChanged() {
@@ -160,6 +164,7 @@ FocusScope {
             ql.sync();
         }
         function onRowsRemoved() {
+            ql.pruneRing = true;
             ql.sync();
         }
         function onDataChanged() {
@@ -211,13 +216,12 @@ FocusScope {
         anchors.fill: parent
         // A scrim is black in both themes, as TelamonDialog's is. // telamon-lint: allow-raw
         color: Qt.rgba(0, 0, 0, 0.5)
-        TapHandler {
-            onTapped: ql.close()
-        }
-        // The wheel and clicks do not reach the view behind.
+        // Every click and the wheel stop here: nothing under the dimmed window
+        // reacts while Quick Look is open. A click closes it.
         MouseArea {
             anchors.fill: parent
-            acceptedButtons: Qt.NoButton
+            acceptedButtons: Qt.AllButtons
+            onClicked: ql.close()
             onWheel: wheel => wheel.accepted = true
         }
     }
@@ -232,8 +236,10 @@ FocusScope {
         border.width: 1
         border.color: TelamonStyle.separator
         // A click on the card is not a click on the dimmed window.
-        TapHandler {
-            gesturePolicy: TapHandler.ReleaseWithinBounds
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            z: -1
         }
 
         ColumnLayout {

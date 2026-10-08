@@ -724,12 +724,30 @@ QVariantMap FolderModel::detailsAt(int row) const
             {QStringLiteral("localPath"), local},
             {QStringLiteral("isDir"), e.isDir},
             {QStringLiteral("isLink"), e.item.isLink()},
+            {QStringLiteral("size"), qlonglong(e.size)},
+            {QStringLiteral("mtime"), qlonglong(e.mtime)},
             {QStringLiteral("typeText"), data(idx, TypeTextRole)},
             {QStringLiteral("iconName"), data(idx, IconNameRole)},
             {QStringLiteral("sizeText"), data(idx, SizeTextRole)},
             {QStringLiteral("modifiedText"), when(e.mtime)},
             {QStringLiteral("createdText"), when(e.ctime)},
             {QStringLiteral("pathText"), data(idx, PathTextRole)}};
+}
+
+QVariantList FolderModel::filterExisting(const QVariantList &urls) const
+{
+    QSet<QUrl> shown;
+    shown.reserve(m_rows.size());
+    for (const Entry &e : std::as_const(m_rows)) {
+        shown.insert(e.item.url());
+    }
+    QVariantList out;
+    for (const QVariant &v : urls) {
+        if (shown.contains(v.toUrl())) {
+            out.append(v);
+        }
+    }
+    return out;
 }
 
 QVariantMap FolderModel::selectionStats(const QVariantList &rows) const

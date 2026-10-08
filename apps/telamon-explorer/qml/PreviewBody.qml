@@ -26,7 +26,7 @@ Item {
     readonly property string mediaDimensions: media.item ? media.item.dimensionsText : ""
 
     // The file that is shown: another size or date is another file.
-    readonly property string key: info.url === undefined ? "" : info.url.toString() + "|" + info.sizeText + "|" + info.modifiedText
+    readonly property string key: info.url === undefined ? "" : info.url.toString() + "|" + info.size + "|" + info.mtime
     onKeyChanged: reload()
     Component.onCompleted: reload()
 

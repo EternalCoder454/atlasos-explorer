@@ -125,6 +125,8 @@ public:
     // {name, url, localPath, isDir, isLink, typeText, iconName, sizeText,
     // modifiedText, createdText, pathText}. Empty for a row that isn't there.
     Q_INVOKABLE QVariantMap detailsAt(int row) const;
+    // The URLs of `urls` that are rows now, in the order given (one pass over the rows).
+    Q_INVOKABLE QVariantList filterExisting(const QVariantList &urls) const;
     // What the rows hold: {files, folders, bytes}; bytes count the files only.
     Q_INVOKABLE QVariantMap selectionStats(const QVariantList &rows) const;
 
