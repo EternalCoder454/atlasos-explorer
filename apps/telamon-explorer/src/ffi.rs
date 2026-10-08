@@ -4,7 +4,7 @@
 
 use atlas_explorer_core::display_name;
 use atlas_explorer_core::sort::{Column, SortRow, name_key, sort_permutation_grouped};
-use atlas_explorer_core::{address, location, menu, names, places, tabs};
+use atlas_explorer_core::{address, archive, location, menu, names, places, tabs};
 
 /// One row for `telamon_sort_permutation`; the C++ twin is in FolderModel.cpp.
 #[repr(C)]
@@ -588,6 +588,145 @@ pub unsafe extern "C" fn telamon_menu_text(
         5 => menu::ARCHIVE_DESKTOP_IDS.join("\n"),
         _ => String::new(),
     };
+    // SAFETY: `out` as promised above.
+    unsafe { put(text.as_bytes(), out, cap) }
+}
+
+/// Whether `scheme` is one of the archive worker's (`zip`, `tar`, `sevenz`, `ar`).
+///
+/// # Safety
+/// `scheme` points to `len` readable bytes (or is null with length 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_archive_is_scheme(scheme: *const u8, len: usize) -> bool {
+    // SAFETY: forwarded from this function's contract.
+    let s = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
+    archive::is_scheme(&s)
+}
+
+/// Looks at what an archive lists before KIO copies anything out of it.
+/// `records` holds, for each entry, `f`, its path and a NUL, or `l`, its path,
+/// a NUL, the link's target and a NUL. Returns 0 when every entry can be
+/// taken out below a folder, 1 when not, with the refusal in plain words in
+/// `out` (its length in `*text_len`).
+///
+/// # Safety
+/// Each pointer pair covers its length (or is null with length 0); `out`
+/// points to `cap` writable bytes (or is null); `text_len` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_archive_check(
+    records: *const u8,
+    records_len: usize,
+    archive_installed: bool,
+    out: *mut u8,
+    cap: usize,
+    text_len: *mut usize,
+) -> i32 {
+    if text_len.is_null() {
+        return 1;
+    }
+    // SAFETY: forwarded from this function's contract.
+    let buf = unsafe { bytes(records, records_len) };
+    let report = archive::check_entries(archive::parse_records(buf));
+    let (code, text) = if report.ok() {
+        (0, String::new())
+    } else {
+        (1, archive::refusal_text(&report, archive_installed))
+    };
+    // SAFETY: `out` and `text_len` as promised above.
+    unsafe { *text_len = put(text.as_bytes(), out, cap) };
+    code
+}
+
+/// Where the central directory of a zip is, from the last bytes of the file
+/// (`tail`) and its length. On success writes offset, size and entry count to
+/// `out` (three u64s) and returns true; false when it isn't a zip (or is one
+/// whose directory can't be found this way).
+///
+/// # Safety
+/// `tail` points to `len` readable bytes (or is null with length 0); `out`
+/// points to three writable u64s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_zip_directory(
+    tail: *const u8,
+    len: usize,
+    file_len: u64,
+    out: *mut u64,
+) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    // SAFETY: forwarded from this function's contract.
+    let tail = unsafe { bytes(tail, len) };
+    match archive::zip_directory(tail, file_len) {
+        Some(d) => {
+            // SAFETY: `out` has three writable u64s.
+            unsafe {
+                *out = d.offset;
+                *out.add(1) = d.size;
+                *out.add(2) = d.entries;
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Whether any entry of a zip's central directory is marked encrypted.
+///
+/// # Safety
+/// `directory` points to `len` readable bytes (or is null with length 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_zip_encrypted(directory: *const u8, len: usize) -> bool {
+    // SAFETY: forwarded from this function's contract.
+    archive::zip_directory_encrypted(unsafe { bytes(directory, len) })
+}
+
+/// Where a location in an archive is: five lines, the archive file's URL,
+/// the URL of the archive's top as browsed, the path inside (empty at the
+/// top), the archive file's name and the name of the folder to extract it to.
+/// The length is 0 when `url` isn't a location in an archive.
+///
+/// # Safety
+/// As for `telamon_display_name`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_archive_locate(
+    url: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: forwarded from this function's contract.
+    let url = String::from_utf8_lossy(unsafe { bytes(url, len) }).into_owned();
+    let text = archive::locate(&url)
+        .map(|l| {
+            format!(
+                "{}\n{}\n{}\n{}\n{}",
+                l.file_url,
+                l.root_url,
+                l.inner,
+                l.name.replace('\n', " "),
+                l.folder_name.replace('\n', " ")
+            )
+        })
+        .unwrap_or_default();
+    // SAFETY: `out` as promised above.
+    unsafe { put(text.as_bytes(), out, cap) }
+}
+
+/// Where Up goes from a location in an archive (empty: `url` isn't one).
+///
+/// # Safety
+/// As for `telamon_display_name`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_archive_parent(
+    url: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: forwarded from this function's contract.
+    let url = String::from_utf8_lossy(unsafe { bytes(url, len) }).into_owned();
+    let text = archive::parent(&url).unwrap_or_default();
     // SAFETY: `out` as promised above.
     unsafe { put(text.as_bytes(), out, cap) }
 }
@@ -1306,5 +1445,99 @@ mod tests {
             telamon_menu_free_name(b"Other".as_ptr(), 5, None, std::ptr::null_mut(), o, c)
         });
         assert_eq!(t, "Other");
+    }
+
+    #[test]
+    fn archives_report_through_the_abi() {
+        // The record format of `telamon_archive_check`: `f` path NUL, or `l` path NUL target NUL.
+        let check = |records: &[u8], installed: bool| {
+            let mut buf = [0u8; 512];
+            let mut n = 0usize;
+            let rc = unsafe {
+                telamon_archive_check(
+                    records.as_ptr(),
+                    records.len(),
+                    installed,
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                    &mut n,
+                )
+            };
+            (
+                rc,
+                String::from_utf8_lossy(&buf[..n.min(buf.len())]).into_owned(),
+            )
+        };
+        assert_eq!(
+            check(b"fa.txt\0fd/b.txt\0lalias\0a.txt\0", true),
+            (0, String::new())
+        );
+        let (rc, text) = check(b"fok\0f../../evil.txt\0", false);
+        assert_eq!(rc, 1);
+        assert!(
+            text.contains("evil.txt") && text.contains("won't extract"),
+            "{text}"
+        );
+        assert!(!text.contains("Telamon Archive"), "{text}");
+        let (rc, text) = check(b"fok\0llink\0/etc\0", true);
+        assert_eq!(rc, 1);
+        assert!(
+            text.contains("is a link") && text.contains("Telamon Archive"),
+            "{text}"
+        );
+        // A record that is cut off is refused, not skipped.
+        assert_eq!(check(b"fno-end", false).0, 1);
+        assert_eq!(
+            unsafe {
+                telamon_archive_check(
+                    std::ptr::null(),
+                    0,
+                    false,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                )
+            },
+            1
+        );
+
+        let locate = |url: &str| {
+            let mut buf = [0u8; 512];
+            let n = unsafe {
+                telamon_archive_locate(url.as_ptr(), url.len(), buf.as_mut_ptr(), buf.len())
+            };
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        };
+        assert_eq!(
+            locate("zip:/home/u/a%20b.zip/sub"),
+            "file:///home/u/a%20b.zip\nzip:/home/u/a%20b.zip\n/sub\na b.zip\na b"
+        );
+        assert_eq!(locate("file:///home/u"), "");
+        let parent = |url: &str| {
+            let mut buf = [0u8; 512];
+            let n = unsafe {
+                telamon_archive_parent(url.as_ptr(), url.len(), buf.as_mut_ptr(), buf.len())
+            };
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        };
+        assert_eq!(parent("zip:/home/u/a.zip"), "file:///home/u");
+        assert_eq!(parent("file:///home/u"), "");
+        for (scheme, yes) in [
+            ("zip", true),
+            ("sevenz", true),
+            ("file", false),
+            ("", false),
+        ] {
+            assert_eq!(
+                unsafe { telamon_archive_is_scheme(scheme.as_ptr(), scheme.len()) },
+                yes,
+                "{scheme}"
+            );
+        }
+        // Not a zip: no directory, and nothing encrypted.
+        let mut out = [0u64; 3];
+        assert!(!unsafe { telamon_zip_directory(b"hello".as_ptr(), 5, 5, out.as_mut_ptr()) });
+        assert!(!unsafe { telamon_zip_encrypted(b"hello".as_ptr(), 5) });
+        assert!(!unsafe { telamon_zip_directory(std::ptr::null(), 0, 0, out.as_mut_ptr()) });
     }
 }

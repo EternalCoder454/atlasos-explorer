@@ -205,6 +205,38 @@ pub fn check_local(
     Ok(())
 }
 
+/// Room for `needed` bytes taken out of an archive into `dest`, a folder on
+/// this computer that may not exist yet (the nearest folder that does is
+/// asked). `what` says what is taken out ("\"a.zip\""). Err is the refusal in
+/// plain words; an unknown answer from the disk is Ok (the job will say).
+pub fn check_room_for(
+    dest: &Path,
+    needed: u64,
+    what: &str,
+    free_override: Option<u64>,
+) -> Result<(), String> {
+    let mut probe = dest;
+    while !probe.exists() {
+        match probe.parent() {
+            Some(p) if !p.as_os_str().is_empty() => probe = p,
+            _ => return Ok(()),
+        }
+    }
+    let Some(free) = free_override.or_else(|| free_space(probe)) else {
+        return Ok(());
+    };
+    if needed > free {
+        return Err(format!(
+            "There isn't enough space in \"{}\". Taking {} out of the archive needs {}, and only {} is free.",
+            short_name(&name_of(dest)),
+            what,
+            format_size(needed),
+            format_size(free)
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +259,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn room_for_an_extraction_asks_the_nearest_folder_that_exists() {
+        let d = Dir::new("room");
+        let later = d.0.join("not").join("yet");
+        assert!(check_room_for(&later, 10, "\"a.zip\"", Some(100)).is_ok());
+        let e = check_room_for(&later, 1000, "\"a.zip\"", Some(100)).unwrap_err();
+        assert!(e.contains("\"yet\""), "{e}");
+        assert!(e.contains("\"a.zip\""), "{e}");
+        assert!(e.contains("needs") && e.contains("only"), "{e}");
+        assert!(e.contains("out of the archive"), "{e}");
+        // The real disk has some room for nothing.
+        assert!(check_room_for(&later, 0, "x", None).is_ok());
+        // Nothing to ask: fine.
+        assert!(check_room_for(Path::new(""), u64::MAX, "x", None).is_ok());
     }
 
     #[test]

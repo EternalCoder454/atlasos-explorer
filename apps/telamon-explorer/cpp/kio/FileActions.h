@@ -89,6 +89,16 @@ public:
     Q_INVOKABLE void setHidden(const QList<QUrl> &urls, bool hide);
     // Compress in Telamon Archive's dialog.
     Q_INVOKABLE void compress(const QList<QUrl> &urls);
+    // Telamon Archive's jobs, shown in the operation queue: extract the
+    // archives next to where they are, or make a ZIP of the files.
+    Q_INVOKABLE void extractHere(const QList<QUrl> &urls);
+    Q_INVOKABLE void compressToZip(const QList<QUrl> &urls);
+    // Extract in Telamon Archive's dialog (it asks where).
+    Q_INVOKABLE void extractTo(const QList<QUrl> &urls);
+    // The Extract button of an archive opened as a folder: everything in it,
+    // by Telamon Archive when it is installed, else by Files into a new
+    // folder named after the archive.
+    Q_INVOKABLE void extractViewed();
     Q_INVOKABLE void showProperties(const QList<QUrl> &urls);
     // A terminal in `folder` (the folder shown when empty).
     Q_INVOKABLE void openTerminal(const QUrl &folder = {});
@@ -127,6 +137,8 @@ Q_SIGNALS:
     void namePromptRequested(const QVariantMap &request);
     // A job started here has ended (done, failed or cancelled).
     void jobFinished();
+    // Files an extraction or compression made: the window selects them.
+    void resultsReady(const QList<QUrl> &urls);
     void cutChanged();
     // Delete for good was asked: the window asks the user, then confirmDelete.
     void deleteRequested(const QList<QUrl> &urls, const QString &text);
@@ -147,6 +159,17 @@ private:
     void dropScratch();
     QUrl terminalFolder(const KFileItemList &items) const;
     bool archiveInstalled() const;
+    // The MIME types Telamon Archive's desktop file says it opens.
+    QStringList archiveMimeTypes() const;
+    // Where a double click on an archive file goes: its contents as a folder
+    // (`zip:/...`); invalid when it isn't one KIO's archive worker opens.
+    QUrl browseUrl(const QUrl &url) const;
+    // Calls Archive for a job that is shown in the queue.
+    void runArchive(const QString &method, const QList<QUrl> &urls, const QVariantList &extra, const QString &title, const QString &running);
+    // The options every call to Archive carries; the activation token comes
+    // asynchronously on Wayland.
+    void withArchiveOptions(bool showProgress, std::function<void(QVariantMap)> go);
+    QString labelOf(const QList<QUrl> &urls) const;
     void loadTemplates();
     QString suggestName(const QUrl &folder, const QString &wanted) const;
     void prompt(const QVariantMap &request);

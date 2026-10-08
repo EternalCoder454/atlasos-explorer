@@ -3,6 +3,7 @@
 //! the app's C++ adapters through one bridge. See docs/DESIGN.md, "Layout".
 
 pub mod address;
+pub mod archive;
 pub mod conflict;
 pub mod display;
 pub mod group;

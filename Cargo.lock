@@ -955,6 +955,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "telamon-archive-standin"
+version = "0.2.0"
+dependencies = [
+ "libc",
+ "zbus",
+]
+
+[[package]]
 name = "telamon-explorer"
 version = "0.2.0"
 dependencies = [

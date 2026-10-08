@@ -46,7 +46,17 @@ QUrl StandardPlaces::place(const QString &key) const
 
 QUrl StandardPlaces::parentUrl(const QUrl &url) const
 {
-    return url.isValid() ? KIO::upUrl(url) : url;
+    if (!url.isValid()) {
+        return url;
+    }
+    // Up from the top of an archive is the folder the archive file is in.
+    if (rustArchiveScheme(url.scheme())) {
+        const QUrl up = rustArchiveParent(url);
+        if (up.isValid()) {
+            return up;
+        }
+    }
+    return KIO::upUrl(url);
 }
 
 bool StandardPlaces::isLocalFile(const QUrl &url) const
@@ -70,7 +80,8 @@ QString StandardPlaces::displayLocation(const QUrl &url) const
         return tr("Recent");
     }
     QString out;
-    if (!url.isLocalFile()) {
+    // An archive's contents are shown by where the archive is: /home/me/a.zip/folder.
+    if (!url.isLocalFile() && !rustArchiveScheme(url.scheme())) {
         out = url.scheme() + QStringLiteral("://") + rustDisplayName(url.host().toUtf8());
     }
     const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);

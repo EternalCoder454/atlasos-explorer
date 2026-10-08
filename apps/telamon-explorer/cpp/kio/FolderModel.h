@@ -35,6 +35,9 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(bool sortDescending READ sortDescending WRITE setSortDescending NOTIFY sortChanged)
     Q_PROPERTY(bool foldersFirst READ foldersFirst WRITE setFoldersFirst NOTIFY sortChanged)
     Q_PROPERTY(bool canWrite READ canWrite NOTIFY canWriteChanged)
+    // The folder is inside an archive (`zip:/...`, `tar:/...`): read-only, with
+    // an Extract button in the window.
+    Q_PROPERTY(bool inArchive READ inArchive NOTIFY urlChanged)
     // True while the rows are search results (SearchController) and not the
     // folder's items. `url` stays the folder the search started in.
     Q_PROPERTY(bool searching READ searching NOTIFY searchingChanged)
@@ -110,6 +113,7 @@ public:
 
     QUrl url() const { return m_url; }
     void setUrl(const QUrl &url);
+    bool inArchive() const;
     bool loading() const { return m_loading; }
     QString errorText() const { return m_error; }
     QString notice() const { return m_notice; }

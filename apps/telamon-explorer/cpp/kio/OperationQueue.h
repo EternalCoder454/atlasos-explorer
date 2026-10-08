@@ -18,7 +18,9 @@
 #include <QVariantMap>
 
 #include <functional>
+#include <memory>
 
+struct ArchivePlan;
 class KJob;
 class OperationAsker;
 class QMimeData;
@@ -114,6 +116,16 @@ public:
     // Pastes text or an image from the clipboard as a file (KIO asks for the name).
     void pasteData(const QMimeData *data, const QUrl &destination);
     void emptyTrash();
+    // A job Telamon Archive runs (Archive1 `method` with `args`, then the
+    // options): shown here with its progress, paused and cancelled from here;
+    // what it made is announced with `resultsReady`. Not undoable.
+    void archive(const QString &method, const QVariantList &args, const QVariantMap &options, const QString &title, const QString &running);
+    // Takes everything out of the archive whose top is `root` (`zip:/...`)
+    // into a new folder `folderName` in `parentFolder`, by KIO: the listing is
+    // checked first (docs/DESIGN.md, "Archives"). For when Archive isn't there.
+    void extractArchive(const QUrl &root, const QUrl &parentFolder, const QString &folderName, const QString &archiveName);
+    // Whether Telamon Archive is installed (the window's answer; words only).
+    void setArchiveProbe(std::function<bool()> probe) { m_archiveProbe = std::move(probe); }
 
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
@@ -147,6 +159,8 @@ Q_SIGNALS:
     void refused(const QString &title, const QString &text);
     // An operation ended (done, failed or cancelled).
     void jobFinished();
+    // An extraction or compression finished and made these files (to select).
+    void resultsReady(const QList<QUrl> &urls);
 
 private:
     struct Work;
@@ -185,6 +199,9 @@ private:
     QString textFor(uint32_t which, Kind kind, const QList<QUrl> &urls, const QString &to, const QString &newName) const;
     Work &work(quint64 id);
 
+    bool archiveInstalled() const { return m_archiveProbe && m_archiveProbe(); }
+
+    std::function<bool()> m_archiveProbe;
     void *m_engine = nullptr;
     QList<quint64> m_ids;
     QHash<quint64, Work> m_work;

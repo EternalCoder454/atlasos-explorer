@@ -1,5 +1,7 @@
 #include "OperationQueue.h"
 
+#include "ArchiveClient.h"
+#include "ArchiveGuard.h"
 #include "OperationAsker.h"
 #include "OpsBridge.h"
 #include "RustBridge.h"
@@ -324,6 +326,10 @@ struct OperationQueue::Work {
     std::function<void()> histDone;
     QMimeData *data = nullptr;
     bool ended = false;
+    // What the steps of an extraction through KIO share.
+    std::shared_ptr<ArchivePlan> plan;
+    // What a finished job made, to be selected.
+    QList<QUrl> results;
 };
 
 OperationQueue::OperationQueue(QObject *parent)
@@ -731,6 +737,9 @@ void OperationQueue::attach(Work &w, KJob *job)
         job->setUiDelegate(delegate);
     }
     connect(job, &KJob::result, this, [this, id](KJob *j) { stepDone(id, j); });
+    if (auto *archiveJob = qobject_cast<ArchiveJob *>(job)) {
+        connect(archiveJob, &ArchiveJob::needsUser, this, [this] { Q_EMIT message(tr("Telamon Archive needs an answer from you. Look for its window.")); });
+    }
     if (auto *copy = qobject_cast<KIO::CopyJob *>(job)) {
         connect(copy, &KIO::CopyJob::copyingDone, this, [this, id](KIO::Job *, const QUrl &from, const QUrl &to, const QDateTime &, bool, bool) {
             if (m_work.contains(id) && work(id).top.contains(urlKey(from))) {
@@ -786,8 +795,21 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
             cancel(id);
             return;
         }
+        // An archive Files won't take apart, or a disk without room: a dialog
+        // says it in full (the list keeps the row, the toast stays quiet).
+        if (job->error() == ArchiveGuardJob::Refused || job->error() == ArchiveGuardJob::NeedsPassword || job->error() == ArchivePrepareJob::NoRoom) {
+            const QString text = job->errorString();
+            Q_EMIT refused(job->error() == ArchiveGuardJob::Refused ? tr("Can't Extract")
+                                                                    : (job->error() == ArchiveGuardJob::NeedsPassword ? tr("Needs a Password") : tr("Not Enough Space")),
+                           text);
+            failOp(id, text, false);
+            return;
+        }
         failOp(id, rustDisplayName(job->errorString().toUtf8()));
         return;
+    }
+    if (auto *archiveJob = qobject_cast<ArchiveJob *>(job)) {
+        w.results = archiveJob->results();
     }
     ++w.step;
     runStep(id);
@@ -817,6 +839,10 @@ void OperationQueue::finishOp(quint64 id)
     }
     refresh();
     Q_EMIT jobFinished();
+    const QList<QUrl> made = w.plan ? w.plan->results : w.results;
+    if (!made.isEmpty()) {
+        Q_EMIT resultsReady(made);
+    }
 }
 
 void OperationQueue::failOp(quint64 id, const QString &why, bool say)
@@ -1194,6 +1220,31 @@ void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUr
         }
     }
 
+    // Archives are read-only here: nothing goes into one, and what comes out
+    // is copied (the archive keeps its files), after Files has looked at
+    // what the archive lists.
+    bool fromArchive = false;
+    for (const QUrl &u : sources) {
+        fromArchive = fromArchive || rustArchiveScheme(u.scheme());
+    }
+    if (rustArchiveScheme(destination.scheme())) {
+        Q_EMIT refused(tr("Can't Copy"), tr("An archive is open for reading only, so nothing can be put into it. Extract it first, then change the files."));
+        if (done) {
+            done(false);
+        }
+        return;
+    }
+    if (fromArchive && kind == Link) {
+        Q_EMIT refused(tr("Can't Link"), tr("A link can't point to a file in an archive. Extract it first."));
+        if (done) {
+            done(false);
+        }
+        return;
+    }
+    if (fromArchive) {
+        kind = Copy;
+    }
+
     Work w;
     w.kind = kind;
     w.sources = sources;
@@ -1209,6 +1260,16 @@ void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUr
     w.preflight = local && (kind == Copy || kind == Move);
     const QString to = folderName(destination);
     w.title = textFor(0, kind, sources, to, QString());
+    if (fromArchive) {
+        // Look first, check the room, then copy; there is nothing to undo
+        // that redo could safely repeat (it would skip the look).
+        w.record = false;
+        auto plan = std::make_shared<ArchivePlan>();
+        const QString what = sources.size() == 1 ? tr("\"%1\"").arg(rustDisplayName(sources.first().adjusted(QUrl::StripTrailingSlash).fileName().toUtf8()))
+                                                 : tr("%n items", "", int(sources.size()));
+        w.steps << [this, sources, plan]() -> KJob * { return new ArchiveGuardJob(sources, false, plan, archiveInstalled()); };
+        w.steps << [destination, plan, what]() -> KJob * { return new ArchivePrepareJob(destination, QString(), what, plan); };
+    }
     w.steps << [sources, destination, kind]() -> KJob * {
         switch (kind) {
         case Copy:
@@ -1367,6 +1428,41 @@ void OperationQueue::emptyTrash()
     w.title = tr("Empty Trash");
     w.steps << []() -> KJob * { return KIO::emptyTrash(); };
     enqueue(std::move(w), tr("Emptying the Trash"));
+}
+
+void OperationQueue::archive(const QString &method, const QVariantList &args, const QVariantMap &options, const QString &title, const QString &running)
+{
+    Work w;
+    w.kind = External;
+    w.record = false;
+    w.title = title;
+    w.steps << [method, args, options]() -> KJob * { return new ArchiveJob(method, args, options); };
+    enqueue(std::move(w), running);
+}
+
+void OperationQueue::extractArchive(const QUrl &root, const QUrl &parentFolder, const QString &folderName, const QString &archiveName)
+{
+    auto plan = std::make_shared<ArchivePlan>();
+    Work w;
+    w.kind = Copy;
+    w.record = false;
+    w.sources = {root};
+    w.plan = plan;
+    const QString shown = rustDisplayName(archiveName.toUtf8());
+    w.title = tr("Extract %1").arg(shown);
+    w.steps << [this, root, plan]() -> KJob * { return new ArchiveGuardJob({root}, true, plan, archiveInstalled()); };
+    w.steps << [parentFolder, folderName, shown, plan]() -> KJob * { return new ArchivePrepareJob(parentFolder, folderName, tr("\"%1\"").arg(shown), plan); };
+    w.steps << [plan]() -> KJob * {
+        plan->results = {plan->dest};
+        return KIO::mkdir(plan->dest);
+    };
+    w.steps << [plan]() -> KJob * {
+        if (plan->children.isEmpty()) {
+            return new NoopJob;
+        }
+        return KIO::copy(plan->children, plan->dest, KIO::HideProgressInfo);
+    };
+    enqueue(std::move(w), tr("Extracting %1").arg(shown));
 }
 
 // ---- Undo and redo ----

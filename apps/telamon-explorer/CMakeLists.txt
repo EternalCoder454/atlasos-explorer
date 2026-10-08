@@ -116,6 +116,8 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/FileActions.h cpp/kio/FileActions.cpp
         cpp/kio/OperationQueue.h cpp/kio/OperationQueue.cpp
         cpp/kio/OperationAsker.h cpp/kio/OperationAsker.cpp
+        cpp/kio/ArchiveClient.h cpp/kio/ArchiveClient.cpp
+        cpp/kio/ArchiveGuard.h cpp/kio/ArchiveGuard.cpp
         cpp/kio/OpsBridge.h
         cpp/kio/TabLogic.h cpp/kio/TabLogic.cpp
         cpp/kio/LocationLogic.h cpp/kio/LocationLogic.cpp

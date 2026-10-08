@@ -39,6 +39,8 @@ pub const F_TERMINAL: u32 = 1 << 12;
 pub const F_CAN_UNDO: u32 = 1 << 13;
 /// There is something to redo.
 pub const F_CAN_REDO: u32 = 1 << 14;
+/// Every selected item is an archive Telamon Archive can extract.
+pub const F_ARCHIVE_ITEMS: u32 = 1 << 15;
 
 /// One entry of a menu. `key` names it for the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,9 @@ pub enum Cmd {
     Paste,
     Rename,
     Trash,
+    ExtractHere,
+    ExtractTo,
+    CompressZip,
     Compress,
     Properties,
     MoreActions,
@@ -82,6 +87,9 @@ impl Cmd {
             Cmd::Paste => "paste",
             Cmd::Rename => "rename",
             Cmd::Trash => "trash",
+            Cmd::ExtractHere => "extractHere",
+            Cmd::ExtractTo => "extractTo",
+            Cmd::CompressZip => "compressZip",
             Cmd::Compress => "compress",
             Cmd::Properties => "properties",
             Cmd::MoreActions => "moreActions",
@@ -135,7 +143,14 @@ pub fn item_menu(count: usize, folders: usize, flags: u32) -> Vec<(Cmd, bool)> {
     out.push((Cmd::Rename, single && writable && !has(F_IN_TRASH)));
     out.push((Cmd::Trash, writable && !has(F_IN_TRASH)));
     if has(F_ARCHIVE) {
-        out.push((Cmd::Compress, has(F_LOCAL) && !has(F_IN_TRASH)));
+        // Telamon Archive reads and writes files on this computer only.
+        let here = has(F_LOCAL) && !has(F_IN_TRASH);
+        if has(F_ARCHIVE_ITEMS) {
+            out.push((Cmd::ExtractHere, here));
+            out.push((Cmd::ExtractTo, here));
+        }
+        out.push((Cmd::CompressZip, here));
+        out.push((Cmd::Compress, here));
     }
     out.push((Cmd::Properties, true));
     out.push((Cmd::MoreActions, true));
@@ -419,6 +434,7 @@ mod tests {
             | F_LOCAL
             | F_CAN_PASTE
             | F_ARCHIVE
+            | F_ARCHIVE_ITEMS
             | F_PINNABLE
             | F_FOLDER_WRITABLE
             | F_OPEN_WITH
@@ -532,6 +548,42 @@ mod tests {
                 Cmd::Compress
             ),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn extract_only_for_archives_with_archive_installed() {
+        let ext = |flags| {
+            let m = item_menu(1, 0, flags);
+            (
+                on(&m, Cmd::ExtractHere),
+                on(&m, Cmd::ExtractTo),
+                on(&m, Cmd::CompressZip),
+            )
+        };
+        // Archive missing: no archive entry at all.
+        assert_eq!(ext(BASE | F_ARCHIVE_ITEMS), (None, None, None));
+        // Archive there, a plain file: Compress only.
+        assert_eq!(ext(BASE | F_ARCHIVE), (None, None, Some(true)));
+        // An archive: Extract Here and Extract To as well.
+        assert_eq!(
+            ext(BASE | F_ARCHIVE | F_ARCHIVE_ITEMS),
+            (Some(true), Some(true), Some(true))
+        );
+        // Not on this computer, or in the Trash: shown off (Archive takes file:// only).
+        assert_eq!(
+            ext((BASE & !F_LOCAL) | F_ARCHIVE | F_ARCHIVE_ITEMS),
+            (Some(false), Some(false), Some(false))
+        );
+        assert_eq!(
+            ext(BASE | F_ARCHIVE | F_ARCHIVE_ITEMS | F_IN_TRASH),
+            (Some(false), Some(false), Some(false))
+        );
+        // Extracting needs no write access to the folder the archive is in
+        // (Archive says if it can't write), nor does compressing.
+        assert_eq!(
+            ext((BASE & !F_WRITABLE) | F_ARCHIVE | F_ARCHIVE_ITEMS),
+            (Some(true), Some(true), Some(true))
         );
     }
 
