@@ -71,7 +71,7 @@ ContextMenu {
             actions.paste(snap.pasteIntoFolder ? urls[0] : Qt.url(""));
             break;
         case "rename":
-            actions.rename(urls[0]);
+            actions.rename(urls);
             break;
         case "trash":
             actions.trash(urls);

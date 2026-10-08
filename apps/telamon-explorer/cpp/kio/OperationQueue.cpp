@@ -869,6 +869,10 @@ void OperationQueue::failOp(quint64 id, const QString &why, bool say)
         Q_EMIT message(tr("%1 didn't finish: %2").arg(w.title, why));
     }
     endOp(id, false);
+    // A batch of renames that stopped half way: the ones done are one step to undo.
+    if (w.kind == Rename && w.record && w.side < 0 && w.sources.size() > 1 && !w.pairs.isEmpty()) {
+        recordHistory(w);
+    }
     refresh();
     Q_EMIT jobFinished();
 }
@@ -926,8 +930,14 @@ void OperationQueue::cancel(quint64 id)
     telamon_ops_event(m_engine, id, 3);
     pump();
     if (known && m_work.contains(id)) {
+        // A batch of renames stopped half way: the ones done are one step to undo.
+        const Work w = work(id);
+        const bool partial = w.kind == Rename && w.record && w.side < 0 && w.sources.size() > 1 && !w.pairs.isEmpty();
         // Waiting operations have no job to kill.
         endOp(id);
+        if (partial) {
+            recordHistory(w);
+        }
     }
     if (known) {
         Q_EMIT jobFinished();
@@ -1322,7 +1332,7 @@ void OperationQueue::deleteForGood(const QList<QUrl> &urls)
     enqueue(std::move(w), textFor(1, Delete, urls, QString(), QString()));
 }
 
-void OperationQueue::rename(const QUrl &url, const QString &newName)
+void OperationQueue::rename(const QUrl &url, const QString &newName, std::function<void(bool)> done)
 {
     QUrl target = url.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
     target.setPath(QDir::cleanPath(target.path() + QLatin1Char('/') + newName));
@@ -1330,6 +1340,7 @@ void OperationQueue::rename(const QUrl &url, const QString &newName)
     w.kind = Rename;
     w.sources = {url};
     w.dest = target;
+    w.done = std::move(done);
     w.top.insert(key(url));
     w.title = textFor(0, Rename, {url}, QString(), rustDisplayName(newName.toUtf8()));
     // A move job: KIO::rename has no conflict handling and reports no result.
@@ -1337,26 +1348,58 @@ void OperationQueue::rename(const QUrl &url, const QString &newName)
     enqueue(std::move(w), textFor(1, Rename, {url}, QString(), rustDisplayName(newName.toUtf8())));
 }
 
-void OperationQueue::makeFolder(const QUrl &folder, const QString &name)
+void OperationQueue::renameMany(const QList<QPair<QUrl, QString>> &renames, std::function<void(bool)> done)
+{
+    if (renames.isEmpty()) {
+        if (done) {
+            done(false);
+        }
+        return;
+    }
+    if (renames.size() == 1) {
+        rename(renames.first().first, renames.first().second, std::move(done));
+        return;
+    }
+    Work w;
+    w.kind = Rename;
+    w.done = std::move(done);
+    for (const auto &r : renames) {
+        const QUrl url = r.first;
+        QUrl target = url.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
+        target.setPath(QDir::cleanPath(target.path() + QLatin1Char('/') + r.second));
+        w.sources << url;
+        w.top.insert(key(url));
+        // One step each: they run in order, and each is the single rename's move job.
+        w.steps << [url, target]() -> KJob * { return KIO::moveAs(url, target, KIO::HideProgressInfo); };
+    }
+    w.dest = w.sources.first().adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
+    w.title = textFor(0, Rename, w.sources, QString(), QString());
+    const QString running = textFor(1, Rename, w.sources, QString(), QString());
+    enqueue(std::move(w), running);
+}
+
+void OperationQueue::makeFolder(const QUrl &folder, const QString &name, std::function<void(bool)> done)
 {
     QUrl target = folder.adjusted(QUrl::StripTrailingSlash);
     target.setPath(QDir::cleanPath(target.path() + QLatin1Char('/') + name));
     Work w;
     w.kind = NewFolder;
     w.dest = target;
+    w.done = std::move(done);
     w.created = {target};
     w.title = tr("Create Folder %1").arg(rustDisplayName(name.toUtf8()));
     w.steps << [target]() -> KJob * { return KIO::mkdir(target); };
     enqueue(std::move(w), tr("Creating folder %1").arg(rustDisplayName(name.toUtf8())));
 }
 
-void OperationQueue::makeFile(const QUrl &folder, const QString &name, const QUrl &templateFile)
+void OperationQueue::makeFile(const QUrl &folder, const QString &name, const QUrl &templateFile, std::function<void(bool)> done)
 {
     QUrl target = folder.adjusted(QUrl::StripTrailingSlash);
     target.setPath(QDir::cleanPath(target.path() + QLatin1Char('/') + name));
     Work w;
     w.kind = Copy;
     w.dest = target;
+    w.done = std::move(done);
     // Recorded as a copy, so Undo moves the new file to the Trash and Redo
     // brings it back; an empty file has no source, so it stands for itself.
     const QUrl from = templateFile.isValid() ? templateFile : target;

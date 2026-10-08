@@ -196,6 +196,7 @@ Item {
         delegate: Item {
             id: row
             required property int index
+            required property url url
             required property string name
             required property string iconName
             required property bool isDir
@@ -212,6 +213,8 @@ Item {
             visible: !groupCollapsed
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
             readonly property bool current: root.fv.currentRow === index
+            // The name is being edited where it is shown.
+            readonly property bool editing: root.fv.renaming && root.fv.renameUrl.toString() === url.toString()
 
             Rectangle {
                 anchors.fill: parent
@@ -240,11 +243,25 @@ Item {
                         anchors.right: parent.right
                         anchors.rightMargin: Kirigami.Units.largeSpacing
                         height: parent.height
+                        visible: !row.editing
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         elide: Text.ElideMiddle
                         text: row.name
                         color: Kirigami.Theme.textColor
+                    }
+                    Loader {
+                        anchors.left: icon.right
+                        anchors.leftMargin: Kirigami.Units.largeSpacing
+                        anchors.right: parent.right
+                        anchors.rightMargin: Kirigami.Units.largeSpacing
+                        anchors.verticalCenter: parent.verticalCenter
+                        active: row.editing
+                        sourceComponent: InlineRename {
+                            fv: root.fv
+                            itemUrl: row.url
+                            isDir: row.isDir
+                        }
                     }
                 }
                 Text {
@@ -293,6 +310,8 @@ Item {
             MouseArea {
                 id: mouse
                 anchors.fill: parent
+                // The name being edited takes the mouse; a click elsewhere ends the edit (FolderView).
+                enabled: !row.editing
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 property point start

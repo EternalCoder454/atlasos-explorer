@@ -43,7 +43,7 @@ TelamonWindow {
     property string addressError
     readonly property bool editingAddress: pathBar.editing
     // A text field has the keyboard.
-    readonly property bool inTextField: pathBar.editing || searchField.activeFocus || searchBar.activeFocus
+    readonly property bool inTextField: pathBar.editing || searchField.activeFocus || searchBar.activeFocus || (view ? view.renaming : false)
     // Keys that mean something to a text field, or to Quick Look (which shows
     // a file and must not act on it), are not the window's.
     readonly property bool typing: inTextField || quickLook.opened
@@ -121,6 +121,8 @@ TelamonWindow {
         }
         onOpenLocationRequested: files => root.openFileLocation(files)
         onNamePromptRequested: request => namePrompt.ask(request)
+        onRenameRequested: urls => root.renameItems(urls)
+        onCreatedItem: url => root.editNewItem(url)
         onResultsReady: urls => root.selectResults(urls)
         onDeleteRequested: (urls, text) => {
             deleteDialog.urls = urls;
@@ -145,6 +147,27 @@ TelamonWindow {
                 }
             }
         }
+    }
+    // F2 and Rename: one item is edited where it is shown, several open Batch Rename.
+    function renameItems(urls) {
+        if (!view || urls.length === 0) {
+            return;
+        }
+        if (urls.length === 1) {
+            view.startRename(urls[0]);
+        } else if (!view.folder.searching) {
+            batchRename.ask(urls);
+        }
+    }
+    // A new folder or file was made in the folder shown: it is selected and its
+    // name is edited at once.
+    function editNewItem(url) {
+        const here = view ? view.url.toString().replace(/\/+$/, "") : "";
+        if (!page || StandardPlaces.parentUrl(url).toString().replace(/\/+$/, "") !== here) {
+            return;
+        }
+        page.showItems([url]);
+        view.renameWhenListed(url);
     }
     // What an extraction or compression made is selected, where it is shown.
     function selectResults(urls) {
@@ -223,9 +246,14 @@ TelamonWindow {
         queue: fileActions.operations
     }
 
-    // The name of a rename, new folder or new file.
+    // The name of one item, where it can't be edited in place (the gallery, search results).
     NamePrompt {
         id: namePrompt
+        actions: fileActions
+    }
+    // Several items renamed together.
+    BatchRenameDialog {
+        id: batchRename
         actions: fileActions
     }
 
@@ -1402,9 +1430,9 @@ TelamonWindow {
                     symbol: Symbols.DriveFileRenameOutline
                     text: qsTr("Rename")
                     shortcutText: "F2"
-                    enabled: root.selected.length === 1 && root.canWrite
+                    enabled: root.canWrite && (root.selected.length === 1 || (root.selected.length > 1 && !root.searching))
                     focusable: true
-                    onClicked: fileActions.rename(root.selected[0])
+                    onClicked: fileActions.rename(root.selected)
                 }
                 ToolbarButton {
                     symbol: Symbols.Delete

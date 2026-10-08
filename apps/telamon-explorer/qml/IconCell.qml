@@ -13,6 +13,8 @@ Item {
     required property var view
     // The row in the folder.
     property int row: -1
+    required property url url
+    required property bool isDir
     required property string name
     required property string iconName
     required property bool isHidden
@@ -24,6 +26,8 @@ Item {
     readonly property var fv: cell.view.fv
     readonly property bool selected: fv.isSelected(row, fv.selRevision)
     readonly property bool current: fv.currentRow === row
+    // The name is being edited where it is shown.
+    readonly property bool editing: fv.renaming && fv.renameUrl.toString() === url.toString()
 
     Rectangle {
         anchors.fill: parent
@@ -66,12 +70,26 @@ Item {
         height: cell.view.compact ? cell.height : cell.height - y
         verticalAlignment: cell.view.compact ? Text.AlignVCenter : Text.AlignTop
         horizontalAlignment: cell.view.compact ? Text.AlignLeft : Text.AlignHCenter
+        visible: !cell.editing
         textFormat: Text.PlainText
         wrapMode: cell.view.compact ? Text.NoWrap : Text.WrapAnywhere
         maximumLineCount: cell.view.compact ? 1 : 2
         elide: Text.ElideRight
         text: cell.name
         color: Kirigami.Theme.textColor
+    }
+    Loader {
+        x: cell.view.compact ? iconBox.x + iconBox.width + Kirigami.Units.largeSpacing : Kirigami.Units.smallSpacing
+        y: cell.view.compact ? (cell.height - height) / 2 : iconBox.y + iconBox.height + Kirigami.Units.smallSpacing
+        width: cell.width - x - Kirigami.Units.smallSpacing
+        active: cell.editing
+        z: 2
+        sourceComponent: InlineRename {
+            fv: cell.fv
+            itemUrl: cell.url
+            isDir: cell.isDir
+            centered: !cell.view.compact
+        }
     }
     MouseArea {
         id: mouse

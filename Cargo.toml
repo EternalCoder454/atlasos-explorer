@@ -32,6 +32,9 @@ memchr = "2"
 unicode-normalization = "0.1"
 # Checksum of the index snapshot (corruption check; the file is also bounds-checked).
 crc32fast = "1"
+# Batch rename's find and replace. Matching runs in time linear in the name, so a
+# hostile pattern cannot hang the window; the compiled size is capped as well.
+regex = "1"
 
 [profile.release]
 lto = "thin"
