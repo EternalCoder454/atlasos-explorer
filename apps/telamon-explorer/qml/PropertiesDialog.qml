@@ -196,8 +196,7 @@ TelamonDialog {
                 }
             }
 
-            TelamonDetailGrid {
-                Layout.fillWidth: true
+            DetailRows {
                 model: {
                     const g = dialog.general;
                     const rows = [];
@@ -569,8 +568,7 @@ TelamonDialog {
         ColumnLayout {
             id: detailsPage
             spacing: TelamonStyle.spacingLarge
-            TelamonDetailGrid {
-                Layout.fillWidth: true
+            DetailRows {
                 visible: props.details.length > 0
                 model: props.details
             }
@@ -649,8 +647,7 @@ TelamonDialog {
                     color: Kirigami.Theme.negativeTextColor
                     Accessible.role: Accessible.AlertMessage
                 }
-                TelamonDetailGrid {
-                    Layout.fillWidth: true
+                DetailRows {
                     visible: (props.checksum.results ?? []).length > 0
                     model: {
                         const rows = [];
@@ -676,7 +673,13 @@ TelamonDialog {
                     id: pasted
                     Layout.fillWidth: true
                     placeholderText: qsTr("Paste a checksum here")
-                    onTextChanged: props.compareWith(text)
+                    // Not at every key: a checksum is compared when it is in.
+                    onTextChanged: compareLater.restart()
+                    Timer {
+                        id: compareLater
+                        interval: 350
+                        onTriggered: props.compareWith(pasted.text)
+                    }
                     Accessible.name: qsTr("Checksum to compare with")
                 }
                 RowLayout {
@@ -746,7 +749,8 @@ TelamonDialog {
             tristate: false
             checkState: edited ? (dialog.edits[key] ? Qt.Checked : Qt.Unchecked) : (original === 2 ? Qt.Checked : (original === 1 ? Qt.PartiallyChecked : Qt.Unchecked))
             nextCheckState: () => checkState === Qt.Checked ? Qt.Unchecked : Qt.Checked
-            onToggled: {
+            // `clicked` also covers the keyboard; the box has its new state by now.
+            onClicked: {
                 const e = Object.assign({}, dialog.edits);
                 const wanted = checkState === Qt.Checked;
                 // Back to what it was: not a change.

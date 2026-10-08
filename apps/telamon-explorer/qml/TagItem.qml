@@ -23,7 +23,7 @@ SidebarItem {
     symbol: tag.colour.length > 0 ? 0 : Symbols.Sell
     selected: current.length > 0 && current.toLowerCase() === tag.name.toLowerCase()
     Accessible.name: tag.text
-    Accessible.description: tag.count > 0 ? qsTr("%n items", "", tag.count) : ""
+    Accessible.description: tag.count > 0 ? (tag.count === 1 ? qsTr("1 item") : qsTr("%1 items").arg(tag.count)) : ""
     onClicked: item.chosen(tag.name)
 
     Rectangle {

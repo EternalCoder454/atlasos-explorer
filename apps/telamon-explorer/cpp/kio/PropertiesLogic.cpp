@@ -33,6 +33,12 @@ QString dateText(qint64 secs)
     return secs > 0 ? QLocale().toString(QDateTime::fromSecsSinceEpoch(secs), QLocale::LongFormat) : QString();
 }
 
+// "1 file", "2 files": Qt's %n has no plural form to use without translations.
+QString counted(qint64 n, const char *one, const char *many)
+{
+    return QStringLiteral("%1 %2").arg(QLocale().toString(n), QString::fromLatin1(n == 1 ? one : many));
+}
+
 QString shown(const QString &s)
 {
     return rustDisplayName(s.toUtf8());
@@ -330,7 +336,7 @@ void PropertiesLogic::assemble(bool full)
     g[QStringLiteral("local")] = allLocal;
     g[QStringLiteral("anyDir")] = dirs > 0;
     g[QStringLiteral("onlyFolders")] = files == 0;
-    g[QStringLiteral("title")] = single ? shown(first.name) : tr("%n items", "", int(items.size()));
+    g[QStringLiteral("title")] = single ? shown(first.name) : counted(items.size(), "item", "items");
     g[QStringLiteral("iconName")] = single ? first.icon : QStringLiteral("document-multiple");
     g[QStringLiteral("name")] = single ? first.name : QString();
     // A name can be changed where Files can rename (not in the Trash, not in an archive).
@@ -347,10 +353,10 @@ void PropertiesLogic::assemble(bool full)
     } else {
         QStringList parts;
         if (dirs > 0) {
-            parts << tr("%n folders", "", dirs);
+            parts << counted(dirs, "folder", "folders");
         }
         if (files > 0) {
-            parts << tr("%n files", "", files);
+            parts << counted(files, "file", "files");
         }
         g[QStringLiteral("kind")] = parts.join(QStringLiteral(", "));
     }
@@ -372,7 +378,7 @@ void PropertiesLogic::assemble(bool full)
         sizeText = sizeLine(fileBytes);
     } else if (m_sizeKnown) {
         sizeText = sizeLine(fileBytes + m_sizeBytes);
-        note = tr("Contains %1 and %2. Takes %3 on the disk.").arg(tr("%n files", "", int(m_sizeFiles)), tr("%n folders", "", int(m_sizeFolders)), KIO::convertSize(KIO::filesize_t(m_sizeOnDisk)));
+        note = tr("Contains %1 and %2. Takes %3 on the disk.").arg(counted(qint64(m_sizeFiles), "file", "files"), counted(qint64(m_sizeFolders), "folder", "folders"), KIO::convertSize(KIO::filesize_t(m_sizeOnDisk)));
     } else {
         sizeText = files > 0 ? tr("%1, not counting the folders").arg(sizeLine(fileBytes)) : tr("Not counted yet");
     }
@@ -887,7 +893,7 @@ void PropertiesLogic::startFolderSize()
                 self->m_sizeFiles = sum.files;
                 self->m_sizeFolders = sum.folders;
                 self->m_sizeOnDisk = sum.on_disk;
-                QString text = tr("%1 in %2 and %3").arg(KIO::convertSize(KIO::filesize_t(sum.bytes)), tr("%n files", "", int(sum.files)), tr("%n folders", "", int(sum.folders)));
+                QString text = tr("%1 in %2 and %3").arg(KIO::convertSize(KIO::filesize_t(sum.bytes)), counted(qint64(sum.files), "file", "files"), counted(qint64(sum.folders), "folder", "folders"));
                 if (sum.unreadable > 0) {
                     text += QLatin1Char(' ') + tr("Some folders couldn't be read, so the total may be too small.");
                 }
@@ -920,7 +926,7 @@ void PropertiesLogic::startFolderSize()
         m_sizeFiles = quint64(job->totalFiles());
         m_sizeFolders = quint64(job->totalSubdirs());
         m_sizeOnDisk = m_sizeBytes;
-        setFolderSizeState(QStringLiteral("done"), tr("%1 in %2 and %3").arg(KIO::convertSize(KIO::filesize_t(m_sizeBytes)), tr("%n files", "", int(m_sizeFiles)), tr("%n folders", "", int(m_sizeFolders))), false);
+        setFolderSizeState(QStringLiteral("done"), tr("%1 in %2 and %3").arg(KIO::convertSize(KIO::filesize_t(m_sizeBytes)), counted(qint64(m_sizeFiles), "file", "files"), counted(qint64(m_sizeFolders), "folder", "folders")), false);
         assemble(false);
     });
 }

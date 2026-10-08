@@ -123,6 +123,7 @@ qt_add_qml_module(telamon-explorer-app
         qml/TagRowItem.qml
         qml/TagItem.qml
         qml/PropertiesDialog.qml
+        qml/DetailRows.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
