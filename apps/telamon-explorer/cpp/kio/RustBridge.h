@@ -93,6 +93,19 @@ size_t telamon_menu_free_name(const uint8_t *wanted, size_t wantedLen, bool (*ex
 int32_t telamon_menu_hidden(bool add, const uint8_t *content, size_t contentLen, const uint8_t *names, size_t namesLen, uint8_t *out, size_t cap,
                           size_t *textLen);
 
+// ---- Quick actions on pictures (src/image_ffi.rs) ----
+uint32_t telamon_image_kind(const uint8_t *mime, size_t len);
+bool telamon_image_accepts(uint32_t action, uint32_t kind);
+bool telamon_image_skips(uint32_t action, uint32_t kind);
+size_t telamon_image_names(uint32_t action, const uint32_t *kinds, size_t count, const uint8_t *names, size_t namesLen, uint8_t *out, size_t cap);
+uint64_t telamon_image_limit(uint32_t which);
+size_t telamon_image_check_input(uint64_t size, uint64_t pixels, uint8_t *out, size_t cap);
+uint32_t telamon_jpeg_orientation(const uint8_t *data, size_t len);
+bool telamon_jpeg_reset_orientation(uint8_t *data, size_t len);
+uint32_t telamon_jpeg_turn(uint32_t orientation, bool clockwise);
+int32_t telamon_pdf_merge(const uint8_t *paths, size_t pathsLen, const uint8_t *output, size_t outputLen, const uint8_t *cancel, uint32_t *pages,
+                        uint32_t *bad);
+
 // ---- The Trash (src/trash_ffi.rs) ----
 struct TelamonTrashReport {
     size_t folders;

@@ -27,6 +27,9 @@ find_package(KF6GuiAddons 6.30 REQUIRED)
 # Properties and the Details columns: dimensions, duration, date taken, camera, pages.
 find_package(KF6FileMetaData REQUIRED)
 find_package(Corrosion REQUIRED)
+# Rotating a JPEG without decoding it (Rotate Left and Right in More Actions).
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
@@ -86,6 +89,7 @@ qt_add_qml_module(telamon-explorer-app
         qml/PlaceholderPage.qml
         qml/FolderView.qml
         qml/FilesTabPage.qml
+        qml/FilesPane.qml
         qml/PathBar.qml
         qml/StatusLine.qml
         qml/DetailsView.qml
@@ -152,6 +156,8 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/MetaReader.h cpp/kio/MetaReader.cpp
         cpp/kio/PropertiesLogic.h cpp/kio/PropertiesLogic.cpp
         cpp/kio/PropsBridge.h
+        cpp/kio/ImageWork.h cpp/kio/ImageWork.cpp
+        cpp/kio/DragWatch.h cpp/kio/DragWatch.cpp
         cpp/kio/RustBridge.h
 )
 
@@ -160,7 +166,8 @@ target_link_libraries(telamon-explorer-app PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets Qt6::DBus Qt6::Network
     KF6::DBusAddons KF6::WindowSystem KF6::GuiAddons
     KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::KIOFileWidgets
-    KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore KF6::FileMetaData)
+    KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore KF6::FileMetaData
+    PkgConfig::TURBOJPEG)
 
 install(TARGETS telamon-explorer-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # The file index service and its command-line client are cargo binaries that

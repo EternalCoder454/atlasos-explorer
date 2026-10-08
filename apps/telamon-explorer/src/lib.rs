@@ -6,6 +6,7 @@ mod backend;
 mod batch_ffi;
 mod ffi;
 mod home_ffi;
+mod image_ffi;
 mod ops_ffi;
 mod preview_ffi;
 mod props_ffi;

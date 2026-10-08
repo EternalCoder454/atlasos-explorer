@@ -36,6 +36,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QThreadPool>
 #include <QTimeZone>
 
@@ -356,6 +357,99 @@ private:
 
 namespace
 {
+// What the worker of `produce` shares with the queue: the folder it writes
+// in (removed when the last of them lets go), the flag that stops it, how far
+// it is, what it made and what went wrong.
+struct ProduceRun {
+    std::unique_ptr<QTemporaryDir> dir;
+    // Where the new files are made (inside `dir`): its name is what the conflict dialog says they come from.
+    QString files;
+    std::atomic<bool> cancel{false};
+    std::atomic<int> done{0};
+    QStringList problems;
+    QStringList made;
+};
+
+// Runs the work of `produce` on a thread of the pool. It starts itself, as
+// KIO's jobs do.
+class ProduceJob : public KJob
+{
+public:
+    ProduceJob(std::shared_ptr<ProduceRun> run, OperationQueue::ProduceWork work, QStringList names, int count)
+        : m_run(std::move(run))
+        , m_work(std::move(work))
+        , m_names(std::move(names))
+        , m_count(count)
+    {
+        setTotalAmount(KJob::Files, count);
+        QMetaObject::invokeMethod(this, &ProduceJob::start, Qt::QueuedConnection);
+    }
+
+    void start() override
+    {
+        QPointer<ProduceJob> self(this);
+        auto run = m_run;
+        auto work = m_work;
+        const QStringList names = m_names;
+        QThreadPool::globalInstance()->start([self, run, work, names] {
+            const QString dir = run->files;
+            const std::function<void(int)> progress = [self, run](int n) {
+                run->done = n;
+                if (!self) {
+                    return;
+                }
+                QMetaObject::invokeMethod(self.data(), [self, n] {
+                    if (self) {
+                        self->setProcessedAmount(KJob::Files, n);
+                    }
+                });
+            };
+            QStringList problems = work(dir, run->cancel, progress);
+            QStringList made;
+            for (const QString &name : names) {
+                const QFileInfo info(QDir(dir).filePath(name));
+                if (info.isFile() && info.size() > 0) {
+                    made << name;
+                }
+            }
+            // Written before the result is delivered, so the queue can use it.
+            run->problems = problems;
+            run->made = made;
+            if (!self) {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, run] {
+                if (!self) {
+                    return;
+                }
+                if (run->cancel) {
+                    self->setError(KJob::KilledJobError);
+                } else if (run->made.isEmpty()) {
+                    self->setError(KJob::UserDefinedError);
+                    self->setErrorText(run->problems.isEmpty() ? OperationQueue::tr("Nothing could be made.") : run->problems.join(QLatin1Char('\n')));
+                }
+                self->emitResult();
+            });
+        });
+    }
+
+protected:
+    bool doKill() override
+    {
+        m_run->cancel = true;
+        return true;
+    }
+
+private:
+    std::shared_ptr<ProduceRun> m_run;
+    OperationQueue::ProduceWork m_work;
+    QStringList m_names;
+    int m_count;
+};
+}
+
+namespace
+{
 // What a change of tags, rating or permissions shares between the queue and
 // its worker: the flag that stops it, and what it did.
 struct AttrRun {
@@ -485,6 +579,8 @@ struct OperationQueue::Work {
     bool quiet = false;
     // A change of tags, rating or permissions.
     std::shared_ptr<AttrRun> attrs;
+    // What `produce` made: the copies are selected when it is done.
+    bool selectCopies = false;
 };
 
 OperationQueue::OperationQueue(QObject *parent)
@@ -1051,7 +1147,15 @@ void OperationQueue::finishOp(quint64 id)
     }
     refresh();
     Q_EMIT jobFinished();
-    const QList<QUrl> made = w.plan ? w.plan->results : w.results;
+    QList<QUrl> made = w.plan ? w.plan->results : w.results;
+    if (w.selectCopies && w.side < 0) {
+        for (const QUrl &src : w.sources) {
+            const auto it = w.pairs.constFind(key(src));
+            if (it != w.pairs.constEnd()) {
+                made << it.value();
+            }
+        }
+    }
     if (!made.isEmpty()) {
         Q_EMIT resultsReady(made);
     }
@@ -1711,6 +1815,57 @@ void OperationQueue::setAttributes(const QList<QUrl> &urls, const AttrEdit &edit
         });
     };
     enqueue(std::move(w), title);
+}
+
+void OperationQueue::produce(const QString &title, const QString &running, const QUrl &destination, const QStringList &names, int count, ProduceWork work)
+{
+    if (names.isEmpty() || !destination.isLocalFile()) {
+        return;
+    }
+    // A folder of Files' own, away from the one the new files are for.
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    QDir().mkpath(base);
+    auto run = std::make_shared<ProduceRun>();
+    run->dir = std::make_unique<QTemporaryDir>(QDir(base).filePath(QStringLiteral("made-XXXXXX")));
+    if (!run->dir->isValid()) {
+        Q_EMIT message(tr("%1 didn't start: there is no room to work in.").arg(title));
+        return;
+    }
+    run->files = QDir(run->dir->path()).filePath(tr("New files"));
+    if (!QDir().mkpath(run->files)) {
+        Q_EMIT message(tr("%1 didn't start: there is no room to work in.").arg(title));
+        return;
+    }
+    const QString dir = run->files;
+    Work w;
+    w.kind = Copy;
+    w.dest = destination;
+    w.title = title;
+    w.selectCopies = true;
+    for (const QString &name : names) {
+        const QUrl file = QUrl::fromLocalFile(QDir(dir).filePath(name));
+        w.sources << file;
+        w.top.insert(key(file));
+    }
+    QPointer<OperationQueue> self(this);
+    // Held by the work and by what runs after it: the folder goes with the last of them.
+    w.done = [self, run, title](bool ok) {
+        if (self && ok && !run->problems.isEmpty()) {
+            Q_EMIT self->message(tr("Some files were left out. %1").arg(run->problems.join(QStringLiteral("  "))));
+        }
+    };
+    w.steps << [run, names, work, count]() -> KJob * { return new ProduceJob(run, work, names, count); };
+    w.steps << [run, dir, destination]() -> KJob * {
+        QList<QUrl> files;
+        for (const QString &name : std::as_const(run->made)) {
+            files << QUrl::fromLocalFile(QDir(dir).filePath(name));
+        }
+        if (files.isEmpty()) {
+            return new NoopJob;
+        }
+        return KIO::copy(files, destination, KIO::HideProgressInfo);
+    };
+    enqueue(std::move(w), running);
 }
 
 void OperationQueue::pasteData(const QMimeData *data, const QUrl &destination)

@@ -27,6 +27,8 @@ FocusScope {
     // The window's FileActions: drops go through it.
     required property var actions
     readonly property var segments: LocationLogic.segments(location)
+    // What spring loading goes by: a drag held over a segment opens it.
+    readonly property string springId: String(bar)
     // Whether the text field is shown instead of the segments.
     property bool editing: false
     property alias text: field.text
@@ -292,13 +294,26 @@ FocusScope {
                                 if (drag.accepted) {
                                     priv.hint = (copy ? qsTr("Copy to %1") : qsTr("Move to %1")).arg(seg.modelData.label);
                                     priv.hintX = seg.mapToItem(bar, 0, 0).x;
+                                    // A drop here moves, or copies with Ctrl held; held for a
+                                    // second over a folder other than this one, it opens.
+                                    DragWatch.mode = "direct";
+                                    if (!seg.last) {
+                                        const target = seg.modelData.url;
+                                        DragWatch.spring(bar.springId + ":" + target, () => bar.navigateRequested(target));
+                                    } else {
+                                        DragWatch.springClear();
+                                    }
                                 }
                             }
                             onEntered: drag => decide(drag)
                             onPositionChanged: drag => decide(drag)
-                            onExited: priv.hint = ""
+                            onExited: {
+                                priv.hint = "";
+                                DragWatch.springClear();
+                            }
                             onDropped: drop => {
                                 priv.hint = "";
+                                DragWatch.springClear();
                                 if (!drop.hasUrls) {
                                     return;
                                 }

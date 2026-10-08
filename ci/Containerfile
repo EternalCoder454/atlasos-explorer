@@ -37,12 +37,13 @@ COPY packaging/telamon-explorer.spec /tmp/telamon-explorer.spec
 #   ShellCheck           lint of scripts/, ci/ and packaging/
 #   dbus-daemon          private session bus for the D-Bus tests (FileManager1, Search1)
 #   Xvfb, qt6-qtbase-gui, kf6-qqc2-desktop-style             headless smoke run
+#   qt6-qtimageformats   the WebP plug-in (the app Requires it; builddep does not install Requires)
 #   zstd, tar, git-core  actions/cache and actions/checkout
 RUN --mount=type=cache,target=/var/cache/libdnf5,sharing=locked \
     dnf -y --setopt=keepcache=1 install dnf5-plugins rpm-build git-core tar gzip zstd findutils \
         clippy rustfmt mold ccache ShellCheck desktop-file-utils libappstream-glib \
         dbus-daemon \
-        xorg-x11-server-Xvfb qt6-qtbase-gui kf6-qqc2-desktop-style \
+        xorg-x11-server-Xvfb qt6-qtbase-gui kf6-qqc2-desktop-style qt6-qtimageformats \
         qt6-qtdeclarative-devel \
         /telamon-rpms/telamon-ui-[0-9]*.rpm /telamon-rpms/telamon-symbols-fonts-[0-9]*.rpm && \
     dnf -y --setopt=keepcache=1 builddep /tmp/telamon-explorer.spec && \

@@ -159,6 +159,8 @@ FocusScope {
         target: folderModel
         function onUrlChanged() {
             top.applyRemembered();
+            // The rows are different ones now: a folder row marked as the drop target is not any more.
+            top.dropRow = -1;
         }
         function onSortChanged() {
             top.remember();
@@ -755,21 +757,87 @@ FocusScope {
         }
     }
 
+    // ---- Files dragged over the folder ----
+    // The folder row under a drag (-1: none), where it is drawn, and the name
+    // that spring loading goes by (a drag held over a folder for a second opens it).
+    property int dropRow: -1
+    property rect dropRect: Qt.rect(0, 0, 0, 0)
+    readonly property string springId: String(top)
+
     DropArea {
+        id: dropArea
         anchors.fill: parent
+        // The folder row at a point; among search results only a folder row
+        // takes a drop ("here" is not what is shown).
+        function folderRowAt(x, y) {
+            const row = top.activeView.rowAt(x, y);
+            return row >= 0 && folderModel.isDirAt(row) ? row : -1;
+        }
+        function over(drag) {
+            const row = folderRowAt(drag.x, drag.y);
+            if (row !== top.dropRow) {
+                top.dropRow = row;
+                top.dropRect = row >= 0 ? top.activeView.rowRect(row) : Qt.rect(0, 0, 0, 0);
+            }
+            if (row < 0) {
+                DragWatch.springClear();
+                return;
+            }
+            const target = folderModel.urlAt(row);
+            // Not into a folder that is itself being dragged.
+            for (const u of drag.urls) {
+                if (u.toString().replace(/\/+$/, "") === target.toString().replace(/\/+$/, "")) {
+                    DragWatch.springClear();
+                    return;
+                }
+            }
+            DragWatch.spring(top.springId + ":" + target, () => top.navigateRequested(target));
+        }
+        function leave() {
+            top.dropRow = -1;
+            DragWatch.springClear();
+        }
+        onEntered: drag => over(drag)
+        onPositionChanged: drag => over(drag)
+        onExited: leave()
         onDropped: drop => {
+            leave();
             if (!top.actions || !drop.hasUrls) {
                 return;
             }
-            const row = top.activeView.rowAt(drop.x, drop.y);
+            const row = folderRowAt(drop.x, drop.y);
             // Among search results only a folder row takes a drop: "here" is not what is shown.
-            if (folderModel.searching && !(row >= 0 && folderModel.isDirAt(row))) {
+            if (folderModel.searching && row < 0) {
                 return;
             }
-            const target = row >= 0 && folderModel.isDirAt(row) ? folderModel.urlAt(row) : folderModel.url;
+            const target = row >= 0 ? folderModel.urlAt(row) : folderModel.url;
             drop.accepted = true;
             top.actions.drop(drop.urls, target);
         }
+    }
+
+    // Where a drop would land: the folder row under the pointer, else this
+    // folder (a frame round the view).
+    Rectangle {
+        visible: top.dropRow >= 0
+        z: 20
+        x: top.dropRect.x
+        y: top.dropRect.y
+        width: top.dropRect.width
+        height: top.dropRect.height
+        radius: TelamonStyle.radiusSmall
+        color: TelamonStyle.alpha(TelamonStyle.accent, 0.18)
+        border.width: 2
+        border.color: TelamonStyle.accent
+    }
+    Rectangle {
+        visible: dropArea.containsDrag && top.dropRow < 0 && !folderModel.searching
+        z: 20
+        anchors.fill: parent
+        color: "transparent"
+        border.width: 2
+        border.color: TelamonStyle.accent
+        radius: TelamonStyle.radiusSmall
     }
 
     // Ctrl+plus, Ctrl+minus (steps) and Ctrl+0 (0): the icons' size in the
