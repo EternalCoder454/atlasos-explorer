@@ -54,7 +54,7 @@ constexpr int UsageRefreshMs = 30000;
 constexpr int PendingMs = 60000;
 // The Trash's size is waited for this long before the question is asked.
 constexpr int TrashSizeMs = 6000;
-// Folders pinned from one drop at most.
+// A drop of more than this many items is taken for files to move, not folders to pin.
 constexpr int MaxPinsPerDrop = 32;
 
 QString clean(const QString &s)
@@ -70,7 +70,7 @@ bool diskLocal(const QUrl &u)
 // A URL as places compare them: no trailing slash, no "..".
 QUrl normalized(const QUrl &u)
 {
-    QUrl n = u.adjusted(QUrl::NormalizePathSegments | QUrl::StripTrailingSlash | QUrl::RemoveUserInfo);
+    QUrl n = u.adjusted(QUrl::NormalizePathSegments | QUrl::StripTrailingSlash | QUrl::RemovePassword);
     if (n.isLocalFile() && n.path().isEmpty()) {
         n.setPath(QStringLiteral("/"));
     }
@@ -121,33 +121,30 @@ PlacesLogic::PlacesLogic(QObject *parent)
     // Setup and teardown report through here; a drive that answers only by
     // changing (the model's data changes) is handled by checkPending().
     connect(m_src, &KFilePlacesModel::setupDone, this, [this](const QModelIndex &index, bool success) {
-        if (!success && m_pending.active && !m_pending.unmount && m_pending.key == keyAt(index.row())) {
-            emit message(tr("Couldn't mount %1.").arg(m_pending.name));
-            m_pending = {};
+        const auto it = m_pending.constFind(keyAt(index.row()));
+        if (!success && it != m_pending.constEnd() && !it->unmount) {
+            if (!quietAfterError()) {
+                emit message(tr("Couldn't mount %1.").arg(it->name));
+            }
+            m_pending.erase(it);
         }
         rebuild();
     });
     connect(m_src, &KFilePlacesModel::teardownDone, this, [this](const QModelIndex &index, Solid::ErrorType error, const QVariant &data) {
-        if (error != Solid::NoError && m_pending.active && m_pending.unmount && m_pending.key == keyAt(index.row())) {
-            const QString why = clean(data.toString());
-            emit message(why.isEmpty() ? tr("Couldn't unmount %1.").arg(m_pending.name) : tr("Couldn't unmount %1: %2").arg(m_pending.name, why));
-            m_pending = {};
+        const auto it = m_pending.constFind(keyAt(index.row()));
+        if (error != Solid::NoError && it != m_pending.constEnd() && it->unmount) {
+            if (!quietAfterError()) {
+                const QString why = clean(data.toString());
+                emit message(why.isEmpty() ? tr("Couldn't unmount %1.").arg(it->name) : tr("Couldn't unmount %1: %2").arg(it->name, why));
+            }
+            m_pending.erase(it);
         }
         rebuild();
     });
     connect(m_src, &KFilePlacesModel::errorMessage, this, [this](const QString &text) {
         if (!text.isEmpty()) {
             emit message(clean(text));
-        }
-    });
-
-    m_pendingTimer.setSingleShot(true);
-    m_pendingTimer.setInterval(PendingMs);
-    connect(&m_pendingTimer, &QTimer::timeout, this, [this] {
-        if (m_pending.active) {
-            emit message(m_pending.unmount ? tr("Couldn't unmount %1.").arg(m_pending.name) : tr("Couldn't mount %1.").arg(m_pending.name));
-            m_pending = {};
-            scheduleRebuild();
+            m_errorAge.start();
         }
     });
 
@@ -266,9 +263,20 @@ int PlacesLogic::rowOf(const QString &key) const
     return -1;
 }
 
+// The place's row in KIO's model now. The row noted at the last rebuild can
+// be stale (a drive was plugged in since), so it is checked against the key
+// and looked up again if it moved. Invalid when the place is gone.
 QModelIndex PlacesLogic::indexOf(const PlaceEntry &e) const
 {
-    return m_src->index(e.sourceRow, 0);
+    if (keyAt(e.sourceRow) == e.key) {
+        return m_src->index(e.sourceRow, 0);
+    }
+    for (int i = 0; i < m_src->rowCount(); ++i) {
+        if (keyAt(i) == e.key) {
+            return m_src->index(i, 0);
+        }
+    }
+    return {};
 }
 
 void PlacesLogic::rebuild()
@@ -351,6 +359,10 @@ void PlacesLogic::rebuild()
         m_hiddenCount = hidden;
         emit hiddenCountChanged();
     }
+    // With nothing left hidden the toggle is gone: it must not stay on.
+    if (hidden == 0 && m_showHidden) {
+        setShowHidden(false);
+    }
     const bool changed = out != m_entries;
     if (changed) {
         m_entries = out;
@@ -369,30 +381,56 @@ void PlacesLogic::rebuild()
 
 // A mount or unmount the user asked for has finished when the drive's state
 // has changed (the signals Solid sends are not sent by every backend).
+// A mount or unmount the user asked for has finished when the drive's state
+// has changed (the signals Solid sends are not sent by every backend).
 void PlacesLogic::checkPending()
 {
-    if (!m_pending.active) {
-        return;
+    const QStringList keys = m_pending.keys();
+    for (const QString &key : keys) {
+        const Pending p = m_pending.value(key);
+        const int row = rowOf(key);
+        if (row < 0) {
+            // The drive was taken out meanwhile.
+            m_pending.remove(key);
+            continue;
+        }
+        const PlaceEntry &e = m_entries.at(row);
+        if (e.busy) {
+            continue;
+        }
+        if (!p.unmount && e.mounted && e.url.isValid()) {
+            m_pending.remove(key);
+            emit openRequested(e.url, p.newTab);
+        } else if (p.unmount && !e.mounted) {
+            m_pending.remove(key);
+            emit message(rustPlacesText(5, p.name, QString(), quint64(p.kind)));
+        }
     }
-    const int row = rowOf(m_pending.key);
-    if (row < 0) {
-        // The drive was taken out meanwhile.
-        m_pending = {};
-        return;
-    }
-    const PlaceEntry &e = m_entries.at(row);
-    if (e.busy) {
-        return;
-    }
-    if (!m_pending.unmount && e.mounted && e.url.isValid()) {
-        const Pending p = m_pending;
-        m_pending = {};
-        emit openRequested(e.url, p.newTab);
-    } else if (m_pending.unmount && !e.mounted) {
-        const Pending p = m_pending;
-        m_pending = {};
-        emit message(rustPlacesText(5, p.name, QString(), quint64(p.kind)));
-    }
+}
+
+bool PlacesLogic::quietAfterError() const
+{
+    return m_errorAge.isValid() && m_errorAge.elapsed() < 1000;
+}
+
+// Remembers a mount or unmount, and gives up on it after a while.
+void PlacesLogic::addPending(const Pending &p)
+{
+    Pending q = p;
+    q.serial = ++m_pendingSerial;
+    m_pending.insert(q.key, q);
+    QPointer<PlacesLogic> self(this);
+    QTimer::singleShot(PendingMs, this, [self, key = q.key, serial = q.serial] {
+        if (!self) {
+            return;
+        }
+        const auto it = self->m_pending.constFind(key);
+        if (it != self->m_pending.constEnd() && it->serial == serial) {
+            emit self->message(it->unmount ? tr("Couldn't unmount %1.").arg(it->name) : tr("Couldn't mount %1.").arg(it->name));
+            self->m_pending.erase(it);
+            self->scheduleRebuild();
+        }
+    });
 }
 
 void PlacesLogic::refreshUsage()
@@ -472,9 +510,11 @@ void PlacesLogic::open(const QString &key, bool newTab)
         if (e.busy) {
             return;
         }
-        m_pending = {key, newTab, true, false, e.kind, e.text};
-        m_pendingTimer.start();
-        m_src->requestSetup(indexOf(e));
+        addPending({key, newTab, 0, false, e.kind, e.text});
+        const QModelIndex idx = indexOf(e);
+        if (idx.isValid()) {
+            m_src->requestSetup(idx);
+        }
         // A backend that answers at once has changed the drive already.
         scheduleRebuild();
         return;
@@ -496,9 +536,11 @@ void PlacesLogic::unmount(const QString &key)
     if (!e.device || !e.mounted || e.busy) {
         return;
     }
-    m_pending = {key, false, true, true, e.kind, e.text};
-    m_pendingTimer.start();
-    m_src->requestTeardown(indexOf(e));
+    addPending({key, false, 0, true, e.kind, e.text});
+    const QModelIndex idx = indexOf(e);
+    if (idx.isValid()) {
+        m_src->requestTeardown(idx);
+    }
     scheduleRebuild();
 }
 
@@ -514,22 +556,26 @@ void PlacesLogic::rename(const QString &key, const QString &text)
         return;
     }
     const QModelIndex idx = indexOf(e);
-    m_src->editPlace(idx, name, e.rawUrl, e.iconName);
+    if (idx.isValid()) {
+        m_src->editPlace(idx, name, e.rawUrl, e.iconName);
+    }
 }
 
 void PlacesLogic::setHidden(const QString &key, bool hidden)
 {
     const int row = rowOf(key);
-    if (row >= 0) {
-        m_src->setPlaceHidden(indexOf(m_entries.at(row)), hidden);
+    const QModelIndex idx = row >= 0 ? indexOf(m_entries.at(row)) : QModelIndex();
+    if (idx.isValid()) {
+        m_src->setPlaceHidden(idx, hidden);
     }
 }
 
 void PlacesLogic::remove(const QString &key)
 {
     const int row = rowOf(key);
-    if (row >= 0 && (m_entries.at(row).actions & ActRemove)) {
-        m_src->removePlace(indexOf(m_entries.at(row)));
+    const QModelIndex idx = row >= 0 && (m_entries.at(row).actions & ActRemove) ? indexOf(m_entries.at(row)) : QModelIndex();
+    if (idx.isValid()) {
+        m_src->removePlace(idx);
     }
 }
 
@@ -537,12 +583,19 @@ void PlacesLogic::moveTo(const QString &src, const QString &dst)
 {
     const int a = rowOf(src);
     const int b = rowOf(dst);
-    if (a < 0 || b < 0 || !(m_entries.at(a).actions & ActReorder)) {
+    // Only places that sit in the list by the user's order take part (not a
+    // drive or the Trash, whose rows are Solid's).
+    if (a < 0 || b < 0 || !(m_entries.at(a).actions & ActReorder) || !(m_entries.at(b).actions & ActReorder)) {
         return;
     }
-    const int64_t to = telamon_places_reorder_row(size_t(m_entries.at(a).sourceRow), size_t(m_entries.at(b).sourceRow));
-    if (to >= 0) {
-        m_src->movePlace(m_entries.at(a).sourceRow, int(to));
+    const QModelIndex from = indexOf(m_entries.at(a));
+    const QModelIndex to = indexOf(m_entries.at(b));
+    if (!from.isValid() || !to.isValid()) {
+        return;
+    }
+    const int64_t row = telamon_places_reorder_row(size_t(from.row()), size_t(to.row()));
+    if (row >= 0) {
+        m_src->movePlace(from.row(), int(row));
     }
 }
 
@@ -638,8 +691,17 @@ void PlacesLogic::handleDrop(const QList<QUrl> &urls, const QString &target, boo
         emit trashDropped(urls);
         return;
     }
+    // A big drop is files being moved: every one goes, none is looked at.
+    if (urls.size() > MaxPinsPerDrop) {
+        if ((t.actions & ActAcceptsFiles) && t.url.isValid()) {
+            emit filesDropped(urls, t.url, copy);
+        } else {
+            emit message(tr("Drop a folder here to pin it. Files can't go into %1.").arg(t.text));
+        }
+        return;
+    }
     auto state = std::make_shared<DropState>();
-    state->left = int(qMin(urls.size(), qsizetype(MaxPinsPerDrop)));
+    state->left = int(urls.size());
     QPointer<PlacesLogic> self(this);
     for (int i = 0; i < state->left; ++i) {
         const QUrl url = urls.at(i);

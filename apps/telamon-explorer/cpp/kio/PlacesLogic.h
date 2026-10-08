@@ -131,6 +131,7 @@ private:
     void refreshUsage();
     void updateTrashCount();
     int rowOf(const QString &key) const;
+    bool quietAfterError() const;
     QModelIndex indexOf(const PlaceEntry &e) const;
     QString keyAt(int sourceRow) const;
     void pinDirs(const QList<QUrl> &dirs, const QString &afterKey);
@@ -143,11 +144,13 @@ private:
     struct Pending {
         QString key;
         bool newTab = false;
-        bool active = false;
+        int serial = 0;
         bool unmount = false;
         int kind = 0;
         QString name;
     };
+
+    void addPending(const Pending &p);
 
     KFilePlacesModel *m_src = nullptr;
     KCoreDirLister *m_trash = nullptr;
@@ -157,8 +160,12 @@ private:
     QTimer m_rebuildTimer;
     QTimer m_usageTimer;
     QTimer m_trashTimer;
-    QTimer m_pendingTimer;
-    Pending m_pending;
+    // Mounts and unmounts asked for and not finished, by place key.
+    QHash<QString, Pending> m_pending;
+    int m_pendingSerial = 0;
+    // When the model last said why something failed (it also says it through
+    // setupDone/teardownDone; one toast is enough).
+    QElapsedTimer m_errorAge;
     bool m_showHidden = false;
     int m_hiddenCount = 0;
     int m_trashCount = 0;
