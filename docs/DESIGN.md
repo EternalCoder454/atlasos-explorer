@@ -934,17 +934,19 @@ not set). `org.freedesktop.FileManager1` is unchanged: a still-running
 available to Qt, so none there) and, on Wayland, an `activation_token`
 (asked of KWaylandExtras, waited for half a second at most). A call that
 returns a job passes `show_progress=false`, so the job shows in Explorer's
-queue; a call that opens one of Archive's dialogs leaves it on, or nothing
-would show the job.
+queue; Archive's dialogs and questions come up in its own window regardless.
 
 - Extract Here: `ExtractHere(as archives, a{sv}) -> o`, a job
 - Compress to ZIP: `Compress(as files, "zip", "", a{sv}) -> o` (empty
   destination: `<name>.zip` beside the first item, `Archive.zip` for
   several, ` (2)` on a clash), a job
-- Extract To…: `ExtractAll(as archives, a{sv})` (Archive's own dialog, no
-  picker of Explorer's) and Compress…: `CompressDialog(as files, a{sv})`.
-  Both return nothing, so there is no job to show and no result to select;
-  Archive's own progress window stays on.
+- Extract To…: `ExtractAll(as archives, a{sv}) -> o` (Archive's own dialog, no
+  picker of Explorer's) and Compress…: `CompressDialog(as files, a{sv}) -> o`.
+  Since Archive 0.3.0 both return a job that waits in `waiting-for-user`
+  while the dialog is open (Cancel in the dialog ends it as `cancelled`) and
+  runs once it is answered, so they are followed like the others: in the
+  queue, and the result selected. They pass `show_progress=false` too; the
+  dialog and any question still come up in Archive's window.
 - Which files get the extract items: the `MimeType=` list of
   `net.eterneon.telamon.archive.desktop` (then the old
   `net.eterneon.atlas.archive.desktop`), read with KDesktopFile; an item
@@ -969,9 +971,13 @@ would show the job.
   Archive could not be started.".
 - Not done: a drop carrying `application/x-telamon-archive-entries` (or the
   old `x-atlas-` type) on a folder, tab, breadcrumb segment or place, for
-  `ExtractEntries(s archive, as entry_ids, s folder, a{sv}) -> o`: Archive's
-  DESIGN doesn't give the type's payload yet. Drops of `text/uri-list` work as
-  for any files.
+  `ExtractEntries(s archive, as entry_ids, s folder, a{sv}) -> o`. Archive
+  0.3.0 specifies the payload (its DESIGN, "Drag-out and `ExtractEntries`"):
+  UTF-8 JSON `{"version":1,"archive":"file:///…/a.zip","entries":["12-1a2b3c4d",…]}`,
+  the `archive` URI and the tokens passed to `ExtractEntries` unchanged with
+  the dropped-on folder's URI. Files doesn't accept the type yet (a later
+  wave: a `DropArea` on the views, tabs, breadcrumb and places that calls it
+  as a job). Drops of `text/uri-list` work as for any files.
 - Double-clicking an archive opens it as a folder in Files (below); "Open
   With" still gives Archive's window.
 - Archive asks its own questions (passwords, conflicts with the same
