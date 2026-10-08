@@ -4,7 +4,7 @@
 
 use atlas_explorer_core::display_name;
 use atlas_explorer_core::sort::{Column, SortRow, name_key, sort_permutation};
-use atlas_explorer_core::{address, location, names, tabs};
+use atlas_explorer_core::{address, location, names, places, tabs};
 
 /// One row for `telamon_sort_permutation`; the C++ twin is in FolderModel.cpp.
 #[repr(C)]
@@ -377,6 +377,149 @@ pub extern "C" fn telamon_location_limit(which: u32) -> usize {
     }
 }
 
+/// The section a place is listed in (see `places::Section`): `group` is
+/// KFilePlacesModel's group number and `scheme` the scheme of its URL.
+///
+/// # Safety
+/// `scheme` points to `len` readable bytes (or is null with `len` 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_places_section(group: i32, scheme: *const u8, len: usize) -> u32 {
+    // SAFETY: forwarded from this function's contract.
+    let scheme = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
+    places::section_for(group, &scheme) as u32
+}
+
+/// What a place is (see `places::Kind`).
+///
+/// # Safety
+/// `scheme` points to `len` readable bytes (or is null with `len` 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_places_kind(
+    section: u32,
+    scheme: *const u8,
+    len: usize,
+    flags: u32,
+) -> u32 {
+    // SAFETY: forwarded from this function's contract.
+    let scheme = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
+    let section = match section {
+        0 => places::Section::Favourites,
+        1 => places::Section::Drives,
+        2 => places::Section::Network,
+        3 => places::Section::Trash,
+        _ => places::Section::Unlisted,
+    };
+    places::kind_of(
+        section,
+        &scheme,
+        flags & 1 != 0,
+        flags & 2 != 0,
+        flags & 4 != 0,
+        flags & 8 != 0,
+    ) as u32
+}
+
+fn kind_from(n: u32) -> places::Kind {
+    use places::Kind::*;
+    [
+        Folder, Recent, Network, Server, Trash, Drive, Removable, Phone, Other,
+    ]
+    .get(n as usize)
+    .copied()
+    .unwrap_or(Other)
+}
+
+/// The actions a place's menu offers: bits `places::ACT_*`. `flags`: 1 the
+/// place is hidden, 2 a drive is mounted, 4 the Trash is empty, 8 Telamon
+/// Disks is installed.
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_places_actions(kind: u32, flags: u32) -> u32 {
+    places::actions(
+        kind_from(kind),
+        flags & 1 != 0,
+        flags & 2 != 0,
+        flags & 4 != 0,
+        flags & 8 != 0,
+    )
+}
+
+/// The `row` for `KFilePlacesModel::movePlace` when place `src` is dropped
+/// on `dst`; -1 for a drop that changes nothing.
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_places_reorder_row(src: usize, dst: usize) -> i64 {
+    places::reorder_row(src, dst).map_or(-1, |r| r as i64)
+}
+
+/// Whether a folder with this URL scheme can be pinned.
+///
+/// # Safety
+/// `scheme` points to `len` readable bytes (or is null with `len` 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_places_pinnable(scheme: *const u8, len: usize) -> bool {
+    // SAFETY: forwarded from this function's contract.
+    let scheme = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
+    places::pinnable(&scheme)
+}
+
+/// How full a disk is, in whole percent; -1 when not known.
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_places_usage_percent(total: i64, free: i64) -> i32 {
+    places::usage_percent(total, free)
+}
+
+/// A sidebar text (UTF-8). `which`: 0 a place's name as typed (`a`; empty
+/// when refused), 1 the name for a new pin (`a` the folder's URL, `b` the
+/// home folder), 2 what the Trash shows beside its name (`n` items), 3 the
+/// Trash's tooltip (`n`), 4 the Empty Trash question (`n` items, `a` the
+/// size as written), 5 what is said after a drive is unmounted (`n` the
+/// place's kind, `a` its name), 6 the desktop file IDs of Telamon Disks and
+/// 7 its program names (one per line). Returns the length of the output;
+/// more than `cap` means it did not fit (nothing was written).
+///
+/// # Safety
+/// Each pointer pair covers its length (or is null with length 0); `out`
+/// points to `cap` writable bytes (or is null).
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_places_text(
+    which: u32,
+    a: *const u8,
+    a_len: usize,
+    b: *const u8,
+    b_len: usize,
+    n: u64,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: forwarded from this function's contract.
+    let (a, b) = unsafe {
+        (
+            String::from_utf8_lossy(bytes(a, a_len)).into_owned(),
+            String::from_utf8_lossy(bytes(b, b_len)).into_owned(),
+        )
+    };
+    let n_items = usize::try_from(n).unwrap_or(usize::MAX);
+    let text = match which {
+        0 => places::clean_label(&a).unwrap_or_default(),
+        1 => places::pin_label(&a, &b),
+        2 => places::trash_value(n_items),
+        3 => places::trash_tip(n_items),
+        4 => places::empty_trash_text(n_items, &a),
+        5 => places::unmounted_text(kind_from(n as u32), &a),
+        6 => places::DISKS_DESKTOP_IDS.join("\n"),
+        7 => places::DISKS_PROGRAMS.join("\n"),
+        _ => String::new(),
+    };
+    // SAFETY: `out` as promised above.
+    unsafe { put(text.as_bytes(), out, cap) }
+}
+
+/// The disk usage percentage at which a drive is shown as nearly full.
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_places_nearly_full() -> i32 {
+    places::NEARLY_FULL_PERCENT
+}
+
 /// The tab to show after the tab at `closed` of `len` tabs is removed
 /// (`current` is the one shown), or -1 when none is left or an index is out
 /// of range. See `tabs::after_close`.
@@ -714,6 +857,85 @@ mod tests {
         assert!(!unsafe {
             telamon_sort_permutation(rows.as_ptr(), 2, 9, false, true, out.as_mut_ptr())
         });
+    }
+
+    fn places_text(which: u32, a: &str, b: &str, n: u64) -> String {
+        let mut buf = [0u8; 512];
+        let len = unsafe {
+            telamon_places_text(
+                which,
+                a.as_ptr(),
+                a.len(),
+                b.as_ptr(),
+                b.len(),
+                n,
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+        assert!(len <= buf.len());
+        String::from_utf8(buf[..len].to_vec()).unwrap()
+    }
+
+    #[test]
+    fn places_report_through_the_abi() {
+        let sec = |g: i32, s: &str| unsafe { telamon_places_section(g, s.as_ptr(), s.len()) };
+        assert_eq!(sec(0, "file"), 0);
+        assert_eq!(sec(5, "file"), 1);
+        assert_eq!(sec(1, "remote"), 2);
+        assert_eq!(sec(0, "trash"), 3);
+        assert_eq!(sec(3, "baloosearch"), 4);
+        // Kind: flags 1 device, 2 storage, 4 removable, 8 player.
+        let kind =
+            |sec: u32, s: &str, f: u32| unsafe { telamon_places_kind(sec, s.as_ptr(), s.len(), f) };
+        assert_eq!(kind(0, "file", 0), places::Kind::Folder as u32);
+        assert_eq!(kind(1, "file", 1 | 2 | 4), places::Kind::Removable as u32);
+        assert_eq!(kind(1, "mtp", 1 | 8), places::Kind::Phone as u32);
+        assert_eq!(kind(3, "trash", 0), places::Kind::Trash as u32);
+        // Actions: flags 1 hidden, 2 mounted, 4 trash empty, 8 Disks installed.
+        let removable = places::Kind::Removable as u32;
+        let a = telamon_places_actions(removable, 2 | 8);
+        assert!(a & places::ACT_UNMOUNT != 0 && a & places::ACT_OPEN_IN_DISKS != 0);
+        assert!(telamon_places_actions(removable, 2) & places::ACT_OPEN_IN_DISKS == 0);
+        assert!(telamon_places_actions(99, 0) & places::ACT_NEW_TAB != 0);
+        assert_eq!(telamon_places_reorder_row(0, 3), 4);
+        assert_eq!(telamon_places_reorder_row(2, 2), -1);
+        assert!(unsafe { telamon_places_pinnable(b"sftp".as_ptr(), 4) });
+        assert!(!unsafe { telamon_places_pinnable(b"trash".as_ptr(), 5) });
+        assert!(!unsafe { telamon_places_pinnable(std::ptr::null(), 0) });
+        assert_eq!(telamon_places_usage_percent(200, 50), 75);
+        assert_eq!(telamon_places_usage_percent(0, 0), -1);
+        assert_eq!(telamon_places_nearly_full(), places::NEARLY_FULL_PERCENT);
+
+        assert_eq!(places_text(0, "  Work \u{7}", "", 0), "Work");
+        assert_eq!(places_text(0, " ", "", 0), "");
+        assert_eq!(places_text(1, "file:///home/u/Pics", "/home/u", 0), "Pics");
+        assert_eq!(places_text(2, "", "", 7), "7");
+        assert_eq!(places_text(3, "", "", 0), "Trash is empty");
+        assert!(places_text(4, "4.2 MiB", "", 12).contains("12 items (4.2 MiB)"));
+        assert_eq!(
+            places_text(5, "Stick", "", places::Kind::Removable as u64),
+            "Stick: Safe to remove"
+        );
+        assert!(places_text(6, "", "", 0).contains("telamon.disks.desktop"));
+        assert!(places_text(7, "", "", 0).starts_with("telamon-disks"));
+        assert_eq!(places_text(99, "", "", 0), "");
+        // Too small a buffer: the size is reported, nothing is written.
+        let mut tiny = [0u8; 2];
+        let n = unsafe {
+            telamon_places_text(
+                3,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                tiny.as_mut_ptr(),
+                2,
+            )
+        };
+        assert_eq!(n, "Trash is empty".len());
+        assert_eq!(tiny, [0u8; 2]);
     }
 
     #[test]

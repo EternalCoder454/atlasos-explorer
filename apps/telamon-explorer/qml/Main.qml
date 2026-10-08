@@ -36,16 +36,6 @@ TelamonWindow {
 
     // The folder shown (FolderView.url follows redirects and removed folders).
     readonly property url currentUrl: page ? page.location : Qt.url("")
-    // The place whose URL is the folder shown, if any.
-    readonly property string place: {
-        const cur = currentUrl.toString();
-        for (const p of places) {
-            if (StandardPlaces.place(p.key).toString() === cur) {
-                return p.key;
-            }
-        }
-        return "";
-    }
     // What the last launch asked for that Explorer refused, shown over the view.
     property string launchText
     // Why the address typed in the path bar was refused, shown under it.
@@ -114,6 +104,215 @@ TelamonWindow {
         FilesTabPage {
             actions: fileActions
         }
+    }
+
+    // ---- Places ----
+    // The sidebar's sections, from KIO's places (user-places.xbel, drives from
+    // Solid); PlacesLogic does what the sidebar asks of them.
+    PlacesModel {
+        id: favouritesModel
+        section: PlacesLogic.Favourites
+    }
+    PlacesModel {
+        id: drivesModel
+        section: PlacesLogic.Drives
+    }
+    PlacesModel {
+        id: networkModel
+        section: PlacesLogic.Network
+    }
+    PlacesModel {
+        id: trashModel
+        section: PlacesLogic.Trash
+    }
+
+    // A place in the sidebar: its menu opens at the pointer.
+    component SidebarPlace: PlaceItem {
+        id: me
+        Layout.fillWidth: true
+        current: root.currentUrl
+        onMenuRequested: pos => root.showPlaceMenu(me, me.mapToItem(sidebar, pos.x, pos.y))
+    }
+
+    component SectionLabel: Text {
+        Layout.fillWidth: true
+        Layout.topMargin: Kirigami.Units.smallSpacing
+        leftPadding: TelamonStyle.spacingLarge
+        font.family: TelamonStyle.fontFamily
+        font.pointSize: TelamonStyle.fontSizeCaption
+        font.weight: Font.Medium
+        textFormat: Text.PlainText
+        color: TelamonStyle.textMuted
+    }
+
+    Connections {
+        target: PlacesLogic
+        function onOpenRequested(url, newTab) {
+            if (newTab) {
+                root.openInNewTab(url);
+            } else {
+                root.navigate(url);
+            }
+        }
+        function onMessage(text) {
+            root.toast(text);
+        }
+        function onEmptyTrashAsk(count, text) {
+            emptyTrashDialog.text = text;
+            emptyTrashDialog.open();
+        }
+        function onFilesDropped(files, destination, copy) {
+            fileActions.dropTo(files, destination, copy);
+        }
+        function onTrashDropped(urls) {
+            fileActions.trash(urls);
+        }
+    }
+
+    // Something dropped on a place of the sidebar: a pin dragged there takes
+    // its position; anything else is for PlacesLogic (a folder is pinned,
+    // files go into the folder, the Trash trashes).
+    function dropOnPlace(entry, drop) {
+        if (entry.placeKey === undefined) {
+            return;
+        }
+        if (drop.source && drop.source.placeKey !== undefined) {
+            PlacesLogic.moveTo(drop.source.placeKey, entry.placeKey);
+            return;
+        }
+        if (!drop.hasUrls) {
+            return;
+        }
+        // Moves unless Ctrl is held, as on the path bar. The move is made
+        // here, so the source is told it was a copy and leaves the files alone.
+        const canMove = (drop.supportedActions & Qt.MoveAction) !== 0;
+        const canCopy = (drop.supportedActions & Qt.CopyAction) !== 0;
+        const copy = canCopy && (!canMove || fileActions.copyKeyHeld());
+        drop.accept(Qt.CopyAction);
+        PlacesLogic.handleDrop(drop.urls, entry.placeKey, copy);
+    }
+    function showPlaceMenu(entry, pos) {
+        if (entry.placeKey === undefined) {
+            return;
+        }
+        placeMenu.key = entry.placeKey;
+        placeMenu.info = PlacesLogic.menuFor(entry.placeKey);
+        // After the click that asked for it is over: a popup opened while its
+        // own button release is delivered closes with it.
+        Qt.callLater(() => placeMenu.popup(sidebar, pos.x, pos.y));
+    }
+
+    // The menu of a place (right click, or the Menu key on it).
+    ContextMenu {
+        id: placeMenu
+        property string key
+        property var info: ({})
+        ContextMenuItem {
+            text: qsTr("Open")
+            visible: placeMenu.info.open === true
+            onTriggered: PlacesLogic.open(placeMenu.key, false)
+        }
+        ContextMenuItem {
+            text: qsTr("Open in New Tab")
+            visible: placeMenu.info.newTab === true
+            onTriggered: PlacesLogic.open(placeMenu.key, true)
+        }
+        ContextMenuItem {
+            text: qsTr("Mount")
+            visible: placeMenu.info.mount === true
+            onTriggered: PlacesLogic.open(placeMenu.key, false)
+        }
+        ContextMenuItem {
+            text: placeMenu.info.removable === true ? qsTr("Eject") : qsTr("Unmount")
+            visible: placeMenu.info.unmount === true
+            onTriggered: PlacesLogic.unmount(placeMenu.key)
+        }
+        ContextMenuItem {
+            text: qsTr("Open in Disks")
+            visible: placeMenu.info.openInDisks === true
+            onTriggered: PlacesLogic.openInDisks(placeMenu.key)
+        }
+        ContextMenuItem {
+            text: qsTr("Empty Trash\u2026")
+            visible: placeMenu.info.kind === PlacesLogic.TrashPlace
+            enabled: placeMenu.info.emptyTrash === true
+            onTriggered: PlacesLogic.requestEmptyTrash()
+        }
+        ContextMenuSeparator {
+            visible: placeMenu.info.rename === true || placeMenu.info.hide === true || placeMenu.info.unhide === true || placeMenu.info.remove === true
+        }
+        ContextMenuItem {
+            text: qsTr("Rename\u2026")
+            visible: placeMenu.info.rename === true
+            onTriggered: renameDialog.openFor(placeMenu.key)
+        }
+        ContextMenuItem {
+            text: qsTr("Hide")
+            visible: placeMenu.info.hide === true
+            onTriggered: PlacesLogic.setHidden(placeMenu.key, true)
+        }
+        ContextMenuItem {
+            text: qsTr("Show in Sidebar")
+            visible: placeMenu.info.unhide === true
+            onTriggered: PlacesLogic.setHidden(placeMenu.key, false)
+        }
+        ContextMenuItem {
+            text: qsTr("Remove from Sidebar")
+            visible: placeMenu.info.remove === true
+            destructive: true
+            onTriggered: PlacesLogic.remove(placeMenu.key)
+        }
+    }
+
+    TelamonDialog {
+        id: renameDialog
+        property string key
+        title: qsTr("Rename Place")
+        preferredWidth: Kirigami.Units.gridUnit * 22
+        function openFor(placeKey) {
+            key = placeKey;
+            renameField.text = PlacesLogic.nameOf(placeKey);
+            open();
+        }
+        function commit() {
+            if (renameField.text.trim().length > 0) {
+                PlacesLogic.rename(key, renameField.text);
+                close();
+            }
+        }
+        onOpened: {
+            renameField.forceActiveFocus();
+            renameField.selectAll();
+        }
+        footerContent: [
+            SecondaryButton {
+                text: qsTr("Cancel")
+                onClicked: renameDialog.close()
+            },
+            PrimaryButton {
+                text: qsTr("Rename")
+                enabled: renameField.text.trim().length > 0
+                onClicked: renameDialog.commit()
+            }
+        ]
+        TelamonTextField {
+            id: renameField
+            Layout.fillWidth: true
+            maximumLength: 80
+            onAccepted: renameDialog.commit()
+        }
+    }
+
+    // Empty Trash asks first, naming how much goes. Cancel is the default.
+    ConfirmDialog {
+        id: emptyTrashDialog
+        title: qsTr("Empty Trash?")
+        acceptText: qsTr("Empty Trash")
+        rejectText: qsTr("Cancel")
+        destructive: true
+        defaultButton: "reject"
+        focusReject: true
+        onAccepted: PlacesLogic.emptyTrash()
     }
 
     // ---- Address ----
@@ -480,19 +679,6 @@ TelamonWindow {
     LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
     LayoutMirroring.childrenInherit: true
 
-    readonly property var places: [
-        { key: "home", text: qsTr("Home"), symbol: Symbols.Home },
-        { key: "recent", text: qsTr("Recent"), symbol: Symbols.History },
-        { key: "desktop", text: qsTr("Desktop"), symbol: Symbols.DesktopWindows },
-        { key: "documents", text: qsTr("Documents"), symbol: Symbols.Description },
-        { key: "downloads", text: qsTr("Downloads"), symbol: Symbols.Download },
-        { key: "pictures", text: qsTr("Pictures"), symbol: Symbols.Image },
-        { key: "music", text: qsTr("Music"), symbol: Symbols.MusicNote },
-        { key: "videos", text: qsTr("Videos"), symbol: Symbols.Movie },
-        { key: "network", text: qsTr("Network"), symbol: Symbols.Lan },
-        { key: "trash", text: qsTr("Trash"), symbol: Symbols.Delete }
-    ]
-
     Connections {
         target: root.backend
         function onOpen(locations, select, newWindow, split) {
@@ -651,32 +837,52 @@ TelamonWindow {
             Layout.preferredWidth: Kirigami.Units.gridUnit * 12.5
             padding: Kirigami.Units.largeSpacing
             spacing: 2
+            dropEnabled: true
+            onContextMenuRequested: (entry, pos) => root.showPlaceMenu(entry, pos)
+            onDropped: (entry, drop) => root.dropOnPlace(entry, drop)
 
             Repeater {
-                model: root.places
-                SidebarItem {
-                    id: placeItem
-                    required property var modelData
-                    Layout.fillWidth: true
-                    text: modelData.text
-                    symbol: modelData.symbol
-                    selected: root.place === modelData.key
-                    // Ctrl+click and Ctrl+Enter open a new tab, as does a middle click.
-                    onClicked: {
-                        const target = StandardPlaces.place(modelData.key);
-                        if (TabLogic.controlHeld()) {
-                            root.openInNewTab(target);
-                        } else {
-                            root.navigate(target);
-                        }
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        acceptedButtons: Qt.MiddleButton
-                        onClicked: root.openInNewTab(StandardPlaces.place(placeItem.modelData.key))
-                    }
-                }
+                model: favouritesModel
+                delegate: SidebarPlace {}
             }
+
+            SectionLabel {
+                visible: drivesRepeater.count > 0
+                text: qsTr("Drives")
+            }
+            Repeater {
+                id: drivesRepeater
+                model: drivesModel
+                delegate: SidebarPlace {}
+            }
+
+            SectionLabel {
+                visible: networkRepeater.count > 0
+                text: qsTr("Network")
+            }
+            Repeater {
+                id: networkRepeater
+                model: networkModel
+                delegate: SidebarPlace {}
+            }
+
+            // Places that were hidden come back from here.
+            SidebarItem {
+                Layout.fillWidth: true
+                visible: PlacesLogic.hiddenCount > 0
+                text: PlacesLogic.showHidden ? qsTr("Hide Hidden Places") : qsTr("Show Hidden Places (%1)").arg(PlacesLogic.hiddenCount)
+                symbol: PlacesLogic.showHidden ? Symbols.VisibilityOff : Symbols.Visibility
+                opacity: 0.75
+                onClicked: PlacesLogic.showHidden = !PlacesLogic.showHidden
+            }
+
+            // The Trash stays under the list.
+            footer: [
+                Repeater {
+                    model: trashModel
+                    delegate: SidebarPlace {}
+                }
+            ]
         }
 
         Rectangle {

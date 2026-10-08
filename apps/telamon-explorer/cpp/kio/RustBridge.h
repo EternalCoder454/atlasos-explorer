@@ -43,6 +43,14 @@ int64_t telamon_tabs_jump(size_t len, size_t n);
 size_t telamon_tabs_insert_after_opener(size_t len, size_t opener, size_t run);
 size_t telamon_tabs_reopen_index(size_t len, size_t original);
 size_t telamon_tabs_limit(uint32_t which);
+uint32_t telamon_places_section(int32_t group, const uint8_t *scheme, size_t len);
+uint32_t telamon_places_kind(uint32_t section, const uint8_t *scheme, size_t len, uint32_t flags);
+uint32_t telamon_places_actions(uint32_t kind, uint32_t flags);
+int64_t telamon_places_reorder_row(size_t src, size_t dst);
+bool telamon_places_pinnable(const uint8_t *scheme, size_t len);
+int32_t telamon_places_usage_percent(int64_t total, int64_t free);
+size_t telamon_places_text(uint32_t which, const uint8_t *a, size_t aLen, const uint8_t *b, size_t bLen, uint64_t n, uint8_t *out, size_t cap);
+int32_t telamon_places_nearly_full();
 size_t telamon_tabs_restore(const uint8_t *saved, size_t len, size_t current, uint8_t *out, size_t cap, size_t *currentOut);
 }
 
@@ -209,4 +217,41 @@ inline QString rustCompletionText(const QString &typed, const QString &name, con
         n = call();
     }
     return QString::fromUtf8(buf.constData(), qsizetype(qMin(n, size_t(buf.size()))));
+}
+
+// ---- Sidebar places (core `places` module) ----
+
+// A sidebar text from the core (see telamon_places_text for `which`).
+inline QString rustPlacesText(uint32_t which, const QString &a = QString(), const QString &b = QString(), quint64 n = 0)
+{
+    const QByteArray ab = a.toUtf8(), bb = b.toUtf8();
+    QByteArray buf(256, 0);
+    auto call = [&] {
+        return telamon_places_text(which, reinterpret_cast<const uint8_t *>(ab.constData()), size_t(ab.size()), reinterpret_cast<const uint8_t *>(bb.constData()),
+                                 size_t(bb.size()), n, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+}
+
+inline uint32_t rustPlacesSection(int group, const QString &scheme)
+{
+    const QByteArray s = scheme.toUtf8();
+    return telamon_places_section(group, reinterpret_cast<const uint8_t *>(s.constData()), size_t(s.size()));
+}
+
+inline uint32_t rustPlacesKind(uint32_t section, const QString &scheme, uint32_t flags)
+{
+    const QByteArray s = scheme.toUtf8();
+    return telamon_places_kind(section, reinterpret_cast<const uint8_t *>(s.constData()), size_t(s.size()), flags);
+}
+
+inline bool rustPlacesPinnable(const QString &scheme)
+{
+    const QByteArray s = scheme.toUtf8();
+    return telamon_places_pinnable(reinterpret_cast<const uint8_t *>(s.constData()), size_t(s.size()));
 }

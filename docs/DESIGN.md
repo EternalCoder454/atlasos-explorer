@@ -15,15 +15,15 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 and 2 (tabs; the path bar, history menus and status line)
+0.2.0 plus waves 1 to 3 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
 text field with completion, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
-with View and Sort menus, ten fixed sidebar places, KIO jobs with KIO's own
+with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs with KIO's own
 dialogs, `FileManager1`, the launch parser and the index service. Everything
 else (search field, preview and details panes, Quick
 Look, the operations popover and queue wiring, Columns and Gallery
-views, split view, drives and pins) is design, not behaviour. Sections that
+views, split view) is design, not behaviour. Sections that
 have been built say so in a "Built" line.
 
 ## Scope
@@ -212,6 +212,53 @@ Explorer replaces Dolphin completely.
   Network (`network:/`, saved servers, "Connect to Server…"), then Trash
   (with its item count). The sidebar shares `user-places.xbel` with every KDE
   file dialog, so pins show in Open and Save dialogs too.
+
+  **Built (wave 3):** `PlacesLogic` (`cpp/kio/PlacesLogic.*`) owns one
+  `KFilePlacesModel`; `PlacesModel` hands one section of it to a `Repeater`
+  and `qml/PlaceItem.qml` draws a place. What decides is in the core
+  (`atlas_explorer_core::places`: the section of a place from KFilePlacesModel's
+  group, its kind, the actions its menu offers, the texts). Sections: the
+  places (Home, Recent, the standard folders, pins), **Drives** (internal
+  disks, USB drives, phones), **Network**, and the Trash pinned under the list
+  as the sidebar's footer. The dated "Modified Today" lists and searches need an
+  index Files doesn't have and are not listed; tags wait for their own wave.
+  A first run (no `user-places.xbel` yet) adds Recent and the standard folders
+  to the file KDE creates (Home, Trash, Network), so the sidebar starts as it
+  always did and the same list shows in Open and Save dialogs; a file that
+  exists is never added to. Network opens `network:/`, not KDE's `remote:/`.
+  - **Pins:** "Pin to Sidebar" in a folder's context menu, "Pin This Folder to Sidebar" in the background menu, or a folder dragged from a view onto the sidebar, is pinned (KIO
+    `stat` says it is a folder; only schemes that can be opened again, `file`,
+    `smb`, `sftp`, `ftp(s)`, `webdav(s)`, `nfs`, `fish`) after the place it was
+    dropped on; one that is a place already is not added twice (a hidden one
+    comes back). Files dropped on a folder place move there (copy with Ctrl);
+    anything dropped on the Trash is trashed. Pins and the standard folders are
+    dragged by a copy of their row to a new position (`movePlace`, within the
+    group). Right click (or the Menu key): Open, Open in New Tab, Rename…,
+    Hide, Remove from Sidebar; hidden places show again through "Show Hidden
+    Places" under the list (dimmed, "Show in Sidebar" in their menu).
+  - **Drives:** a drive that is not mounted is mounted when clicked and opens
+    when it is ready (the drive's state changing is what is waited for, as not
+    every Solid backend sends `setupDone`); a mounted USB drive has an eject
+    button that unmounts it and says "<name>: Safe to remove"; the menu of a
+    fixed disk says Unmount. A mounted disk shows a usage bar (QStorageInfo on
+    a worker, read again when the set of mounted disks changes and every 30 s)
+    that turns to the warning colour from 90 %, with "12 GiB free of 64 GiB"
+    as its tooltip. A phone (MTP) is a Solid portable media player: its place
+    is the `mtp:` URL KIO's worker lists, and copying from it is a normal copy.
+    KFilePlacesModel lists no gphoto2-only camera (there is no `camera:` worker
+    installed); a camera that speaks PTP/MTP shows as a phone.
+  - **Trash:** the count beside its name comes from a lister that follows
+    `trash:/`, so it moves when something is trashed or restored. "Empty
+    Trash…" measures the Trash (a KIO `DirectorySizeJob`, 6 s at most) and
+    asks "Permanently delete all 12 items (4.2 MiB) in the Trash? This can't be
+    undone." with Cancel as the default button.
+  - **Open in Disks** (drives only, never a phone or folder): shown when
+    Telamon Disks is installed, found by the desktop file
+    `net.eterneon.telamon.disks.desktop` (or the `atlas` name) or the program
+    `telamon-disks` (`atlas-disks`); checked when the menu opens. It calls
+    `ShowDevice(udisks path)` on the session bus (`net.eterneon.telamon.disks`,
+    then the `atlas` name; assumed names, to be agreed with Disks) and starts
+    the program if nobody answers.
 - **Views**, per tab, remembered per folder (in the settings file, not in
   hidden files dropped into folders):
   - Icons (sizes 48 to 256, thumbnails), List (compact, multi-column
@@ -451,7 +498,7 @@ not set). `org.freedesktop.FileManager1` is unchanged: a still-running
 |---|---|---|
 | Atlas Archive | `net.eterneon.atlas.archive`, interface `net.eterneon.atlas.Archive1` (agreed 2026-10-05; Archive's DESIGN.md is the source) | "Extract Here", "Extract To…", "Compress to ZIP", "Compress…", drops of archive entries. Explorer never links libarchive |
 | Atlas Backups (later) | `net.eterneon.atlas.backups`: a `ShowVersions(s uri)`-style deep link | "Restore Previous Versions" in the context menu and Properties, shown only when the service is installed (activatable name present) |
-| Atlas Disks (later) | `net.eterneon.atlas.disks`: a `ShowDevice(s udisks_object_path)`-style deep link | "Open in Disks" for drives in the sidebar and in Properties, shown only when installed |
+| Atlas Disks (later) | `net.eterneon.atlas.disks` (`net.eterneon.telamon.disks` after the rename): a `ShowDevice(s udisks_object_path)`-style deep link | "Open in Disks" for drives in the sidebar (built, wave 3; the names are assumed) and in Properties, shown only when installed |
 | Atlas Launcher | consumes Search1 | — |
 
 **Archive1, as Explorer uses it.** Every call passes `activation_token`,
