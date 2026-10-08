@@ -46,6 +46,22 @@ QUrl childUrl(const QUrl &dir, const QString &name)
     u.setPath(QDir::cleanPath(dir.path() + QLatin1Char('/') + name));
     return u;
 }
+
+// A drop that changes nothing: back into the folder the items are in, or onto
+// one of them.
+bool dropIsPointless(const QList<QUrl> &urls, const QUrl &destination)
+{
+    bool anywhere = false;
+    for (const QUrl &u : urls) {
+        if (u == destination) {
+            return true;
+        }
+        if (u.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash) != destination.adjusted(QUrl::StripTrailingSlash)) {
+            anywhere = true;
+        }
+    }
+    return !anywhere;
+}
 }
 
 FileActions::FileActions(QObject *parent)
@@ -382,18 +398,7 @@ void FileActions::drop(const QList<QUrl> &urls, const QUrl &destination)
     if (urls.isEmpty() || destination.isEmpty()) {
         return;
     }
-    // Nothing to do for a drop back where the items already are, or onto one
-    // of them.
-    bool anywhere = false;
-    for (const QUrl &u : urls) {
-        if (u == destination) {
-            return;
-        }
-        if (u.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash) != destination.adjusted(QUrl::StripTrailingSlash)) {
-            anywhere = true;
-        }
-    }
-    if (!anywhere) {
+    if (dropIsPointless(urls, destination)) {
         return;
     }
     // The drop event is rebuilt: Qt Quick's DropArea doesn't hand out its own.
@@ -416,6 +421,21 @@ void FileActions::drop(const QList<QUrl> &urls, const QUrl &destination)
         delete event;
         delete md;
     });
+}
+
+void FileActions::dropTo(const QList<QUrl> &urls, const QUrl &destination, bool copy)
+{
+    if (urls.isEmpty() || destination.isEmpty() || dropIsPointless(urls, destination)) {
+        return;
+    }
+    KIO::CopyJob *job = copy ? KIO::copy(urls, destination) : KIO::move(urls, destination);
+    setup(job);
+    KIO::FileUndoManager::self()->recordCopyJob(job);
+}
+
+bool FileActions::copyKeyHeld() const
+{
+    return QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ControlModifier);
 }
 
 QVariantMap FileActions::parseAddress(const QString &text) const

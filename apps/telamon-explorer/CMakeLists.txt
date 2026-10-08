@@ -84,6 +84,8 @@ qt_add_qml_module(telamon-explorer-app
         qml/PlaceholderPage.qml
         qml/FolderView.qml
         qml/FilesTabPage.qml
+        qml/PathBar.qml
+        qml/StatusLine.qml
         qml/DetailsView.qml
         qml/IconsView.qml
     SOURCES
@@ -92,6 +94,7 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/ThumbnailProvider.h cpp/kio/ThumbnailProvider.cpp
         cpp/kio/FileActions.h cpp/kio/FileActions.cpp
         cpp/kio/TabLogic.h cpp/kio/TabLogic.cpp
+        cpp/kio/LocationLogic.h cpp/kio/LocationLogic.cpp
         cpp/kio/RustBridge.h
 )
 

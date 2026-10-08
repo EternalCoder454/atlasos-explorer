@@ -15,13 +15,14 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus wave 1 (tabs) only these parts of the sections below exist: a tab
-strip with one folder per tab (Details, Icons and Compact views), a plain-text
-location that becomes a text field, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
+0.2.0 plus waves 1 and 2 (tabs; the path bar, history menus and status line)
+only these parts of the sections below exist: a tab strip with one folder per
+tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
+text field with completion, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
 with View and Sort menus, ten fixed sidebar places, KIO jobs with KIO's own
 dialogs, `FileManager1`, the launch parser and the index service. Everything
-else (breadcrumb, search field, preview and details panes, Quick
-Look, status line, the operations popover and queue wiring, Columns and Gallery
+else (search field, preview and details panes, Quick
+Look, the operations popover and queue wiring, Columns and Gallery
 views, split view, drives and pins) is design, not behaviour. Sections that
 have been built say so in a "Built" line.
 
@@ -139,6 +140,63 @@ Explorer replaces Dolphin completely.
     a KIO listDir with a timeout), `~` and environment-free shortcuts
     (`~`, `trash:`, `recent:`, `network:`), Enter goes, Esc returns to the
     breadcrumb.
+
+  **Built (wave 2):** `qml/PathBar.qml`, with the decisions in the core
+  (`atlas_explorer_core::location`, `address`) behind the C ABI and the
+  `LocationLogic` QML singleton (`cpp/kio/LocationLogic.*`).
+  - Segments come from the core's `location::segments`: the home folder is
+    one segment "Home" (Home > Documents > Reports), the rest of the local disk
+    starts at "Root", `trash:`, `recentlyused:` and `network:` at Trash,
+    Recent and Network, a server at the server's name. Labels are display names
+    (control and bidi characters made visible); the links keep the real,
+    percent-encoded bytes and never show a password. A click goes there (Ctrl+click
+    or a middle click opens a background tab). When the path is wider than the
+    bar the first segments collapse into a "..." menu, the last always stays.
+  - Every segment, the last included, has a chevron: its menu lists the
+    folder's subfolders in natural order, hidden ones only when Show Hidden is
+    on, at most 100 ("N more not shown"). The menu opens at once with
+    "Loading..." and fills when the list arrives. A local folder is read by a
+    worker (`QDirListing`, at most 20,000 names); a folder on a server, Trash
+    and so on by a `KIO::listDir` job that is stopped after 8 s with "The
+    server isn't answering." and cut off at 5,000 names. A second request stops
+    the first, and an answer to an old request is dropped (each carries a
+    number).
+  - Editing: a click on the empty part, Ctrl+L, F4, F6 or Alt+D. The field
+    holds the path of a local folder, else the URL without its password; a
+    path with control or bidi characters is shown as a URL, so nothing hides.
+    Enter goes (the core's `parseAddress`; a refusal is plain words in red under
+    the bar and the field stays), Esc or leaving the field returns. Typing
+    asks `LocationLogic.complete` (after 40 ms, 300 ms for a server): the core
+    splits the text into the folder and the name typed, a worker (or KIO) lists
+    the folder, the core ranks the folders (names starting with the text, then
+    names containing it; hidden ones only after a dot; names that could not be
+    typed back, with control or bidi characters, never; at most 50), and the
+    list opens under the field. Down and Up choose, Tab takes the chosen one
+    (the first when none is) and lists the folders inside it, Enter goes to the
+    chosen one, a click takes one. The last listing is kept 3 s so a server
+    isn't asked again for the next key. In a URL the name is percent-encoded.
+  - Drops: a drop on a segment moves the files into that folder through a
+    `KIO::CopyJob` recorded by the undo manager, or copies them with Ctrl held
+    (or when the source offers only copy); no menu, KIO's own dialog for names
+    already taken. While the pointer is over a segment it is lit and "Move to
+    Documents" or "Copy to Documents" shows under it, and the drag action is
+    set to match, which is what the drag cursor shows. The source is told the
+    drop was a copy, so it never deletes files itself after a move that Files
+    already did. Dropping on the folder the files are in does nothing. (Files
+    dropped on a *tab* still use KIO's menu; see wave 1.)
+  - Back and Forward: a long press (500 ms) or a right click opens a menu of
+    the last 10 places of the tab's list, nearest first, as full paths; a
+    pick jumps there in one step and the places passed stay in the other list,
+    so Forward or Back walks them again. The release after a long press does not
+    also click the button.
+  - **Framework gaps** (for the Telamon OS Framework session): `TelamonBreadcrumb`
+    has no menu per chevron, no drop target, no middle click and no edit mode,
+    and its last segment has no chevron, so Files has its own `PathBar`, built
+    from the same pieces (`Symbol`, `ContextMenu`, `TelamonTextField`,
+    `TelamonStyle`); `TelamonAutocompleteField` filters its own list by the typed
+    text (so it can't show "names containing it" completions that a worker
+    ranked) and starts with nothing chosen, so the completion list is
+    Files' too. Both would move upstream.
 - **Command bar:** New (folder, text file, templates from
   `~/Templates` and KNewFileMenu's system templates), Cut, Copy, Paste,
   Rename, Share (a portal-free menu: email via `mailto:`, KDE Connect when
@@ -177,6 +235,17 @@ Explorer replaces Dolphin completely.
   closes.
 - **Status line** (in the details pane footer when it is shown, at the
   bottom otherwise): item count, selection size, free space.
+
+  **Built (wave 2):** `qml/StatusLine.qml` (Telamon.Ui's `StatusBar`) along the
+  bottom of the window, one line of plain text: "12 items, 5 hidden, 3 selected
+  (4.2 MiB), 128 GiB free". "N hidden" shows only while Show Hidden is off
+  (`FolderModel.hiddenCount`: what the lister holds beyond the rows, counted
+  100 ms after the listing changes), the size is the files of the selection
+  (folders add nothing; none shown when only folders are selected), sizes are
+  written as in the Size column (KIO's `convertSize`), and free space is `QStorageInfo`
+  on a worker, asked when the folder changes and 1 s after its items change,
+  and left out for a place that isn't on a disk (a server, Trash, Recent). The
+  line is empty while the folder shows an error.
 - **Operations:** a button in the toolbar shows a ring while the queue runs.
   It opens a popover with one row per operation: title ("Copying 1,204
   items to Backup"), a speed graph, bytes and items done, speed, time left,
@@ -427,6 +496,11 @@ The GUI thread never blocks.
   `qt_thread().queue` or a queued signal. The MIME type on the GUI thread is
   the fast one, from the name; a content check, when the name gives none,
   runs on a worker and updates the row.
+- Path bar: the subfolder menus and completions read a local folder on a
+  worker (`LocationLogic`, QThreadPool) and a server's through a `KIO::listDir`
+  job with a timeout; free space (`QStorageInfo`) is a worker too. Results
+  return as queued signals carrying the request's number, and an answer to an
+  old request is dropped.
 - Sorting: names get a natural sort key once (Rust, casefolded, digit runs
   compared as numbers), computed on a worker when the batch arrives; a sort
   is a permutation computed on a worker, applied with one `layoutChanged`.

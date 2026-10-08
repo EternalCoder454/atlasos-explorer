@@ -49,6 +49,13 @@ public:
     Q_INVOKABLE void startDrag(const QList<QUrl> &urls);
     // A drop of `urls` on `destination`, with KIO's copy/move/link menu.
     Q_INVOKABLE void drop(const QList<QUrl> &urls, const QUrl &destination);
+    // A drop of `urls` on a folder of the path bar: moved there, or copied
+    // when `copy`, with no menu (KIO's conflict dialog still asks about names
+    // that are taken). The undo manager records it like a paste.
+    Q_INVOKABLE void dropTo(const QList<QUrl> &urls, const QUrl &destination, bool copy);
+    // Whether Ctrl is held right now, asked of the system (during a drag the
+    // application's own record of the keys is not updated).
+    Q_INVOKABLE bool copyKeyHeld() const;
     // Typed address text through the core: {ok, text} with the URL, or the reason in plain words.
     Q_INVOKABLE QVariantMap parseAddress(const QString &text) const;
     Q_INVOKABLE bool savedShowHidden() const;
