@@ -926,7 +926,8 @@ void FileActions::setHidden(const QList<QUrl> &urls, bool hide)
 // Archive's Archive1 over D-Bus (cpp/kio/ArchiveClient.h). Extract Here and
 // Compress to ZIP are jobs: Archive returns the job and Files shows it in its
 // own queue (progress, pause, cancel) and selects the result. Extract To… and
-// Compress… are Archive's dialogs: the call returns when the dialog is up.
+// Compress… are Archive's dialogs: the call returns a job that waits for the
+// dialog, and is followed like the others.
 
 QStringList FileActions::archiveMimeTypes() const
 {
@@ -1028,54 +1029,21 @@ void FileActions::compressToZip(const QList<QUrl> &urls)
     runArchive(QStringLiteral("Compress"), urls, {QStringLiteral("zip"), QString()}, tr("Compress %1").arg(what), tr("Compressing %1").arg(what));
 }
 
-// A call that opens one of Archive's dialogs.
+// Compress…: Archive's dialog asks for the name, place, format and level. The
+// call returns a job that waits for the dialog's answer, so it is followed
+// like any other: progress in the queue, and the archive selected at the end.
 void FileActions::compress(const QList<QUrl> &urls)
 {
-    QStringList files;
-    for (const QUrl &u : urls.mid(0, 1000)) {
-        if (u.isLocalFile()) {
-            files << u.toString(QUrl::FullyEncoded);
-        }
-    }
-    if (files.isEmpty()) {
-        return;
-    }
-    QPointer<FileActions> self(this);
-    withArchiveOptions(true, [self, files](const QVariantMap &options) {
-        if (!self) {
-            return;
-        }
-        ArchiveBus::call(self, QStringLiteral("CompressDialog"), {files, options}, [self](const QDBusMessage &, const ArchiveBus::Target &, const ArchiveBus::Failure &failure) {
-            if (self && !failure.text.isEmpty()) {
-                Q_EMIT self->failed(failure.text);
-            }
-        });
-    });
+    const QString what = labelOf(urls);
+    runArchive(QStringLiteral("CompressDialog"), urls.mid(0, 1000), {}, tr("Compress %1").arg(what), tr("Compressing %1").arg(what));
 }
 
+// Extract To…: Archive's dialog asks where (no picker of Files' own); the job
+// it returns is followed the same way.
 void FileActions::extractTo(const QList<QUrl> &urls)
 {
-    QStringList files;
-    for (const QUrl &u : urls.mid(0, 1000)) {
-        if (u.isLocalFile()) {
-            files << u.toString(QUrl::FullyEncoded);
-        }
-    }
-    if (files.isEmpty()) {
-        Q_EMIT failed(tr("Telamon Archive works on files on this computer only."));
-        return;
-    }
-    QPointer<FileActions> self(this);
-    withArchiveOptions(true, [self, files](const QVariantMap &options) {
-        if (!self) {
-            return;
-        }
-        ArchiveBus::call(self, QStringLiteral("ExtractAll"), {files, options}, [self](const QDBusMessage &, const ArchiveBus::Target &, const ArchiveBus::Failure &failure) {
-            if (self && !failure.text.isEmpty()) {
-                Q_EMIT self->failed(failure.text);
-            }
-        });
-    });
+    const QString what = labelOf(urls);
+    runArchive(QStringLiteral("ExtractAll"), urls.mid(0, 1000), {}, tr("Extract %1").arg(what), tr("Extracting %1").arg(what));
 }
 
 void FileActions::extractViewed()
