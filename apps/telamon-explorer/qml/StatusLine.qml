@@ -17,6 +17,8 @@ StatusBar {
             "folders": 0,
             "bytes": 0
         })
+    // The tab's SearchController: while its results are shown the line counts them.
+    property var search: null
     // Free bytes of the disk the folder is on; -1 when there is no such number.
     property real freeBytes: -1
 
@@ -27,7 +29,13 @@ StatusBar {
         }
         const parts = [];
         const n = folder.count;
-        parts.push(folder.loading && n === 0 ? qsTr("Loading…") : (n === 1 ? qsTr("1 item") : qsTr("%1 items").arg(n)));
+        if (folder.searching && search) {
+            if (search.statusText.length > 0) {
+                parts.push(search.statusText);
+            }
+        } else {
+            parts.push(folder.loading && n === 0 ? qsTr("Loading…") : (n === 1 ? qsTr("1 item") : qsTr("%1 items").arg(n)));
+        }
         if (folder.hiddenCount > 0) {
             parts.push(qsTr("%1 hidden").arg(folder.hiddenCount));
         }
@@ -35,7 +43,7 @@ StatusBar {
             // Folders add no size: only files are summed.
             parts.push(selection.files > 0 ? qsTr("%1 selected (%2)").arg(selectedCount).arg(LocationLogic.sizeText(selection.bytes)) : qsTr("%1 selected").arg(selectedCount));
         }
-        if (freeBytes >= 0) {
+        if (freeBytes >= 0 && !folder.searching) {
             parts.push(qsTr("%1 free").arg(LocationLogic.sizeText(freeBytes)));
         }
         return parts.join(", ");

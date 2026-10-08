@@ -560,3 +560,174 @@ fn a_call_to_the_old_name_starts_the_service() {
         5
     );
 }
+
+/// Files' search field talks to the service exactly like this: the service is
+/// not running (the bus starts it, by the first call), `Status` says which
+/// folders are indexed, and `Search` gets the chips as `kinds` (`as`), `kind`
+/// (`s`), `modified_after` (`x`), `size_min` and `size_max` (`t`),
+/// `include_hidden` (`b`) and `root` (a file URI, `s`). The values are the
+/// ones `atlas_explorer_core::search::filter` makes for the chips.
+#[test]
+fn the_search_fields_calls_work_through_activation() {
+    use atlas_explorer_core::search::{Kind, Modified, SizeClass, filter};
+    use std::time::SystemTime;
+
+    let Some(b) = bus("field", 0, true) else {
+        return;
+    };
+    let r = &b.root;
+    fs::create_dir_all(r.join("Reports/archive")).unwrap();
+    fs::create_dir_all(r.join("Elsewhere")).unwrap();
+    let file = |rel: &str, len: u64, age_days: u64| {
+        let p = r.join(rel);
+        let f = fs::File::create(&p).unwrap();
+        f.set_len(len).unwrap();
+        let t = SystemTime::now() - Duration::from_secs(age_days * 86_400 + 3600);
+        f.set_modified(t).unwrap();
+    };
+    file("Reports/Quarterly Report.docx", 2_000, 1);
+    file("Reports/report-final.pdf", 3_000_000, 2);
+    file("Reports/annual-report.xlsx", 10, 40);
+    file("Reports/report-photo.png", 500, 3);
+    file("Reports/report-video.mp4", 150 * 1024 * 1024, 5);
+    file("Reports/notes.txt", 5, 1);
+    file("Reports/archive/report-2019.zip", 4_000, 2_000);
+    file("Elsewhere/report-elsewhere.md", 20, 1);
+    fs::create_dir_all(r.join("Reports/report-folder")).unwrap();
+
+    let conn = b.conn();
+    let p = b.proxy(&conn);
+    // 1. Nothing runs yet; the first call is Status, and it starts the service.
+    let st = status(&p);
+    let roots = <Vec<String>>::try_from(st["roots"].try_clone().unwrap()).unwrap();
+    assert_eq!(roots, vec![format!("file://{}", r.display())]);
+    wait_state(&p, "ready");
+
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let midnight = now - now % 86_400;
+    // The options as the field sends them for some chips.
+    let ask = |query: &str, kind: Kind, modified: Modified, size: SizeClass, root: Option<&str>| {
+        let f = filter(kind, modified, size, now, midnight);
+        let mut o: HashMap<&str, Value<'_>> = HashMap::new();
+        if !f.kinds.is_empty() {
+            o.insert(
+                "kinds",
+                Value::new(f.kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>()),
+            );
+        }
+        if f.files_only {
+            o.insert("kind", Value::from("file"));
+        }
+        if let Some(t) = f.modified_after {
+            o.insert("modified_after", Value::from(t));
+        }
+        if let Some(n) = f.size_min {
+            o.insert("size_min", Value::from(n));
+        }
+        if let Some(n) = f.size_max {
+            o.insert("size_max", Value::from(n));
+        }
+        if let Some(path) = root {
+            o.insert(
+                "root",
+                Value::from(format!("file://{}/{path}", r.display())),
+            );
+        }
+        let mut names: Vec<String> = search(&p, query, 500, o)
+            .unwrap()
+            .into_iter()
+            .map(|h| {
+                h.0.strip_prefix(&format!("file://{}/", r.display()))
+                    .unwrap()
+                    .replace("%20", " ")
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    use Kind::*;
+    use Modified as M;
+    use SizeClass as S;
+
+    // Plain words, everywhere.
+    let all = ask("report", Any, M::Any, S::Any, None);
+    // (the folder "Reports" too: a folder is a hit like a file)
+    assert_eq!(all.len(), 9, "{all:?}");
+    // This Folder: only below the folder.
+    let here = ask("report", Any, M::Any, S::Any, Some("Reports"));
+    assert!(
+        here.iter().all(|n| n.starts_with("Reports/")) && here.len() == 7,
+        "{here:?}"
+    );
+    // Kind chips.
+    assert_eq!(
+        ask("report", Document, M::Any, S::Any, None),
+        [
+            "Elsewhere/report-elsewhere.md",
+            "Reports/Quarterly Report.docx",
+            "Reports/annual-report.xlsx",
+            "Reports/report-final.pdf"
+        ]
+    );
+    assert_eq!(
+        ask("report", Image, M::Any, S::Any, None),
+        ["Reports/report-photo.png"]
+    );
+    assert_eq!(
+        ask("report", Video, M::Any, S::Any, None),
+        ["Reports/report-video.mp4"]
+    );
+    assert_eq!(
+        ask("report", Archive, M::Any, S::Any, None),
+        ["Reports/archive/report-2019.zip"]
+    );
+    assert_eq!(
+        ask("report", Code, M::Any, S::Any, None),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ask("report", Folder, M::Any, S::Any, None),
+        ["Reports", "Reports/report-folder"]
+    );
+    // Modified chips (the files were made 1, 2, 3, 5, 40 and 2000 days ago).
+    let week = ask("report", Any, M::Week, S::Any, None);
+    assert!(
+        week.contains(&"Reports/report-photo.png".to_string()),
+        "{week:?}"
+    );
+    assert!(week.contains(&"Reports/report-video.mp4".to_string()));
+    assert!(!week.contains(&"Reports/annual-report.xlsx".to_string()));
+    assert!(!week.contains(&"Reports/archive/report-2019.zip".to_string()));
+    let month = ask("report", Any, M::Month, S::Any, None);
+    assert!(!month.contains(&"Reports/annual-report.xlsx".to_string()));
+    let year = ask("report", Any, M::Year, S::Any, None);
+    assert!(year.contains(&"Reports/annual-report.xlsx".to_string()));
+    assert!(!year.contains(&"Reports/archive/report-2019.zip".to_string()));
+    // Size chips: a size leaves folders out.
+    assert_eq!(
+        ask("report", Any, M::Any, S::Large, None),
+        ["Reports/report-video.mp4"]
+    );
+    assert_eq!(
+        ask("report", Any, M::Any, S::Medium, None),
+        ["Reports/report-final.pdf"]
+    );
+    let small = ask("report", Any, M::Any, S::Small, None);
+    assert!(small.contains(&"Reports/annual-report.xlsx".to_string()));
+    assert!(
+        !small.contains(&"Reports/report-folder".to_string()),
+        "{small:?}"
+    );
+    // Chips combine, and work without words (newest first).
+    assert_eq!(
+        ask("report", Document, M::Year, S::Medium, Some("Reports")),
+        ["Reports/report-final.pdf"]
+    );
+    let only_chips = ask("", Image, M::Any, S::Any, None);
+    assert_eq!(only_chips, ["Reports/report-photo.png"]);
+    // More than the cap is never returned: the service answers at most 500.
+    assert!(search(&p, "", 100_000, HashMap::new()).unwrap().len() <= 500);
+}

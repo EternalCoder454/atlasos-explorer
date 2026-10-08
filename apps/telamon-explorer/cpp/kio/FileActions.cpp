@@ -103,6 +103,7 @@ void FileActions::setup(KJob *job)
         KJobWindows::setWindow(job, m_window);
     }
     KIO::getJobTracker()->registerJob(job);
+    connect(job, &KJob::result, this, &FileActions::jobFinished);
 }
 
 // Dialogs are top-level widgets; this makes them belong to the window.
@@ -337,6 +338,13 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
                 openUrls(urls);
             }
         });
+        if (m_folder && m_folder->searching()) {
+            QList<QUrl> files;
+            for (const KFileItem &it : items) {
+                files << it.url();
+            }
+            add(QStringLiteral("folder-open"), tr("Open File Location\tCtrl+Enter"), [this, files] { Q_EMIT openLocationRequested(files); });
+        }
         QList<QUrl> folders;
         for (const KFileItem &it : items) {
             if (it.isDir()) {
@@ -364,8 +372,10 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
         menu->addSeparator();
         add(QStringLiteral("document-properties"), tr("Properties"), [this, urls] { showProperties(urls); });
     } else {
-        add(QStringLiteral("folder-new"), tr("New Folder"), [this] { newFolder(); }, writable);
-        add(QStringLiteral("edit-paste"), tr("Paste"), [this] { paste(); }, writable && canPaste());
+        // Search results are from many folders: nothing is made or pasted "here".
+        const bool here = writable && !(m_folder && m_folder->searching());
+        add(QStringLiteral("folder-new"), tr("New Folder"), [this] { newFolder(); }, here);
+        add(QStringLiteral("edit-paste"), tr("Paste"), [this] { paste(); }, here && canPaste());
         menu->addSeparator();
         add(QStringLiteral("utilities-terminal"), tr("Open Terminal Here"), [this] { openTerminal(); });
         if (m_folder) {

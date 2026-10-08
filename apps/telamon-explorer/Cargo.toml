@@ -17,6 +17,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 telamon-framework-ui.workspace = true
 atlas-explorer-core = { path = "../../crates/atlas-explorer-core" }
+atlas-file-index = { path = "../../crates/atlas-file-index" }
 cxx = "1"
 cxx-qt = "0.10"
 cxx-qt-lib = "0.10"

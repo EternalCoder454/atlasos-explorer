@@ -11,15 +11,30 @@ Item {
 
     required property var fv
     readonly property int rowHeight: Kirigami.Units.gridUnit * 2
-    // Widths of Name, Size, Type and Modified.
-    property var widths: [Kirigami.Units.gridUnit * 22, Kirigami.Units.gridUnit * 7, Kirigami.Units.gridUnit * 12, Kirigami.Units.gridUnit * 11]
-    readonly property var columns: [
-        { title: qsTr("Name"), sort: FolderModel.Name },
-        { title: qsTr("Size"), sort: FolderModel.Size },
-        { title: qsTr("Type"), sort: FolderModel.Type },
-        { title: qsTr("Modified"), sort: FolderModel.Modified }
+    // Search results have a Path column (the folder each one is in) after the name.
+    readonly property bool withPath: fv.folder.searching
+    // Widths of the columns by key.
+    property var widths: ({
+            "name": Kirigami.Units.gridUnit * 22,
+            "path": Kirigami.Units.gridUnit * 16,
+            "size": Kirigami.Units.gridUnit * 7,
+            "type": Kirigami.Units.gridUnit * 12,
+            "modified": Kirigami.Units.gridUnit * 11
+        })
+    readonly property var columns: withPath ? [
+        { key: "name", title: qsTr("Name"), sort: FolderModel.Name },
+        { key: "path", title: qsTr("Path"), sort: -1 },
+        { key: "size", title: qsTr("Size"), sort: FolderModel.Size },
+        { key: "type", title: qsTr("Type"), sort: FolderModel.Type },
+        { key: "modified", title: qsTr("Modified"), sort: FolderModel.Modified }
+    ] : [
+        { key: "name", title: qsTr("Name"), sort: FolderModel.Name },
+        { key: "size", title: qsTr("Size"), sort: FolderModel.Size },
+        { key: "type", title: qsTr("Type"), sort: FolderModel.Type },
+        { key: "modified", title: qsTr("Modified"), sort: FolderModel.Modified }
     ]
-    readonly property real totalWidth: widths.reduce((a, b) => a + b, 0)
+    readonly property real pathWidth: withPath ? widths.path : 0
+    readonly property real totalWidth: widths.name + pathWidth + widths.size + widths.type + widths.modified
     readonly property int pageRows: Math.max(1, Math.floor(list.height / rowHeight) - 1)
 
     function reveal(row) {
@@ -72,7 +87,7 @@ Item {
                         id: cell
                         required property var modelData
                         required property int index
-                        width: root.widths[index]
+                        width: root.widths[modelData.key]
                         height: root.rowHeight
                         readonly property bool sorted: root.fv.folder.sortColumn === modelData.sort
                         Text {
@@ -88,6 +103,7 @@ Item {
                         }
                         MouseArea {
                             anchors.fill: parent
+                            enabled: cell.modelData.sort >= 0
                             onClicked: {
                                 const f = root.fv.folder;
                                 if (f.sortColumn === cell.modelData.sort) {
@@ -113,14 +129,14 @@ Item {
                             property real startWidth
                             onPressed: mouse => {
                                 startX = mapToItem(null, mouse.x, 0).x;
-                                startWidth = root.widths[cell.index];
+                                startWidth = root.widths[cell.modelData.key];
                             }
                             onPositionChanged: mouse => {
                                 if (!pressed) {
                                     return;
                                 }
-                                const w = root.widths.slice();
-                                w[cell.index] = Math.max(Kirigami.Units.gridUnit * 4, startWidth + mapToItem(null, mouse.x, 0).x - startX);
+                                const w = Object.assign({}, root.widths);
+                                w[cell.modelData.key] = Math.max(Kirigami.Units.gridUnit * 4, startWidth + mapToItem(null, mouse.x, 0).x - startX);
                                 root.widths = w;
                             }
                         }
@@ -139,6 +155,7 @@ Item {
             required property string sizeText
             required property string modifiedText
             required property string typeText
+            required property string pathText
             width: Math.max(list.width, root.totalWidth)
             height: root.rowHeight
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
@@ -155,7 +172,7 @@ Item {
             Row {
                 opacity: row.isHidden ? 0.6 : 1
                 Item {
-                    width: root.widths[0]
+                    width: root.widths.name
                     height: root.rowHeight
                     Kirigami.Icon {
                         id: icon
@@ -179,7 +196,19 @@ Item {
                     }
                 }
                 Text {
-                    width: root.widths[1]
+                    width: root.pathWidth
+                    height: root.rowHeight
+                    visible: root.withPath
+                    leftPadding: Kirigami.Units.largeSpacing
+                    rightPadding: Kirigami.Units.largeSpacing
+                    verticalAlignment: Text.AlignVCenter
+                    textFormat: Text.PlainText
+                    elide: Text.ElideMiddle
+                    text: row.pathText
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                }
+                Text {
+                    width: root.widths.size
                     height: root.rowHeight
                     leftPadding: Kirigami.Units.largeSpacing
                     verticalAlignment: Text.AlignVCenter
@@ -189,7 +218,7 @@ Item {
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
                 Text {
-                    width: root.widths[2]
+                    width: root.widths.type
                     height: root.rowHeight
                     leftPadding: Kirigami.Units.largeSpacing
                     verticalAlignment: Text.AlignVCenter
@@ -199,7 +228,7 @@ Item {
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
                 Text {
-                    width: root.widths[3]
+                    width: root.widths.modified
                     height: root.rowHeight
                     leftPadding: Kirigami.Units.largeSpacing
                     verticalAlignment: Text.AlignVCenter

@@ -70,6 +70,10 @@ Q_SIGNALS:
     void navigateRequested(const QUrl &target);
     // "Open in New Tab" in the context menu: the folders chosen.
     void openInNewTabRequested(const QList<QUrl> &folders);
+    // "Open File Location" on search results: the files chosen.
+    void openLocationRequested(const QList<QUrl> &files);
+    // A job started here has ended (done, failed or cancelled).
+    void jobFinished();
 
 private:
     void setup(KJob *job);

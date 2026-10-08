@@ -34,10 +34,15 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(bool sortDescending READ sortDescending WRITE setSortDescending NOTIFY sortChanged)
     Q_PROPERTY(bool foldersFirst READ foldersFirst WRITE setFoldersFirst NOTIFY sortChanged)
     Q_PROPERTY(bool canWrite READ canWrite NOTIFY canWriteChanged)
+    // True while the rows are search results (SearchController) and not the
+    // folder's items. `url` stays the folder the search started in.
+    Q_PROPERTY(bool searching READ searching NOTIFY searchingChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
-    enum SortColumn { Name, Size, Type, Modified, Created, Accessed };
+    // Relevance is the order search results arrive in (best match first) and
+    // only exists while searching; the core knows the others.
+    enum SortColumn { Name, Size, Type, Modified, Created, Accessed, Relevance };
     Q_ENUM(SortColumn)
 
     enum Roles {
@@ -53,6 +58,17 @@ public:
         ThumbnailSourceRole,
         SizeTextRole,
         ModifiedTextRole,
+        PathTextRole,
+    };
+
+    // One search result: a lossless URL, the name made safe to show, and what
+    // the row's columns need.
+    struct SearchHit {
+        QUrl url;
+        QString name;
+        bool isDir = false;
+        quint64 size = 0;
+        qint64 mtime = 0;
     };
 
     explicit FolderModel(QObject *parent = nullptr);
@@ -80,6 +96,20 @@ public:
     bool foldersFirst() const { return m_foldersFirst; }
     void setFoldersFirst(bool on);
     bool canWrite() const { return m_canWrite; }
+    bool searching() const { return m_searching; }
+
+    // Search mode: the rows are results until endSearch(), which lists the
+    // folder again. Navigating (setUrl) ends it too.
+    void beginSearch();
+    void endSearch();
+    // Replaces the results (an index search) or adds to them (a live walk).
+    // They keep the order given while the sort is Relevance.
+    void setSearchResults(const QList<SearchHit> &hits);
+    void appendSearchResults(const QList<SearchHit> &hits);
+    void setSearchBusy(bool on) { setLoading(on); }
+    // Drops the results whose files are gone (after the files were trashed,
+    // moved or renamed); the check runs on a worker.
+    Q_INVOKABLE void pruneSearchResults();
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE QUrl urlAt(int row) const;
@@ -104,6 +134,9 @@ Q_SIGNALS:
     void showHiddenChanged();
     void sortChanged();
     void canWriteChanged();
+    void searchingChanged();
+    // Refresh (F5, the Retry button) while searching: run the search again.
+    void searchRefreshRequested();
 
 private:
     struct Entry {
@@ -117,6 +150,10 @@ private:
         qint64 ctime = 0;
         qint64 atime = 0;
         bool isDir = false;
+        // Search results: the place in the list the search gave, and the folder
+        // the result is in, written for the Path column (made when first shown).
+        quint32 rank = 0;
+        QString path;
     };
     struct SortRowIn {
         QString name;
@@ -126,6 +163,7 @@ private:
         qint64 mtime, ctime, atime;
         bool isDir;
         bool needDisplay;
+        quint32 rank;
     };
     struct SortResult {
         quint64 gen = 0;
@@ -137,6 +175,9 @@ private:
     };
 
     static Entry makeEntry(const KFileItem &item);
+    static Entry makeSearchEntry(const SearchHit &hit, quint32 rank);
+    void leaveSearch();
+    void removeSearchRows(const QSet<QUrl> &gone);
     void fillType(Entry &e) const;
     void open(const QUrl &url, const QString &notice);
     void resetRows();
@@ -175,6 +216,11 @@ private:
     bool m_sortDirty = false;
     bool m_sortRunning = false;
     bool m_gone = false;
+    bool m_searching = false;
+    quint32 m_nextRank = 0;
+    // The sort the folder had before the search, back when it ends.
+    SortColumn m_folderSortColumn = Name;
+    bool m_folderSortDescending = false;
     // The last URL that finished listing: only a folder seen before can be "removed".
     QUrl m_listedUrl;
     QTimer m_sortTimer;

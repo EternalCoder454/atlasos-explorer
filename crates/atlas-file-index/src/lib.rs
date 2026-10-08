@@ -8,6 +8,7 @@
 //! - [`query`]: matching, filters, ranking.
 //! - [`snapshot`]: the on-disk cache, read as untrusted input.
 //! - [`engine`]: the worker thread with inotify, debounce and publishing.
+//! - [`walk`]: the live search of folders the index does not hold.
 
 pub mod category;
 pub mod config;
@@ -21,6 +22,7 @@ pub mod snapshot;
 pub mod sys;
 pub mod text;
 pub mod uri;
+pub mod walk;
 pub mod watch;
 
 #[doc(hidden)]

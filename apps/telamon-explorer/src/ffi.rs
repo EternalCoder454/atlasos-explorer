@@ -22,7 +22,7 @@ pub struct TelamonSortRow {
 
 /// # Safety
 /// `ptr` is null or points to `len` readable bytes.
-unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+pub(crate) unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if ptr.is_null() || len == 0 {
         &[]
     } else {
@@ -36,7 +36,7 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 ///
 /// # Safety
 /// `out` is null or points to `cap` writable bytes.
-unsafe fn put(data: &[u8], out: *mut u8, cap: usize) -> usize {
+pub(crate) unsafe fn put(data: &[u8], out: *mut u8, cap: usize) -> usize {
     if !out.is_null() && data.len() <= cap {
         // SAFETY: `out` has `cap >= data.len()` writable bytes.
         unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out, data.len()) };

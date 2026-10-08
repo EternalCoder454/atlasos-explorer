@@ -15,13 +15,14 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 3 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash)
+0.2.0 plus waves 1 to 4 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
-text field with completion, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
+text field with completion, a search field with scope and filter chips that
+shows the index's answer (or a live walk) as a Details view with a Path column, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
 with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs with KIO's own
 dialogs, `FileManager1`, the launch parser and the index service. Everything
-else (search field, preview and details panes, Quick
+else (preview and details panes, Quick
 Look, the operations popover and queue wiring, Columns and Gallery
 views, split view) is design, not behaviour. Sections that
 have been built say so in a "Built" line.
@@ -53,7 +54,9 @@ Explorer replaces Dolphin completely.
   the operation queue's state machine (order, pause, speed and time left,
   conflict policy), the operation journal (crash recovery), launch and D-Bus
   argument parsing, address-bar parsing and completion ranking, checksums,
-  the live search walker and search filters.
+  the search filters' meaning, where a search runs, and the search texts
+  (`search`). The live search walker is in `atlas-file-index` (`walk`), beside
+  the matcher it shares with the index.
 - `crates/atlas-file-index`: no Qt. The index (scanner, inotify watcher,
   on-disk snapshot, matcher and ranking) as a library, so tests and the
   service share it.
@@ -68,7 +71,8 @@ Explorer replaces Dolphin completely.
     model), `Places` (KFilePlacesModel and Solid), `Opener`
     (KIO::OpenUrlJob, KTerminalLauncherJob), `DragHelper` (QDrag).
     Heavy or pure logic is called from these through a `cxx` bridge into the
-    core crate, never written twice.
+    core crate, never written twice. `SearchController` is the search of one
+    tab and `SearchService` the client of the index service.
   - `cpp/main.cpp`: Qt start, telamon-framework-ui startup, single instance,
     FileManager1.
   - `qml/`: the window, views and dialogs, all from Telamon.Ui.
@@ -197,6 +201,92 @@ Explorer replaces Dolphin completely.
     text (so it can't show "names containing it" completions that a worker
     ranked) and starts with nothing chosen, so the completion list is
     Files' too. Both would move upstream.
+- **Search field** (wave 4): Ctrl+F or Ctrl+E focuses it; typing searches, Esc
+  ends the search and shows the folder again.
+
+  **Built (wave 4):** the field is in the toolbar (Telamon.Ui's `SearchField`,
+  "Search Documents" with the tab's folder name, "Search Everywhere" for the
+  other scope), the row under the toolbar is `qml/SearchBar.qml`, and each tab
+  has its own `SearchController` (`cpp/kio/SearchController.*`: words, scope,
+  chips), so a search belongs to its tab and survives switching tabs. The row
+  shows while there are words or chips, or the field or the row has the
+  keyboard.
+  - **Scope:** the chips **This Folder** and **Everywhere**. Everywhere is the
+    index (the home folder). This Folder below an indexed root is the index with
+    `root` set; any other folder is a walk (see below). A folder is "in the
+    index" when it is below a root the service reports, on the root's own
+    filesystem, and no folder on the way is one the scanner leaves out (a
+    dot-folder, `node_modules`, `__pycache__`, a `CACHEDIR.TAG` or `pyvenv.cfg`
+    folder: `atlas_file_index::walk::covers`, asked of a worker). Names a
+    person added to `Exclude=` are not known to Files; searching such a folder
+    through the index finds nothing from it. With the index off (`disabled`:
+    `Roots=` empty) every search is a walk (Everywhere walks the home folder).
+  - **Filters:** chips **Kind** (Document, Image, Audio, Video, Archive, Code,
+    Folder), **Modified** (Today, Past 7 Days, Past Month, Past Year) and
+    **Size** (Small under 1 MiB, Medium 1 MiB to under 100 MiB, Large 100 MiB
+    and over). They combine, each one that is set shows its value and an x that
+    clears it, and they map one to one onto Search1's options (`kinds`,
+    `modified_after`, `size_min`/`size_max`; a size also sends `kind` =
+    "file", as a folder has no size). A Document is `document`, `spreadsheet`,
+    `presentation`, `pdf` and `text`. Today starts at local midnight; the other
+    periods count 7, 30 and 365 days back from now. Words and chips may be used
+    alone: chips with no words list what passes them, newest first. Custom
+    dates and sizes are not offered yet. The meaning of the chips is in the core
+    (`atlas_explorer_core::search::filter`), which the walk and the D-Bus
+    options both use.
+  - **The index route:** every change of the words or a chip calls
+    `Search(query, 500, options)` at once, asynchronously
+    (`QDBusConnection::asyncCall`, 10 s), with no debounce: a call is answered
+    from memory in a millisecond or two and several can be in flight. Each
+    search has a number and an answer to an older one is dropped. A call to a
+    service that isn't running starts it through its D-Bus activation file, and
+    the first search waits for `Status` (which also starts it) so it knows the
+    indexed folders; the field asks for `Status` when it gets the keyboard, so
+    the first key does not wait. The hits replace the rows in one reset, in the
+    order the index ranked them (the sort "Best Match"). `include_hidden`
+    follows Show Hidden. More than 500 matches say "The first 500 results".
+  - **Results are the Details view** (the view menu is ignored while searching)
+    with a **Path** column (the folder of each result, `~/Documents/Reports`,
+    written by the core's `search::path_text`); the same selection, keys,
+    drags, Open With and context menu as a folder. Enter opens a file (and goes
+    into a folder, which ends the search); **Open File Location** (Ctrl+Enter, or
+    in the context menu) shows the result's folder in the tab with the file
+    selected, and results in several folders open the others in tabs behind.
+    Sorting by a column keeps working, and "Best Match" in the Sort menu
+    returns to the order of the search. New Folder and Paste are off while
+    results are shown (there is no "here"); Cut, Rename and Move to Trash work on
+    the results and the rows whose files are gone are dropped when the job is
+    done (`FolderModel::pruneSearchResults`), and an index search is repeated
+    a moment later. Esc (in the field, the row or the results) clears the words
+    and chips and lists the folder again; so does going to another folder.
+  - **Outside the index** (a folder on an external drive, a folder the index
+    leaves out, the index off): a live walk. A folder on this computer is walked
+    by `atlas_file_index::walk` on its own thread: breadth first, the index's
+    matcher and filters, no symlinks followed, no other filesystem entered,
+    hidden names only with Show Hidden, the first hit sent at once and then a
+    batch every 30 ms. A location that is not a local folder (a server, the
+    Trash, an archive) is walked by `KIO::listRecursive` on the GUI thread, the
+    entries judged by the same matcher. Both stop at 5,000 hits ("Stopped at
+    5000 results"). The row shows a spinner, "Searching, 12 found" and a
+    **Stop** button; Stop keeps what was found. A new search or leaving the
+    search stops the walk. (A debug build reads
+    `TELAMON_EXPLORER_TEST_WALK_BATCH_MS`, a pause after every batch, so the
+    smoke tests can look at and stop a walk; a release build ignores it.)
+  - **The status chip** at the right of the row shows the index's state, from
+    `Status` and the service's `StatusChanged` signal: "The search index is up
+    to date", "Updating the search index, results may be missing" (`scanning`
+    and `stale`), "The search index is turned off, so searches look through the
+    folders", "The search index has a problem, results may be missing: ..." and,
+    when the service can't be reached, "Search isn't available". The status
+    line counts the results ("42 results").
+  - **When the service fails:** if a search that needs the index can't reach it
+    (it won't start, doesn't answer in 10 s, or answers with an error), the
+    results area says "Search Isn't Available" with one line of why, and a Try
+    Again button; the chip says "Search isn't available". A search of a folder
+    the index doesn't hold (a walk) does not need it and still works.
+  - **Not in this wave** (see the roadmap): custom dates and sizes, content
+    search, saved searches, the Settings page for indexed folders and the
+    rebuild button, `re:` patterns.
 - **Command bar:** New (folder, text file, templates from
   `~/Templates` and KNewFileMenu's system templates), Cut, Copy, Paste,
   Rename, Share (a portal-free menu: email via `mailto:`, KDE Connect when
@@ -548,6 +638,12 @@ The GUI thread never blocks.
   job with a timeout; free space (`QStorageInfo`) is a worker too. Results
   return as queued signals carrying the request's number, and an answer to an
   old request is dropped.
+- Search: an index search is an asynchronous D-Bus call (QtDBus on the GUI
+  thread, 500 hits parsed there), and an answer to an older search is dropped
+  (each carries a number). Whether the index holds a folder is asked of a
+  worker; the live walk of a local folder runs on its own thread and reports
+  back through queued calls that carry the search's number; a walk of a server
+  or the Trash is a `KIO::listRecursive` job on the GUI thread.
 - Sorting: names get a natural sort key once (Rust, casefolded, digit runs
   compared as numbers), computed on a worker when the batch arrives; a sort
   is a permutation computed on a worker, applied with one `layoutChanged`.
@@ -677,6 +773,9 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | inotify watches exhausted | Lazy mtime rechecks on query (above) |
 | Disk full, drive pulled, crash mid-copy | See "No data loss" |
 | Settings file unreadable | Defaults, with a warning in the log |
+| Index service not installed, won't start, or doesn't answer | A search that needs the index shows "Search Isn't Available" (and the chip "Search isn't available") with Try Again; a search of a folder the index doesn't hold is a live walk and works |
+| Index service busy (too many searches at once) | The search is asked again after 150 ms |
+| Live walk of a folder that can't be read | The results area says "Can't Search This Folder" |
 | Peer app missing (Archive, Backups, Disks) | Its menu items are hidden |
 
 Logging: `telamon-framework-ui` logging to the journal as `telamon-explorer` and

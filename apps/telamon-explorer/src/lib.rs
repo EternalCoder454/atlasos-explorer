@@ -4,6 +4,7 @@
 
 mod backend;
 mod ffi;
+mod search_ffi;
 
 telamon_framework_ui::app! {
     name: "Files",

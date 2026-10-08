@@ -10,6 +10,7 @@ pub mod location;
 pub mod names;
 pub mod places;
 pub mod queue;
+pub mod search;
 pub mod sort;
 pub mod tabs;
 pub mod undo;
