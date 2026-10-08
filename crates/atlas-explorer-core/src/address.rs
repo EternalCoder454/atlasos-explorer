@@ -252,6 +252,8 @@ mod tests {
         assert_eq!(p("trash:").unwrap(), "trash:");
         assert_eq!(p("recent:/").unwrap(), "recent:/");
         assert_eq!(p("network:/").unwrap(), "network:/");
+        assert_eq!(p("home:/").unwrap(), "home:/");
+        assert_eq!(p("home:").unwrap(), "home:");
         assert_eq!(p("smb://nas/share").unwrap(), "smb://nas/share");
         assert_eq!(p("file:///etc").unwrap(), "file:///etc");
         assert!(p("file://evil/etc").is_err());

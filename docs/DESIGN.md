@@ -557,8 +557,9 @@ Explorer replaces Dolphin completely.
     Once the server accepts the connection the test is over and only KIO's
     job is waited for, so a password prompt or a slow listing is never cut off
     (Stop ends it). The test is skipped when a proxy is set in KIO's settings
-    (`kioslaverc`), and a Windows name that doesn't resolve is left to the SMB
-    worker (it may resolve by NetBIOS). KIO's own errors for the same causes
+    (`kioslaverc`), and for SMB only the 10 s limit is a verdict (the server may
+    answer on another port or be named only through NetBIOS, which the SMB worker
+    knows; what the worker itself reports shows the same page). KIO's own errors for the same causes
     (cannot connect, unknown host, timeout, connection broken) show the same
     page; a wrong password and a cancelled prompt have their own words.
     Nothing here waits on the GUI thread, so the window and the other tabs

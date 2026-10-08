@@ -279,6 +279,13 @@ mod tests {
     }
 
     #[test]
+    fn files_own_pages_can_be_launched() {
+        let l = p(&["home:/", "network:/", "home:"], "/x");
+        assert_eq!(l.locations, ["home:/", "network:/", "home:"]);
+        assert!(l.refused.is_empty());
+    }
+
+    #[test]
     fn options_after_double_dash_are_locations() {
         let l = p(&["--", "--new-window"], "/x");
         assert!(!l.new_window);

@@ -472,10 +472,12 @@ void FolderModel::startProbe(const QUrl &url)
     // The server accepts the connection: it is there, and from here on only
     // KIO's job is waited for (a password may be asked for; Stop ends it).
     connect(sock, &QTcpSocket::connected, this, [this] { stopProbe(); });
-    connect(sock, &QAbstractSocket::errorOccurred, this, [this, url](QAbstractSocket::SocketError error) {
-        // A Windows name may only resolve through NetBIOS, which KIO's SMB
-        // worker tries and this test does not: not a verdict.
-        if (error == QAbstractSocket::HostNotFoundError && url.scheme() == QLatin1String("smb")) {
+    connect(sock, &QAbstractSocket::errorOccurred, this, [this, url](QAbstractSocket::SocketError) {
+        // A Windows server may answer only on another port or be named only
+        // through NetBIOS, which KIO's SMB worker knows and this test does
+        // not: for SMB only the time limit is a verdict, and what KIO itself
+        // reports (it shows the same page) is the rest.
+        if (url.scheme() == QLatin1String("smb")) {
             stopProbe();
             return;
         }
