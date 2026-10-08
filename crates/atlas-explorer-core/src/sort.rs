@@ -65,6 +65,9 @@ pub struct SortRow {
     pub atime: i64,
     /// The kind shown in the Type column.
     pub kind: String,
+    /// The order key of the row's group (`group::group_of`); empty when the
+    /// rows are not grouped. Groups come before everything else.
+    pub group: Vec<u8>,
 }
 
 fn cmp_kind(a: &str, b: &str) -> Ordering {
@@ -83,9 +86,30 @@ pub fn sort_permutation(
     descending: bool,
     folders_first: bool,
 ) -> Vec<u32> {
+    sort_permutation_grouped(rows, column, descending, folders_first, false)
+}
+
+/// As [`sort_permutation`], with the rows' groups first: the groups in the
+/// order of their keys (the opposite with `groups_reversed`), and the rows of
+/// a group in the order the sort gives.
+pub fn sort_permutation_grouped(
+    rows: &[SortRow],
+    column: Column,
+    descending: bool,
+    folders_first: bool,
+    groups_reversed: bool,
+) -> Vec<u32> {
     let mut perm: Vec<u32> = (0..rows.len().min(u32::MAX as usize) as u32).collect();
     perm.sort_unstable_by(|&ia, &ib| {
         let (a, b) = (&rows[ia as usize], &rows[ib as usize]);
+        let by_group = a.group.cmp(&b.group);
+        if by_group != Ordering::Equal {
+            return if groups_reversed {
+                by_group.reverse()
+            } else {
+                by_group
+            };
+        }
         if folders_first && a.is_dir != b.is_dir {
             return if a.is_dir {
                 Ordering::Less
@@ -124,6 +148,7 @@ mod tests {
             ctime: 0,
             atime: 0,
             kind: String::new(),
+            group: Vec::new(),
         }
     }
 
@@ -222,5 +247,36 @@ mod tests {
         b.kind = "Image".into();
         let p = sort_permutation(&[a, b], Column::Type, false, true);
         assert_eq!(p, [1, 0]);
+    }
+
+    #[test]
+    fn groups_come_first_and_the_sort_orders_within_them() {
+        // name, group order key, size
+        let list = [("b", 2u8, 1u64), ("a", 1, 9), ("c", 2, 5), ("d", 1, 2)];
+        let rows: Vec<SortRow> = list
+            .iter()
+            .map(|&(n, g, s)| SortRow {
+                group: vec![g],
+                ..row(n, false, s)
+            })
+            .collect();
+        let name = |reverse: bool, col: Column, desc: bool| -> Vec<&str> {
+            sort_permutation_grouped(&rows, col, desc, true, reverse)
+                .iter()
+                .map(|&i| list[i as usize].0)
+                .collect()
+        };
+        assert_eq!(name(false, Column::Name, false), ["a", "d", "b", "c"]);
+        // descending rows inside, groups still in their order
+        assert_eq!(name(false, Column::Name, true), ["d", "a", "c", "b"]);
+        // the groups reversed, the rows inside as sorted
+        assert_eq!(name(true, Column::Name, false), ["b", "c", "a", "d"]);
+        assert_eq!(name(false, Column::Size, true), ["a", "d", "c", "b"]);
+        // no groups: the plain sort
+        let plain: Vec<SortRow> = list.iter().map(|&(n, _, s)| row(n, false, s)).collect();
+        assert_eq!(
+            sort_permutation_grouped(&plain, Column::Name, false, true, true),
+            sort_permutation(&plain, Column::Name, false, true)
+        );
     }
 }

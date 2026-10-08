@@ -3,7 +3,7 @@
 //! crate; these functions only move bytes. Every pointer is checked for null.
 
 use atlas_explorer_core::display_name;
-use atlas_explorer_core::sort::{Column, SortRow, name_key, sort_permutation};
+use atlas_explorer_core::sort::{Column, SortRow, name_key, sort_permutation_grouped};
 use atlas_explorer_core::{address, location, menu, names, places, tabs};
 
 /// One row for `telamon_sort_permutation`; the C++ twin is in FolderModel.cpp.
@@ -13,6 +13,9 @@ pub struct TelamonSortRow {
     pub key_len: usize,
     pub kind: *const u8,
     pub kind_len: usize,
+    /// The order key of the row's group (`telamon_group_of`); empty: no groups.
+    pub group: *const u8,
+    pub group_len: usize,
     pub size: u64,
     pub mtime: i64,
     pub ctime: i64,
@@ -94,6 +97,7 @@ pub unsafe extern "C" fn telamon_sort_permutation(
     column: u32,
     descending: bool,
     folders_first: bool,
+    groups_reversed: bool,
     out: *mut u32,
 ) -> bool {
     if n == 0 {
@@ -119,6 +123,8 @@ pub unsafe extern "C" fn telamon_sort_permutation(
             // SAFETY: each row's pointers cover their lengths (contract).
             key: unsafe { bytes(r.key, r.key_len) }.to_vec(),
             kind: String::from_utf8_lossy(unsafe { bytes(r.kind, r.kind_len) }).into_owned(),
+            // SAFETY: as for the key and the kind.
+            group: unsafe { bytes(r.group, r.group_len) }.to_vec(),
             is_dir: r.is_dir,
             size: r.size,
             mtime: r.mtime,
@@ -126,7 +132,7 @@ pub unsafe extern "C" fn telamon_sort_permutation(
             atime: r.atime,
         })
         .collect();
-    let perm = sort_permutation(&rows, column, descending, folders_first);
+    let perm = sort_permutation_grouped(&rows, column, descending, folders_first, groups_reversed);
     // SAFETY: `out` has `n` writable u32s and `perm.len() == n`.
     unsafe { std::ptr::copy_nonoverlapping(perm.as_ptr(), out, perm.len()) };
     true
@@ -992,6 +998,8 @@ mod tests {
                 key_len: k.len(),
                 kind: std::ptr::null(),
                 kind_len: 0,
+                group: std::ptr::null(),
+                group_len: 0,
                 size: 0,
                 mtime: 0,
                 ctime: 0,
@@ -1001,11 +1009,11 @@ mod tests {
             .collect();
         let mut out = [0u32; 2];
         assert!(unsafe {
-            telamon_sort_permutation(rows.as_ptr(), 2, 0, false, true, out.as_mut_ptr())
+            telamon_sort_permutation(rows.as_ptr(), 2, 0, false, true, false, out.as_mut_ptr())
         });
         assert_eq!(out, [1, 0]);
         assert!(!unsafe {
-            telamon_sort_permutation(rows.as_ptr(), 2, 9, false, true, out.as_mut_ptr())
+            telamon_sort_permutation(rows.as_ptr(), 2, 9, false, true, false, out.as_mut_ptr())
         });
     }
 

@@ -52,6 +52,13 @@ TelamonWindow {
         }
     }
     onViewChanged: quickLook.close()
+    // Quick Look is over the window: a player in the gallery stops meanwhile.
+    Binding {
+        target: root.view
+        property: "covered"
+        value: quickLook.opened
+        when: root.view !== null
+    }
     // The tab's search, and whether its results are what the view shows.
     readonly property var search: page ? page.search : null
     readonly property bool searching: view ? view.folder.searching : false
@@ -488,15 +495,21 @@ TelamonWindow {
     // Ctrl+plus, Ctrl+minus (steps) and Ctrl+0 (0): the icons' size in the
     // Icons view, the rows' height in the others.
     function zoom(steps) {
-        if (!view) {
-            return;
+        if (view) {
+            view.zoom(steps);
         }
-        const icons = !view.showsDetails && view.viewMode === "icons";
-        if (steps === 0) {
-            PreviewLogic.resetZoom(icons);
-        } else {
-            PreviewLogic.zoom(icons, steps);
+    }
+    // "Use the Same View for Every Folder" on or off: the view shown stays.
+    function setSameView(on) {
+        ViewMemory.sameForAll = on;
+        if (view) {
+            view.remember();
         }
+    }
+    // Whether the folder shown has its own remembered view (`revision` only
+    // makes the menu read it again after a change).
+    function hasRememberedView(revision) {
+        return view ? ViewMemory.hasEntry(view.folder.url) : false;
     }
 
     // ---- Navigation in the tab shown ----
@@ -627,7 +640,7 @@ TelamonWindow {
         const p = pageComponent.createObject(pageHost, {
             "tabId": id,
             "startUrl": target,
-            "startViewMode": o.viewMode || "details",
+            "startViewMode": o.viewMode || "",
             "startBack": o.back || [],
             "startForward": o.forward || [],
             "lazy": !!o.lazy,

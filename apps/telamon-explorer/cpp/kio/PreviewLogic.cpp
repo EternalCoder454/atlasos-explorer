@@ -7,7 +7,7 @@
 
 namespace
 {
-constexpr uint32_t Icons = 0, Rows = 1;
+constexpr uint32_t Rows = 1;
 
 KConfigGroup viewGroup()
 {
@@ -20,7 +20,6 @@ PreviewLogic::PreviewLogic(QObject *parent)
 {
     const KConfigGroup g = viewGroup();
     // A settings file can hold anything: the core brings it into the limits.
-    m_icon = telamon_zoom_clamp(Icons, g.readEntry("IconSize", telamon_zoom_default(Icons, 0)));
     m_row = qMax(0, g.readEntry("RowHeight", 0));
     if (m_row > 0) {
         m_row = telamon_zoom_clamp(Rows, m_row);
@@ -56,56 +55,37 @@ void PreviewLogic::setPaneShown(bool on)
     Q_EMIT paneShownChanged();
 }
 
-void PreviewLogic::zoom(bool icons, int steps)
+void PreviewLogic::zoom(int steps)
 {
-    KConfigGroup g = viewGroup();
-    if (icons) {
-        const int now = telamon_zoom_step(Icons, m_icon, steps);
-        if (now != m_icon) {
-            m_icon = now;
-            g.writeEntry("IconSize", now);
-            g.sync();
-            Q_EMIT iconSizeChanged();
-        }
-    } else {
-        const int now = telamon_zoom_step(Rows, rowHeight(), steps);
-        if (now != rowHeight()) {
-            m_row = now;
-            g.writeEntry("RowHeight", now);
-            g.sync();
-            Q_EMIT rowHeightChanged();
-        }
+    const int now = telamon_zoom_step(Rows, rowHeight(), steps);
+    if (now != rowHeight()) {
+        KConfigGroup g = viewGroup();
+        m_row = now;
+        g.writeEntry("RowHeight", now);
+        g.sync();
+        Q_EMIT rowHeightChanged();
     }
 }
 
-void PreviewLogic::resetZoom(bool icons)
+void PreviewLogic::resetZoom()
 {
     KConfigGroup g = viewGroup();
-    if (icons) {
-        const int def = telamon_zoom_default(Icons, 0);
-        g.deleteEntry("IconSize");
-        if (m_icon != def) {
-            m_icon = def;
-            Q_EMIT iconSizeChanged();
-        }
-    } else {
-        const int before = rowHeight();
-        m_row = 0;
-        g.deleteEntry("RowHeight");
-        if (rowHeight() != before) {
-            Q_EMIT rowHeightChanged();
-        }
+    const int before = rowHeight();
+    m_row = 0;
+    g.deleteEntry("RowHeight");
+    if (rowHeight() != before) {
+        Q_EMIT rowHeightChanged();
     }
     g.sync();
 }
 
-void PreviewLogic::zoomByWheel(bool icons, int delta)
+void PreviewLogic::zoomByWheel(int delta)
 {
     int rest = 0;
     const int steps = telamon_zoom_wheel(m_wheelRest, delta, &rest);
     m_wheelRest = rest;
     if (steps != 0) {
-        zoom(icons, steps);
+        zoom(steps);
     }
 }
 

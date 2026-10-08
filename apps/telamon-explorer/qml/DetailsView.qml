@@ -44,9 +44,19 @@ Item {
         list.positionViewAtIndex(row, ListView.Contain);
     }
 
-    // The row at a point in this item's coordinates, -1 for none.
+    // The row at a point in this item's coordinates, -1 for none (a group's
+    // header is above the row it comes before, and is not a row).
     function rowAt(x, y) {
-        return list.indexAt(x + list.contentX, y + list.contentY);
+        const cy = y + list.contentY;
+        const index = list.indexAt(x + list.contentX, cy);
+        if (index < 0) {
+            return -1;
+        }
+        const item = list.itemAtIndex(index);
+        if (item && (cy < item.y || cy >= item.y + item.height)) {
+            return -1;
+        }
+        return index;
     }
 
     // Where a row is, in the folder view's coordinates (the row may be off screen).
@@ -89,6 +99,29 @@ Item {
         cacheBuffer: root.rowHeight * 8
         QQC2.ScrollBar.vertical: TelamonScrollBar {}
         QQC2.ScrollBar.horizontal: TelamonScrollBar {}
+
+        // Group by: the rows of a group are together, each group starts with a header.
+        // (Not grouped, every row's group is empty and the header takes no room. The
+        // property stays as it is: changing it while rows are shown crashes the list.)
+        section.property: "groupKey"
+        section.criteria: ViewSection.FullString
+        section.delegate: GroupHeader {
+            required property string section
+            width: Math.max(list.width, root.totalWidth)
+            fv: root.fv
+            label: section
+            // Read again when the groups are worked out again.
+            count: {
+                root.fv.folder.groupRevision;
+                return root.fv.folder.groupCount(section);
+            }
+            collapsed: {
+                root.fv.folder.groupRevision;
+                return root.fv.folder.isGroupCollapsed(section);
+            }
+            visible: section.length > 0
+            height: visible ? implicitHeight : 0
+        }
 
         header: Rectangle {
             z: 2
@@ -172,8 +205,11 @@ Item {
             required property string modifiedText
             required property string typeText
             required property string pathText
+            required property bool groupCollapsed
             width: Math.max(list.width, root.totalWidth)
-            height: root.rowHeight
+            // The rows of a collapsed group take no room.
+            height: groupCollapsed ? 0 : root.rowHeight
+            visible: !groupCollapsed
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
             readonly property bool current: root.fv.currentRow === index
 

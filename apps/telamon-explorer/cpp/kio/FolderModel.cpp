@@ -6,6 +6,7 @@
 #include <KIO/Job>
 #include <KIO/UDSEntry>
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -134,6 +135,8 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {PathTextRole, "pathText"},
         {ThumbnailSourceRole, "thumbnailSource"},
         {IsCutRole, "isCut"},
+        {GroupRole, "groupKey"},
+        {GroupCollapsedRole, "groupCollapsed"},
     };
 }
 
@@ -220,6 +223,10 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         return e.item.isHidden();
     case IsCutRole:
         return isCut(e.item);
+    case GroupRole:
+        return grouped() ? e.group : QString();
+    case GroupCollapsedRole:
+        return grouped() && !m_collapsed.isEmpty() && m_collapsed.contains(e.group);
     case SizeRole:
         return e.size;
     case ModifiedRole:
@@ -273,6 +280,9 @@ void FolderModel::open(const QUrl &url, const QString &notice)
     m_sortTimer.stop();
     const bool urlDiffers = url != m_url;
     m_url = url;
+    if (urlDiffers && !m_collapsed.isEmpty()) {
+        m_collapsed.clear();
+    }
     resetRows();
     if (m_notice != notice) {
         m_notice = notice;
@@ -431,7 +441,9 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
             continue;
         }
         m_folders -= m_rows[i].isDir;
+        const QString group = m_rows[i].group;
         m_rows[i] = makeEntry(*found);
+        m_rows[i].group = group;
         m_folders += m_rows[i].isDir;
         Q_EMIT dataChanged(index(i), index(i));
         any = true;
@@ -547,6 +559,27 @@ void FolderModel::setFoldersFirst(bool on)
     }
 }
 
+void FolderModel::setGroupBy(GroupBy g)
+{
+    if (m_groupBy == g) {
+        return;
+    }
+    m_groupBy = g;
+    m_collapsed.clear();
+    m_groupCounts.clear();
+    ++m_structGen;
+    // The old names must not be shown under the new grouping.
+    for (Entry &e : m_rows) {
+        e.group.clear();
+    }
+    if (!m_rows.isEmpty()) {
+        Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {GroupRole, GroupCollapsedRole});
+    }
+    scheduleSort();
+    Q_EMIT groupChanged();
+    Q_EMIT sortChanged();
+}
+
 void FolderModel::scheduleSort()
 {
     m_sortDirty = true;
@@ -568,28 +601,41 @@ void FolderModel::startSort()
     }
     m_sortDirty = false;
     const bool byType = m_sortColumn == Type;
+    const GroupBy group = grouped() && m_sortColumn != Relevance ? m_groupBy : GroupNone;
+    const bool needKind = byType || group == GroupType;
     auto rows = std::make_shared<QList<SortRowIn>>();
     rows->reserve(m_rows.size());
     for (Entry &e : m_rows) {
-        if (byType) {
+        if (needKind) {
             fillType(e);
         }
         const bool needKey = e.key.isEmpty();
-        rows->append({needKey || e.display.isEmpty() ? e.item.name() : QString(), e.key, byType ? e.type.toUtf8() : QByteArray(), e.size, e.mtime, e.ctime,
+        rows->append({needKey || e.display.isEmpty() ? e.item.name() : QString(), e.key, needKind ? e.type.toUtf8() : QByteArray(), e.size, e.mtime, e.ctime,
                       e.atime, e.isDir, e.display.isEmpty(), e.rank});
     }
     const quint64 gen = m_structGen;
     const quint32 column = quint32(m_sortColumn);
     const bool desc = m_descending;
     const bool ff = m_foldersFirst;
+    // The date groups are told apart from "now" in this zone, the weeks from the locale's first day.
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const qint64 tz = QDateTime::currentDateTime().offsetFromUtc();
+    const quint32 weekStart = quint32(QLocale().firstDayOfWeek()) - 1;
+    const bool reverseGroups = group != GroupNone && telamon_group_reversed(quint32(group), column, desc);
     m_sortRunning = true;
-    m_pool.start([this, rows, gen, column, desc, ff] {
+    m_pool.start([this, rows, gen, column, desc, ff, group, now, tz, weekStart, reverseGroups] {
         SortResult res;
         res.gen = gen;
         res.n = rows->size();
         res.keys.resize(res.n);
         res.displays.resize(res.n);
+        if (group != GroupNone) {
+            res.groups.resize(res.n);
+        }
         std::vector<TelamonSortRow> flat(size_t(res.n));
+        // The order key of each row's group, kept alive until the sort is done.
+        std::vector<QByteArray> orders(group != GroupNone ? size_t(res.n) : 0);
+        QHash<QByteArray, QString> labels;
         for (qsizetype i = 0; i < res.n; ++i) {
             SortRowIn &r = (*rows)[i];
             if (!r.name.isEmpty()) {
@@ -602,10 +648,34 @@ void FolderModel::startSort()
                     res.displays[i] = rustDisplayName(utf8);
                 }
             }
+            if (group != GroupNone) {
+                QByteArray out(96, 0);
+                auto call = [&] {
+                    return telamon_group_of(quint32(group), reinterpret_cast<const uint8_t *>(r.key.constData()), size_t(r.key.size()),
+                                            reinterpret_cast<const uint8_t *>(r.kind.constData()), size_t(r.kind.size()), r.isDir, r.mtime, now, tz,
+                                            weekStart, reinterpret_cast<uint8_t *>(out.data()), size_t(out.size()));
+                };
+                size_t n = call();
+                if (n > size_t(out.size())) {
+                    out.resize(qsizetype(n));
+                    n = call();
+                }
+                out.truncate(qsizetype(n));
+                const qsizetype zero = out.indexOf('\0');
+                orders[size_t(i)] = zero < 0 ? out : out.left(zero);
+                // One string per group, shared by its rows.
+                auto found = labels.constFind(orders[size_t(i)]);
+                if (found == labels.cend()) {
+                    found = labels.insert(orders[size_t(i)], zero < 0 ? QString() : QString::fromUtf8(out.constData() + zero + 1, qsizetype(out.size() - zero - 1)));
+                }
+                res.groups[i] = *found;
+            }
             flat[size_t(i)] = {reinterpret_cast<const uint8_t *>(r.key.constData()),
                                size_t(r.key.size()),
                                reinterpret_cast<const uint8_t *>(r.kind.constData()),
                                size_t(r.kind.size()),
+                               group != GroupNone ? reinterpret_cast<const uint8_t *>(orders[size_t(i)].constData()) : nullptr,
+                               group != GroupNone ? size_t(orders[size_t(i)].size()) : 0,
                                r.size,
                                r.mtime,
                                r.ctime,
@@ -619,7 +689,7 @@ void FolderModel::startSort()
             std::stable_sort(res.perm.begin(), res.perm.end(), [&rows](quint32 a, quint32 b) { return (*rows)[a].rank < (*rows)[b].rank; });
             res.ok = true;
         } else {
-            res.ok = telamon_sort_permutation(flat.data(), flat.size(), column, desc, ff, res.perm.data());
+            res.ok = telamon_sort_permutation(flat.data(), flat.size(), column, desc, ff, reverseGroups, res.perm.data());
         }
         QMetaObject::invokeMethod(this, [this, res = std::move(res)]() mutable { applySort(std::move(res)); }, Qt::QueuedConnection);
     });
@@ -637,6 +707,9 @@ void FolderModel::applySort(SortResult r)
             if (!r.displays[i].isEmpty() && m_rows[i].display.isEmpty()) {
                 m_rows[i].display = r.displays[i];
             }
+            if (i < r.groups.size()) {
+                m_rows[i].group = r.groups[i];
+            }
         }
         Q_EMIT layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
         const QModelIndexList old = persistentIndexList();
@@ -652,6 +725,14 @@ void FolderModel::applySort(SortResult r)
             sorted.append(std::move(m_rows[int(i)]));
         }
         m_rows = std::move(sorted);
+        m_groupCounts.clear();
+        if (!r.groups.isEmpty()) {
+            for (const Entry &e : std::as_const(m_rows)) {
+                if (!e.group.isEmpty()) {
+                    ++m_groupCounts[e.group];
+                }
+            }
+        }
         QModelIndexList updated;
         updated.reserve(old.size());
         for (const QModelIndex &o : old) {
@@ -659,6 +740,10 @@ void FolderModel::applySort(SortResult r)
         }
         changePersistentIndexList(old, updated);
         Q_EMIT layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+        if (!r.groups.isEmpty() || m_groupRevision != 0) {
+            ++m_groupRevision;
+            Q_EMIT groupRevisionChanged();
+        }
     }
     if (m_sortDirty || r.gen != m_structGen || r.n < m_rows.size()) {
         m_sortDirty = true;
@@ -681,6 +766,16 @@ int FolderModel::rowOfUrl(const QUrl &url) const
     for (int i = 0; i < m_rows.size(); ++i) {
         if (m_rows[i].item.url() == url) {
             return i;
+        }
+    }
+    // A folder's URL may come with a slash at its end (its parent's listing
+    // never has one).
+    const QUrl bare = url.adjusted(QUrl::StripTrailingSlash);
+    if (bare != url) {
+        for (int i = 0; i < m_rows.size(); ++i) {
+            if (m_rows[i].item.url() == bare) {
+                return i;
+            }
         }
     }
     return -1;
@@ -708,6 +803,9 @@ int FolderModel::findPrefix(const QString &prefix, int startRow) const
     startRow = std::clamp(startRow, 0, n - 1);
     for (int k = 0; k < n; ++k) {
         Entry &e = m_rows[(startRow + k) % n];
+        if (!m_collapsed.isEmpty() && grouped() && m_collapsed.contains(e.group)) {
+            continue;
+        }
         if (e.display.isEmpty()) {
             e.display = rustDisplayName(e.item.name().toUtf8());
         }
@@ -726,7 +824,87 @@ QItemSelection FolderModel::rangeSelection(int from, int to) const
     }
     from = std::clamp(from, 0, n - 1);
     to = std::clamp(to, 0, n - 1);
-    return QItemSelection(index(std::min(from, to)), index(std::max(from, to)));
+    const int lo = std::min(from, to), hi = std::max(from, to);
+    if (m_collapsed.isEmpty() || !grouped()) {
+        return QItemSelection(index(lo), index(hi));
+    }
+    // The rows in collapsed groups are not there to be selected.
+    QItemSelection out;
+    int start = -1;
+    for (int i = lo; i <= hi; ++i) {
+        const bool hidden = m_collapsed.contains(m_rows.at(i).group);
+        if (!hidden && start < 0) {
+            start = i;
+        } else if (hidden && start >= 0) {
+            out.select(index(start), index(i - 1));
+            start = -1;
+        }
+    }
+    if (start >= 0) {
+        out.select(index(start), index(hi));
+    }
+    return out;
+}
+
+QList<FolderModel::GroupSpan> FolderModel::groupSpans() const
+{
+    QList<GroupSpan> out;
+    if (!grouped()) {
+        return out;
+    }
+    for (int i = 0; i < m_rows.size(); ++i) {
+        const QString &g = m_rows.at(i).group;
+        if (out.isEmpty() || out.last().label != g) {
+            out.append({g, i, 1});
+        } else {
+            ++out.last().count;
+        }
+    }
+    return out;
+}
+
+void FolderModel::toggleGroup(const QString &group)
+{
+    if (!grouped() || group.isEmpty()) {
+        return;
+    }
+    if (!m_collapsed.remove(group)) {
+        m_collapsed.insert(group);
+    }
+    const QVariantList range = groupRange(group);
+    if (range.size() == 2) {
+        Q_EMIT dataChanged(index(range[0].toInt()), index(range[1].toInt()), {GroupCollapsedRole});
+    }
+    // The headers read their state again.
+    ++m_groupRevision;
+    Q_EMIT groupRevisionChanged();
+}
+
+QVariantList FolderModel::groupRange(const QString &group) const
+{
+    int first = -1, last = -1;
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (m_rows.at(i).group == group) {
+            if (first < 0) {
+                first = i;
+            }
+            last = i;
+        }
+    }
+    return first < 0 ? QVariantList() : QVariantList{first, last};
+}
+
+bool FolderModel::isRowCollapsed(int row) const
+{
+    return row >= 0 && row < m_rows.size() && !m_collapsed.isEmpty() && grouped() && m_collapsed.contains(m_rows.at(row).group);
+}
+
+int FolderModel::visibleRowFrom(int row, int step) const
+{
+    while (row >= 0 && row < m_rows.size() && isRowCollapsed(row)) {
+        row += step < 0 ? -1 : 1;
+    }
+    return row >= 0 && row < m_rows.size() ? row : -1;
 }
 
 QVariantMap FolderModel::detailsAt(int row) const
@@ -863,6 +1041,7 @@ void FolderModel::beginSearch()
     }
     Q_EMIT sortChanged();
     Q_EMIT searchingChanged();
+    Q_EMIT groupChanged();
 }
 
 // Back to the folder's own sort, without listing it.
@@ -877,6 +1056,7 @@ void FolderModel::leaveSearch()
     setLoading(false);
     Q_EMIT sortChanged();
     Q_EMIT searchingChanged();
+    Q_EMIT groupChanged();
 }
 
 void FolderModel::endSearch()
