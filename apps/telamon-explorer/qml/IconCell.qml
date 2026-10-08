@@ -61,7 +61,7 @@ Item {
         width: cell.view.icon
         height: cell.view.icon
         opacity: (cell.isHidden ? 0.6 : 1) * (cell.isCut ? 0.5 : 1)
-        Kirigami.Icon {
+        FileIcon {
             anchors.fill: parent
             source: cell.iconName
             // The file's own picture takes its place.

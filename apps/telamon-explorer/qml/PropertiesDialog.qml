@@ -94,7 +94,7 @@ TelamonDialog {
     RowLayout {
         Layout.fillWidth: true
         spacing: TelamonStyle.spacingLarge
-        Kirigami.Icon {
+        FileIcon {
             Layout.preferredWidth: Kirigami.Units.iconSizes.large
             Layout.preferredHeight: Kirigami.Units.iconSizes.large
             source: dialog.general.iconName ?? "document-properties"

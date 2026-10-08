@@ -116,6 +116,7 @@ qt_add_qml_module(telamon-explorer-app
         qml/InlineRename.qml
         qml/BatchRenameDialog.qml
         qml/IconCell.qml
+        qml/FileIcon.qml
         qml/ColumnsView.qml
         qml/ColumnList.qml
         qml/GalleryView.qml
