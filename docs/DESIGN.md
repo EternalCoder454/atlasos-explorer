@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 12 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days")
+0.2.0 plus waves 1 to 13 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -37,7 +37,7 @@ Explorer replaces Dolphin completely.
 | Copy, move, link, rename, trash, delete, undo, conflict dialog | Explorer's operation queue, on KIO jobs |
 | Context menu: Open With, service menus, "Open Terminal Here", Shift+F4 | Explorer: KFileItemActions, KTerminalLauncherJob (Ghostty through kdeglobals) |
 | Search (Baloo, filenamesearch) | Explorer: the file index (below) and a live walk |
-| Properties dialog | Explorer, with permissions, default app and checksums |
+| Properties dialog | Explorer's own Telamon.Ui window, with permissions, default app, checksums, tags and rating |
 | `org.freedesktop.FileManager1` ("Show in folder") | Explorer |
 | Default for `inode/directory` | Explorer (the image's `mimeapps.list`) |
 | Archive extract and compress | **Telamon Archive** over its D-Bus API; Explorer only calls it |
@@ -324,7 +324,7 @@ Explorer replaces Dolphin completely.
   - **Items:** Open; Open With; an icon row (Cut, Copy, Paste, Rename, Move to
     Trash; Left and Right pick a button, a button that is off is skipped);
     Compress… (only when Telamon Archive is installed and the items are on
-    this computer); Properties; and **More Actions**: Open in New Tab(s) for
+    this computer); **Tags** (wave 13, below); Properties; and **More Actions**: Open in New Tab(s) for
     folders, Open File Location (search results and Recent), Open Terminal
     Here, Pin to Sidebar (one folder), Copy Path (Ctrl+Shift+C: the full path
     as plain text, one a line; a server's file gives its address), Hide or
@@ -436,7 +436,7 @@ Explorer replaces Dolphin completely.
   places (Home, Recent, the standard folders, pins), **Drives** (internal
   disks, USB drives, phones), **Network**, and the Trash pinned under the list
   as the sidebar's footer. The dated "Modified Today" lists and searches need an
-  index Files doesn't have and are not listed; tags wait for their own wave.
+  index Files doesn't have and are not listed. The **Tags** section (wave 13) is below them (see "Tags and Properties").
   A first run (no `user-places.xbel` yet) adds Recent and the standard folders
   to the file KDE creates (Home, Trash, Network), so the sidebar starts as it
   always did and the same list shows in Open and Save dialogs; a file that
@@ -653,8 +653,128 @@ Explorer replaces Dolphin completely.
 - **Panes:** a preview pane (Alt+P: a large thumbnail, or text, or a media
   player) and a details pane (Alt+Shift+P: name, kind, size, dates,
   dimensions or duration from KFileMetaData's extractors run in a worker,
-  permissions summary, tags later). **Split view** (F3): two panes in one
+  permissions summary, tags). **Split view** (F3): two panes in one
   tab, drag between them, F5/F6 copy and move to the other side.
+- **Tags and Properties** (wave 13).
+
+  **Built (wave 13):**
+  - **Storage.** A tag is a name in the extended attribute `user.xdg.tags`, a
+    UTF-8 comma-separated list (`Red,Work,Taxes 2025`), the freedesktop
+    convention that Dolphin and Baloo read and write; the star rating is
+    `user.baloo.rating`, a number 0 to 10 written as text (two to a star), as
+    Baloo does. A **colour tag** is a tag with one of seven names (Red, Orange,
+    Yellow, Green, Blue, Purple, Gray, in any case); nothing else is stored for
+    it, so other programs see a plain name. Names are compared ignoring case.
+    A new name is trimmed, at most 64 characters, with no comma or control
+    character; an item holds at most 32 tags and 2,048 bytes of them. A value
+    that is not UTF-8 is shown but never rewritten (it would lose bytes). The
+    rules are the core's (`tags`, `xattr`, `attrs`); the calls are `lgetxattr`
+    and friends, so a link has no tags ("Links can't have tags.") and a file
+    system without extended attributes (FAT, many network shares, `/proc`)
+    answers "This location can't keep tags." in the Tags menu and Properties,
+    and in the toast when a change is tried; a server's files say the same.
+    A read-only file can't be tagged by its owner unless it is writable (the
+    kernel's rule for user attributes).
+  - **Seen in every view.** `FolderModel` has the roles `tags`, `tagColours`
+    and `tagsText`; a view asks for them as its rows are drawn, and the model
+    reads the attribute of the rows asked for, in batches of up to 300, on two
+    workers (`FolderModel::readTagBatch`), local files only. The colour dots
+    (`qml/TagDots.qml`, at most four) are drawn after the name in Details,
+    at the foot of the picture in Icons and Gallery, at the end of the row in
+    Compact and in Columns. A refresh (F5, Ctrl+R) reads the tags again; a
+    change by Files does too (below). A change made by another program while
+    the folder is shown is seen on the next refresh (the lister does not watch
+    extended attributes).
+  - **Tags menu.** Right click, Tags: a row of the seven colour dots (a check
+    mark: every selected item has it; a dash: some do; a click or Enter puts
+    it on the items without it, or takes it off when every one has it), then
+    the named tags in use (the items' own, then the sidebar's), New Tag… (a
+    Telamon.Ui name prompt that checks the name as it is typed) and Clear Tags.
+    It is decided from what the folder has already read (no disk access when
+    the menu opens); when an item can't keep tags, one row says why. The row
+    of dots is Files' own (`qml/TagRowItem.qml`, in the shape of
+    `IconRowItem`), because `ContextMenuItem` draws its icon in the text
+    colour.
+  - **Through the queue, undoable.** Tag, rating and permission changes are
+    queue operations of kind `Attrs` (`OperationQueue::setAttributes`): the
+    core makes them on a worker (`attrs::run_edit`, `run_mode_tree`) and writes
+    each down as *item, key, value before, value after*; the history entry
+    (`Undo::Attrs`) puts the values back, **only when the value is still the one
+    the change left** (all items are checked first; nothing changes otherwise),
+    and Redo is the inverse. Permission changes widen a folder's bits first
+    and narrow them last, what is inside a folder before the folder, so an undo
+    never locks itself out. A change that did part of its items before a failure
+    is one step to undo for those; more than 20,000 changed items are done but
+    not undoable (said in a toast). A change ends with `attributesChanged`:
+    every folder shown, the sidebar and an open Properties window read again.
+  - **Sidebar Tags section.** Under Network: the tags in use, a colour dot or a
+    label symbol, the name and the number of items when the index knows it.
+    The list is the index's `Tags()` (which the file index service now keeps, see
+    "File index") merged with the names seen in the folders shown or changed
+    this session (`TagLogic`). Files asks the index for it when the service is
+    running, and starts it for this only once the person has used tags (a flag
+    in `[Tags]` of `telamon-explorerrc`), so a first start never starts the
+    service for nothing; every search starts it anyway, and its
+    `StatusChanged` makes Files ask again. A click shows every item with the
+    tag, from everywhere: the tab's search with the chip "Tag: Red" (it is
+    cleared with its x, Esc or going to a folder), scope Everywhere, answered by
+    the index (`Search` option `tag`) or, when the index is off, a **live walk
+    of the home folder** reading the attribute of each entry, with the search
+    row's Stop button. A search of a server's folder with a tag says "This
+    location can't keep tags."
+  - **Details columns.** View > Details Columns: **Tags**, and the optional
+    **Dimensions**, **Duration** and **Date Taken** (`ColumnLogic`, `[View]`
+    `ColumnTags`, `ColumnDimensions`, `ColumnDuration`, `ColumnTaken`; all off
+    by default). The three that read the files turn on `FolderModel::wantMeta`,
+    and only then are the rows on screen read, 24 at a time on one worker with
+    KFileMetaData's extractors (`MetaReader`; the picture's header by
+    `QImageReader` when no extractor gave a size), local files only; they are
+    empty on servers. The columns are not offered in the Trash and cannot be
+    sorted yet.
+  - **Properties** replaces `KPropertiesDialog` everywhere (the context menus,
+    the background menu, `FileManager1.ShowItemProperties`): a Telamon.Ui
+    dialog (`qml/PropertiesDialog.qml`) over `PropertiesLogic`, with four
+    pages. *General*: the name (changed with Rename, through the queue and
+    its checks; the dialog follows the new name), kind, location, size, dates
+    (created where the file system keeps a birth time), the link target, the
+    application that opens this kind of file (a choice of KService's list
+    for the MIME type, written to `mimeapps.list` as `[Default Applications]`
+    and `[Added Associations]`; not for folders, nor for items of several kinds),
+    tags (the dots put a colour on or take it off, a chip's x takes a tag off,
+    New Tag…) and the star rating (`TelamonRating`, whole stars, Clear). A
+    **folder's size is counted only when asked** (Calculate Folder Size, on a
+    worker for this computer, a KIO job for a server; it can be stopped and
+    says how far it got; it stays on one file system, does not follow links
+    and counts a file with several names once). *Permissions*: the owner's,
+    group's and everyone else's Read, Write and Run (Open for folders) as boxes
+    (a dash when the items differ), one sentence in words, the octal mode, and
+    for a folder "Also change everything inside the folders" (files keep their
+    Run setting; only the boxes the person changed are applied). Only the owner
+    can change them; others see them read-only. Links, servers and the
+    Trash don't show permissions. *Details*: what KFileMetaData knows (size of
+    the picture, length, codec, camera, exposure, pages, author ...), for one
+    file on this computer. *Checksums*: SHA-256, SHA-1, MD5 or SHA-512 of one
+    file on this computer, **calculated on request** by Calculate, in one
+    pass on a worker with a progress bar and **Stop**; a checksum pasted into
+    "Compare with" (any case, with spaces or colons between bytes, a `sha256:`
+    label, `sha256sum`'s or the BSD form) says "match" or "different", and
+    calculates its kind first if that has not been done. Several selected
+    items show the combined size and count, the kinds, and the fields they
+    share (tags with "some items", a rating that differs, boxes with a dash).
+    Everything the dialog reads happens on workers (disk) or through KIO
+    (servers); closing it stops what runs. The hash functions are written out in
+    the core (tested against the published vectors); MD5 and SHA-1 are there to
+    check downloads, not for security.
+  - **Framework gaps** (for the Telamon OS Framework session):
+    `TelamonDetailGrid` loses its labels when its `model` is filled after the
+    grid was made (the Properties window gets facts as they arrive), so Files
+    has `qml/DetailRows.qml` in its shape; `ContextMenuItem` has no way to
+    show a coloured dot (`TagRowItem`); the framework has no tri-state
+    permission grid.
+  - **Not in this wave:** sorting by tag or rating, a Rating column, tags on
+    servers (they have none), renaming or deleting a tag everywhere, a Properties
+    window per item (it is one dialog over the window), "Restore Previous
+    Versions" and "Open in Disks" in Properties (their services don't exist yet).
 - **Quick Look** (Space): an overlay with a 1024 px preview from KIO's
   thumbnailers (images, video frames, PDFs, fonts, office documents), the
   first 256 KB of a text file as plain text, and audio and video playable
