@@ -60,6 +60,7 @@ pub enum Cmd {
     ExtractTo,
     CompressZip,
     Compress,
+    Tags,
     Properties,
     MoreActions,
     // In "More Actions".
@@ -95,6 +96,7 @@ impl Cmd {
             Cmd::ExtractTo => "extractTo",
             Cmd::CompressZip => "compressZip",
             Cmd::Compress => "compress",
+            Cmd::Tags => "tags",
             Cmd::Properties => "properties",
             Cmd::MoreActions => "moreActions",
             Cmd::OpenInNewTab => "openInNewTab",
@@ -164,6 +166,9 @@ pub fn item_menu(count: usize, folders: usize, flags: u32) -> Vec<(Cmd, bool)> {
         out.push((Cmd::CompressZip, here));
         out.push((Cmd::Compress, here));
     }
+    // Tags are kept in the file system, so only for files on this computer
+    // (the menu says why when it can't keep them).
+    out.push((Cmd::Tags, has(F_LOCAL) && !has(F_IN_TRASH)));
     out.push((Cmd::Properties, true));
     out.push((Cmd::MoreActions, true));
     if folders > 0 {
@@ -417,6 +422,7 @@ mod tests {
             Cmd::Trash,
             Cmd::OpenWith,
             Cmd::Properties,
+            Cmd::Tags,
             Cmd::MoreActions,
             Cmd::OpenTerminal,
             Cmd::CopyPath,
@@ -425,6 +431,16 @@ mod tests {
         ] {
             assert!(on(&m, c).is_some(), "{:?} missing: {:?}", c, keys(&m));
         }
+        assert_eq!(on(&m, Cmd::Tags), Some(true));
+        // Tags live in the file system: not for a server's files or the Trash.
+        assert_eq!(
+            on(&item_menu(1, 0, BASE & !F_LOCAL), Cmd::Tags),
+            Some(false)
+        );
+        assert_eq!(
+            on(&item_menu(1, 0, BASE | F_IN_TRASH), Cmd::Tags),
+            Some(false)
+        );
         // Not for a file: tabs, pins; nothing about Open With or Compress
         // unless asked.
         for c in [

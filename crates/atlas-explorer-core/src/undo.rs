@@ -81,6 +81,19 @@ pub enum Undo {
     MakeFolder { path: String },
     /// Trashed: undo restores them.
     Trash { trashed: Vec<Trashed> },
+    /// Tags, ratings or permissions changed: undo sets each value back, when
+    /// it still is what the change left.
+    Attrs { changes: Vec<AttrChange> },
+}
+
+/// One value of one item that was changed (see `attrs`). `key` is `tags`,
+/// `rating` or `mode`; the values are the text `attrs::read` gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttrChange {
+    pub path: String,
+    pub key: String,
+    pub before: String,
+    pub after: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +103,9 @@ pub enum StepKind {
     RemoveEmptyFolder,
     RestoreFromTrash,
     MakeFolder,
+    /// Set an attribute back: `path`, and in `to` the attribute's name, the
+    /// value it must have now and the value to give it, tab-separated.
+    SetAttr,
 }
 
 /// One thing undo will do.
@@ -121,6 +137,7 @@ impl UndoPlan {
             StepKind::RemoveEmptyFolder => "Remove the new folder",
             StepKind::RestoreFromTrash => "Restore from the Trash",
             StepKind::MakeFolder => "Make the folder again",
+            StepKind::SetAttr => "Change it back",
         };
         if n == 1 {
             format!("{what}: {}", first.path)
@@ -227,6 +244,18 @@ impl Undo {
                     });
                 }
             }
+            Undo::Attrs { changes } => {
+                for c in changes {
+                    if stat(&c.path).is_none() {
+                        return refuse("It is gone or was moved", &c.path);
+                    }
+                    steps.push(Step {
+                        kind: StepKind::SetAttr,
+                        path: c.path.clone(),
+                        to: Some(format!("{}\t{}\t{}", c.key, c.after, c.before)),
+                    });
+                }
+            }
         }
         if steps.is_empty() {
             return refuse("There is nothing to undo", "");
@@ -253,6 +282,13 @@ impl Undo {
                 for t in trashed {
                     out.push(t.in_trash.path.clone());
                     out.push(t.original.clone());
+                }
+            }
+            Undo::Attrs { changes } => {
+                for c in changes {
+                    if out.last() != Some(&c.path) {
+                        out.push(c.path.clone());
+                    }
                 }
             }
         }
@@ -316,6 +352,17 @@ impl Undo {
                 }
                 (!created.is_empty()).then_some(Undo::Copy { created })
             }
+            Undo::Attrs { changes } => Some(Undo::Attrs {
+                changes: changes
+                    .iter()
+                    .map(|c| AttrChange {
+                        path: c.path.clone(),
+                        key: c.key.clone(),
+                        before: c.after.clone(),
+                        after: c.before.clone(),
+                    })
+                    .collect(),
+            }),
         }
     }
 
@@ -374,6 +421,14 @@ impl Undo {
                     }
                 }
             }
+            Undo::Attrs { changes } => {
+                push(&["attrs"], None);
+                for c in changes {
+                    if !push(&[&c.path, &c.key, &c.before, &c.after], None) {
+                        return None;
+                    }
+                }
+            }
         }
         Some(out)
     }
@@ -420,6 +475,25 @@ impl Undo {
                                 path: nonempty(r.get(1)?)?,
                                 state: parse_state(r.get(2..)?)?,
                             },
+                        })
+                    })
+                    .collect::<Option<_>>()?,
+            },
+            "attrs" => Undo::Attrs {
+                changes: rows
+                    .iter()
+                    .map(|r| {
+                        let [path, key, before, after] = r.as_slice() else {
+                            return None;
+                        };
+                        if !matches!(*key, "tags" | "rating" | "mode") {
+                            return None;
+                        }
+                        Some(AttrChange {
+                            path: nonempty(path)?,
+                            key: key.to_string(),
+                            before: before.to_string(),
+                            after: after.to_string(),
                         })
                     })
                     .collect::<Option<_>>()?,
@@ -787,6 +861,68 @@ mod tests {
         ] {
             assert_eq!(Undo::from_text(junk), None, "{junk:?}");
         }
+    }
+
+    fn attrs() -> Undo {
+        Undo::Attrs {
+            changes: vec![
+                AttrChange {
+                    path: "file:///a/x".into(),
+                    key: "tags".into(),
+                    before: "".into(),
+                    after: "Red,Work".into(),
+                },
+                AttrChange {
+                    path: "file:///a/y".into(),
+                    key: "tags".into(),
+                    before: "Blue".into(),
+                    after: "Blue,Red".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn attribute_changes_are_undone_by_setting_values_back() {
+        let both = [("file:///a/x", file(1, 1)), ("file:///a/y", file(2, 2))];
+        let seen = fs(&both);
+        let rec = attrs();
+        let plan = rec.check(&seen).unwrap();
+        assert_eq!(plan.steps.len(), 2);
+        assert_eq!(plan.steps[0].kind, StepKind::SetAttr);
+        assert_eq!(plan.steps[0].to.as_deref(), Some("tags\tRed,Work\t"));
+        assert_eq!(plan.steps[1].to.as_deref(), Some("tags\tBlue,Red\tBlue"));
+        assert_eq!(plan.summary(), "Change it back: 2 items");
+        // A file that is gone refuses it.
+        let one = [("file:///a/x", file(1, 1))];
+        let gone = fs(&one);
+        assert!(rec.check(&gone).is_err());
+        assert_eq!(attrs().paths(), ["file:///a/x", "file:///a/y"]);
+        assert!(attrs().paths_after().is_empty());
+        // The inverse swaps before and after, and swapping twice is the start.
+        let inv = attrs().inverse(|_| None, |_| None).unwrap();
+        let Undo::Attrs { changes } = &inv else {
+            panic!()
+        };
+        assert_eq!(changes[0].before, "Red,Work");
+        assert_eq!(changes[0].after, "");
+        assert_eq!(inv.inverse(|_| None, |_| None), Some(attrs()));
+        // Text form.
+        let text = attrs().to_text().unwrap();
+        assert!(text.starts_with("attrs\n"));
+        assert_eq!(Undo::from_text(&text), Some(attrs()));
+        assert_eq!(Undo::from_text("attrs\nfile:///a\tbogus\t\tx\n"), None);
+        assert_eq!(Undo::from_text("attrs\nfile:///a\ttags\n"), None);
+        // A value with a control character is not written down.
+        let bad = Undo::Attrs {
+            changes: vec![AttrChange {
+                path: "file:///a".into(),
+                key: "tags".into(),
+                before: "a\tb".into(),
+                after: "".into(),
+            }],
+        };
+        assert_eq!(bad.to_text(), None);
     }
 
     #[test]

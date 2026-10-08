@@ -72,6 +72,7 @@ pub fn title(a: &About) -> String {
         (Kind::Move, None) => format!("Move {what}"),
         (Kind::Link, None) => format!("Link {what}"),
         (Kind::External, _) => what,
+        (Kind::Attrs, _) => format!("Change {what}"),
     }
 }
 
@@ -96,6 +97,7 @@ pub fn running(a: &About) -> String {
         (Kind::Move, None) => format!("Moving {what}"),
         (Kind::Link, None) => format!("Linking {what}"),
         (Kind::External, _) => what,
+        (Kind::Attrs, _) => format!("Changing {what}"),
     }
 }
 

@@ -35,6 +35,8 @@ pub enum Kind {
     EmptyTrash,
     /// A job another app runs (Archive's), shown and paced here.
     External,
+    /// A change of tags, rating or permissions.
+    Attrs,
 }
 
 impl Kind {
