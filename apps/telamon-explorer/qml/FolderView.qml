@@ -257,7 +257,10 @@ FocusScope {
             event.accepted = true;
             return;
         case Qt.Key_Backspace:
-            navigateRequested(StandardPlaces.parentUrl(folderModel.url));
+            // Among search results it is not "go up": the folder is not what is shown.
+            if (!folderModel.searching) {
+                navigateRequested(StandardPlaces.parentUrl(folderModel.url));
+            }
             event.accepted = true;
             return;
         case Qt.Key_F2:
@@ -326,6 +329,10 @@ FocusScope {
                 return;
             }
             const row = top.activeView.rowAt(drop.x, drop.y);
+            // Among search results only a folder row takes a drop: "here" is not what is shown.
+            if (folderModel.searching && !(row >= 0 && folderModel.isDirAt(row))) {
+                return;
+            }
             const target = row >= 0 && folderModel.isDirAt(row) ? folderModel.urlAt(row) : folderModel.url;
             drop.accepted = true;
             top.actions.drop(drop.urls, target);
