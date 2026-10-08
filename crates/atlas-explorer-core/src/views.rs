@@ -63,9 +63,12 @@ impl Mode {
     }
 }
 
-/// The sort columns a folder can remember (the core's `sort::Column` codes:
-/// Name, Size, Type, Modified, Created, Accessed). Search relevance is never kept.
-pub const SORT_COLUMNS: u32 = 6;
+/// The sort columns a folder can remember: the core's `sort::Column` codes
+/// 0 to 5 (Name, Size, Type, Modified, Created, Accessed) and the Trash's
+/// 7 and 8 (Original Location, Date Deleted). Search relevance (6) is never kept.
+pub const SORT_COLUMNS: u32 = 9;
+/// The app's own code for search relevance, between the core's columns.
+const RELEVANCE: u32 = 6;
 
 /// One folder's way of being shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,7 +98,7 @@ impl ViewPrefs {
     /// exist is Name; an icon size is clamped).
     pub fn sanitized(self) -> ViewPrefs {
         ViewPrefs {
-            sort: if self.sort < SORT_COLUMNS {
+            sort: if self.sort < SORT_COLUMNS && self.sort != RELEVANCE {
                 self.sort
             } else {
                 0
@@ -197,7 +200,7 @@ fn parse_line(line: &str) -> Option<(String, ViewPrefs)> {
     let icon: i32 = parts.next()?.parse().ok()?;
     let group = GroupBy::from_code(parts.next()?.parse().ok()?)?;
     let key = parts.next()?;
-    if sort >= SORT_COLUMNS || !valid_key(key) {
+    if sort >= SORT_COLUMNS || sort == RELEVANCE || !valid_key(key) {
         return None;
     }
     Some((

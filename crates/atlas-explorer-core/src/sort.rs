@@ -51,6 +51,10 @@ pub enum Column {
     Modified,
     Created,
     Accessed,
+    /// The Trash: the folder an item was deleted from.
+    Original,
+    /// The Trash: when an item was deleted.
+    Deleted,
 }
 
 /// What sorting needs to know about one row.
@@ -68,6 +72,11 @@ pub struct SortRow {
     /// The order key of the row's group (`group::group_of`); empty when the
     /// rows are not grouped. Groups come before everything else.
     pub group: Vec<u8>,
+    /// The Trash: the natural sort key of the folder the item was deleted
+    /// from (empty elsewhere).
+    pub origin: Vec<u8>,
+    /// The Trash: when the item was deleted (seconds, 0 elsewhere).
+    pub deleted: i64,
 }
 
 fn cmp_kind(a: &str, b: &str) -> Ordering {
@@ -124,6 +133,8 @@ pub fn sort_permutation_grouped(
             Column::Modified => a.mtime.cmp(&b.mtime),
             Column::Created => a.ctime.cmp(&b.ctime),
             Column::Accessed => a.atime.cmp(&b.atime),
+            Column::Original => a.origin.cmp(&b.origin),
+            Column::Deleted => a.deleted.cmp(&b.deleted),
         };
         let primary = if descending {
             primary.reverse()
@@ -149,6 +160,8 @@ mod tests {
             atime: 0,
             kind: String::new(),
             group: Vec::new(),
+            origin: Vec::new(),
+            deleted: 0,
         }
     }
 
@@ -247,6 +260,36 @@ mod tests {
         b.kind = "Image".into();
         let p = sort_permutation(&[a, b], Column::Type, false, true);
         assert_eq!(p, [1, 0]);
+    }
+
+    #[test]
+    fn the_trash_columns_sort_by_where_from_and_when_deleted() {
+        // name, folder key, deleted
+        let list = [
+            ("a", "~/b", 30i64),
+            ("b", "~/a", 20),
+            ("c", "~/a", 10),
+            ("d", "~/c", 40),
+        ];
+        let rows: Vec<SortRow> = list
+            .iter()
+            .map(|&(n, o, d)| SortRow {
+                origin: name_key(o.as_bytes()),
+                deleted: d,
+                ..row(n, false, 0)
+            })
+            .collect();
+        let order = |col: Column, desc: bool| -> Vec<&str> {
+            sort_permutation(&rows, col, desc, true)
+                .iter()
+                .map(|&i| list[i as usize].0)
+                .collect()
+        };
+        // Same folder: the name decides, ascending, in both directions.
+        assert_eq!(order(Column::Original, false), ["b", "c", "a", "d"]);
+        assert_eq!(order(Column::Original, true), ["d", "a", "b", "c"]);
+        assert_eq!(order(Column::Deleted, false), ["c", "b", "a", "d"]);
+        assert_eq!(order(Column::Deleted, true), ["d", "a", "b", "c"]);
     }
 
     #[test]

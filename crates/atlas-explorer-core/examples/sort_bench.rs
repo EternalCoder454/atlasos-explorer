@@ -15,6 +15,8 @@ fn main() {
                 atime: 0,
                 kind: "JPEG image".into(),
                 group: Vec::new(),
+                origin: Vec::new(),
+                deleted: 0,
             }
         })
         .collect();
