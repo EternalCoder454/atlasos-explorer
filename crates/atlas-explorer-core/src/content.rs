@@ -105,7 +105,8 @@ pub fn scan<R: Read>(r: R, q: &ContentQuery, stop: &AtomicBool, sniff: bool) -> 
     let mut found: Option<Found> = None;
     while read_line(&mut r, &mut line)? {
         number = number.saturating_add(1);
-        if number.is_multiple_of(2048) && stop.load(Ordering::Relaxed) {
+        // One atomic load a line: Stop is seen inside a file of few long lines too.
+        if stop.load(Ordering::Relaxed) {
             return Ok(found.map_or(Scan::Stopped, Scan::Match));
         }
         let text = line.strip_suffix(b"\r").unwrap_or(&line);
@@ -237,8 +238,9 @@ pub enum Pdf {
 /// Looks through a PDF's text. `pdftotext` is run as
 /// `pdftotext -q -enc UTF-8 -nopgbrk <absolute path> -` with no shell, no
 /// input, no environment and no error output; its text is read through a cap
-/// and it is killed at once when the search is stopped, the time is up or a
-/// match has been found.
+/// and it is killed when the search is stopped or the time is up (and once
+/// its text has been read: a match is looked at to the end of the text, to count
+/// the other lines).
 pub fn scan_pdf(path: &Path, q: &ContentQuery, stop: &AtomicBool) -> Pdf {
     let Some(exe) = pdftotext() else {
         return Pdf::NoTool;

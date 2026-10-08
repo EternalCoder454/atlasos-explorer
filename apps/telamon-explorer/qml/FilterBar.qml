@@ -19,7 +19,7 @@ Rectangle {
     // The row is shown (Ctrl+F opened it).
     property bool open: false
     readonly property alias field: field
-    readonly property bool editing: field.activeFocus || filtersButton.activeFocus || clearButton.activeFocus
+    readonly property bool editing: field.activeFocus || filtersButton.activeFocus || clearButton.activeFocus || filtersPopover.visible
 
     // Escape or the x: the filter is gone and the keyboard goes back to the items.
     signal dismissed
@@ -54,8 +54,11 @@ Rectangle {
                 bar.open = false;
             }
         }
+        // (A redirect also changes the url: a filter that is on keeps its row.)
         function onUrlChanged() {
-            bar.open = false;
+            if (!bar.folder.filterActive && bar.folder.filterText.length === 0) {
+                bar.open = false;
+            }
         }
     }
 

@@ -207,6 +207,8 @@ FocusScope {
         // The pattern is wrong: nothing is run, and it says why.
         Text {
             visible: bar.search !== null && bar.search.patternError.length > 0
+            height: Math.round(Kirigami.Units.gridUnit * 1.5)
+            verticalAlignment: Text.AlignVCenter
             Layout.maximumWidth: Kirigami.Units.gridUnit * 30
             elide: Text.ElideRight
             textFormat: Text.PlainText
@@ -225,6 +227,8 @@ FocusScope {
         // Inside Files with nothing typed yet: what it does.
         Text {
             visible: bar.search !== null && bar.search.contents && bar.search.text.trim().length === 0
+            height: Math.round(Kirigami.Units.gridUnit * 1.5)
+            verticalAlignment: Text.AlignVCenter
             Layout.maximumWidth: Kirigami.Units.gridUnit * 30
             elide: Text.ElideRight
             textFormat: Text.PlainText
@@ -237,31 +241,35 @@ FocusScope {
         }
 
         // A live search: the walk's progress, and Stop.
-        TelamonSpinner {
-            visible: bar.search !== null && bar.search.walking
-            running: visible
-            Layout.preferredWidth: Kirigami.Units.iconSizes.small
-            Layout.preferredHeight: Kirigami.Units.iconSizes.small
-        }
-        Text {
-            // A finished search inside files has a long line ("Left out: ..."): that one is the status line's.
+        RowLayout {
+            id: liveGroup
             visible: bar.search !== null && bar.search.live && (bar.search.walking || !bar.search.contents)
-            textFormat: Text.PlainText
-            text: bar.search ? bar.search.statusText : ""
-            elide: Text.ElideRight
-            Layout.maximumWidth: Kirigami.Units.gridUnit * 20
-            font.family: TelamonStyle.fontFamily
-            font.pointSize: TelamonStyle.fontSizeBody
-            color: TelamonStyle.textMuted
-            Accessible.role: Accessible.StaticText
-            Accessible.name: text
-        }
-        SecondaryButton {
-            id: stopButton
-            visible: bar.search !== null && bar.search.walking
-            text: qsTr("Stop")
-            symbol: Symbols.Stop
-            onClicked: bar.search.stop()
+            spacing: Kirigami.Units.smallSpacing * 2
+            TelamonSpinner {
+                visible: bar.search !== null && bar.search.walking
+                running: visible
+                Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                Layout.preferredHeight: Kirigami.Units.iconSizes.small
+            }
+            Text {
+                // A finished search inside files has a long line ("Left out: ..."): that one is the status line's.
+                textFormat: Text.PlainText
+                text: bar.search ? bar.search.statusText : ""
+                elide: Text.ElideRight
+                Layout.maximumWidth: Kirigami.Units.gridUnit * 20
+                font.family: TelamonStyle.fontFamily
+                font.pointSize: TelamonStyle.fontSizeBody
+                color: TelamonStyle.textMuted
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
+            }
+            SecondaryButton {
+                id: stopButton
+                visible: bar.search !== null && bar.search.walking
+                text: qsTr("Stop")
+                symbol: Symbols.Stop
+                onClicked: bar.search.stop()
+            }
         }
 
         // The state of the index, for a search that asks it.

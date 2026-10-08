@@ -649,6 +649,9 @@ void FolderModel::setWantMeta(bool on)
                 e.metaState = 0;
             }
         }
+        for (Entry &e : m_held) {
+            e.metaState = e.metaState == 1 ? 0 : e.metaState;
+        }
         if (!m_rows.isEmpty()) {
             Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {DimensionsRole, DurationRole, TakenRole});
         }
@@ -658,6 +661,9 @@ void FolderModel::setWantMeta(bool on)
             if (e.metaState == 1) {
                 e.metaState = 0;
             }
+        }
+        for (Entry &e : m_held) {
+            e.metaState = e.metaState == 1 ? 0 : e.metaState;
         }
     }
     Q_EMIT wantMetaChanged();
@@ -689,6 +695,11 @@ void FolderModel::invalidateAttributes(const QList<QUrl> &urls)
                 // Read again the next time a view asks.
                 e.tagState = 0;
                 Q_EMIT m->dataChanged(m->index(i), m->index(i), {TagsRole, TagColoursRole, TagsTextRole});
+            }
+        }
+        for (Entry &e : m->m_held) {
+            if (wanted.contains(e.item.url().adjusted(QUrl::StripTrailingSlash))) {
+                e.tagState = 0;
             }
         }
     }
@@ -782,6 +793,9 @@ void FolderModel::refresh()
     // Tags are not part of what the lister watches: another program may have
     // changed them, so a refresh reads them again.
     for (Entry &e : m_rows) {
+        e.tagState = 0;
+    }
+    for (Entry &e : m_held) {
         e.tagState = 0;
     }
     if (!m_rows.isEmpty()) {
@@ -1101,7 +1115,10 @@ void FolderModel::takeRows(const QList<int> &rows, QList<Entry> *into)
         for (int r = hi; r >= lo; --r) {
             m_folders -= m_rows[r].isDir;
             if (into) {
-                into->append(std::move(m_rows[r]));
+                Entry &e = m_rows[r];
+                e.tagState = e.tagState == 1 ? 0 : e.tagState;
+                e.metaState = e.metaState == 1 ? 0 : e.metaState;
+                into->append(std::move(e));
             }
             m_rows.removeAt(r);
         }
@@ -1727,6 +1744,9 @@ void FolderModel::applyFilter()
         if (keeps(e)) {
             keep.append(std::move(e));
         } else {
+            // Worker answers are applied to rows only: ask again when it comes back.
+            e.tagState = e.tagState == 1 ? 0 : e.tagState;
+            e.metaState = e.metaState == 1 ? 0 : e.metaState;
             hold.append(std::move(e));
             moved = true;
         }
@@ -1756,10 +1776,10 @@ void FolderModel::applyFilter()
     endResetModel();
     Q_EMIT countChanged();
     m_hiddenTimer.start();
-    if (released) {
-        m_sortDirty = true;
-        m_sortTimer.start(0);
-    }
+    // Sorted again when entries came back, and when only some left (the group
+    // headers' counts are made by the sort).
+    m_sortDirty = true;
+    m_sortTimer.start(0);
 }
 
 void FolderModel::setSnippets(bool on)

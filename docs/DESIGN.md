@@ -368,11 +368,12 @@ Explorer replaces Dolphin completely.
       read up to 64 KiB;
     - PDFs up to **50 MiB**, through `pdftotext -q -enc UTF-8 -nopgbrk <path>
       -` run by argument list (no shell, no input, no environment, no error
-      output), its text read up to 4 MiB, killed after 15 s, when the search is
-      stopped or as soon as a match is found. With no `pdftotext` on the
+      output), its text read up to 4 MiB, killed after 15 s or when the search is
+      stopped (a PDF with a match is read to the end of its text, to count the
+      other lines). With no `pdftotext` on the
       system (poppler-utils, a Recommends of the package) PDFs are counted and
       the line under the search says so; a PDF it cannot read is counted too;
-    - a search lists at most 2,000 files and ends after 4 GiB read or 5
+    - a search lists at most 2,000 files and ends after 4 GiB of files read (text and PDFs) or 5
       minutes ("Stopped at the time or size limit").
     The line under the search says what was found and what was left out: "3
     files contain it. Left out: 1 file over 4 MiB, 12 binary files". It works
@@ -387,7 +388,7 @@ Explorer replaces Dolphin completely.
     runs it again in the tab shown (it goes to the saved folder first, then
     puts the words, chips and switches back and searches once); the tooltip says
     what it does; the right-click menu (or the Menu key) has Run Search, Rename…
-    and Remove from Sidebar. At most 50, names up to 80 characters. They are
+    and Remove from Sidebar. At most 50, names up to 80 characters (a name is cut; words over 512 bytes or a folder address over 2,048 are refused, not cut, as a cut one would search somewhere else). They are
     kept in Files' settings file, `telamon-explorerrc`, group `[SavedSearches]`,
     key `Items`: one search a line, tab-separated, the fields percent-encoded
     where they hold `%` or a control character; the core

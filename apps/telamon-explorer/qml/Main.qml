@@ -935,6 +935,14 @@ TelamonWindow {
         page.search.applySaved(s);
         page.focusContent();
     }
+    // The Menu key on a sidebar entry: a saved search's menu, or a place's.
+    function showSidebarMenu(entry, pos) {
+        if (entry.savedId !== undefined) {
+            showSavedMenu(entry, pos);
+        } else {
+            showPlaceMenu(entry, pos);
+        }
+    }
     function showSavedMenu(entry, pos) {
         savedMenu.savedId = entry.savedId;
         // After the click that asked for it is over: a popup opened while its
@@ -1558,7 +1566,7 @@ TelamonWindow {
             padding: Kirigami.Units.largeSpacing
             spacing: 2
             dropEnabled: true
-            onContextMenuRequested: (entry, pos) => entry.savedId !== undefined ? root.showSavedMenu(entry, pos) : root.showPlaceMenu(entry, pos)
+            onContextMenuRequested: (entry, pos) => root.showSidebarMenu(entry, pos)
             onDropped: (entry, drop) => root.dropOnPlace(entry, drop)
 
             Repeater {

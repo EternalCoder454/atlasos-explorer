@@ -28,6 +28,8 @@ pub const MAX_FOLDER_BYTES: usize = 2048;
 pub const MAX_TAG_BYTES: usize = 200;
 
 const FIELDS: usize = 11;
+/// The largest id a line may carry.
+const MAX_ID: u32 = 1_000_000;
 
 /// One saved search.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -168,32 +170,27 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-fn cut(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut n = max;
-    while n > 0 && !s.is_char_boundary(n) {
-        n -= 1;
-    }
-    s[..n].to_string()
-}
-
 /// A saved search made fit to keep. `None` when it has no name, or looks for
 /// nothing (no words, no chip, no tag).
 fn clean(mut s: Saved) -> Option<Saved> {
     s.name = clean_name(&s.name)?;
-    s.query = cut(s.query.trim(), MAX_QUERY_BYTES);
+    // Too long to keep whole is refused: a cut folder or words would search somewhere else.
+    s.query = s.query.trim().to_string();
+    s.folder = s.folder.trim().to_string();
+    s.tag = s.tag.trim().to_string();
+    if s.query.len() > MAX_QUERY_BYTES
+        || s.folder.len() > MAX_FOLDER_BYTES
+        || s.tag.len() > MAX_TAG_BYTES
+    {
+        return None;
+    }
     s.scope = u8::from(s.scope == 1);
     s.kind = s.kind.min(7);
     s.modified = s.modified.min(4);
     s.size = s.size.min(3);
-    s.tag = cut(s.tag.trim(), MAX_TAG_BYTES);
-    s.folder = if s.scope == 0 {
-        cut(s.folder.trim(), MAX_FOLDER_BYTES)
-    } else {
-        String::new()
-    };
+    if s.scope != 0 {
+        s.folder.clear();
+    }
     s.query.retain(|c| c != '\0');
     // This Folder needs its folder.
     if s.scope == 0 && s.folder.is_empty() {
@@ -273,7 +270,8 @@ fn parse_line(line: &str) -> Option<Saved> {
     if f.len() < FIELDS {
         return None;
     }
-    let id: u32 = f[0].parse().ok().filter(|&n| n > 0)?;
+    // Ids are small numbers; a huge one (a damaged file) would overflow the next.
+    let id: u32 = f[0].parse().ok().filter(|&n| n > 0 && n <= MAX_ID)?;
     clean(from_fields(&f[1..FIELDS], id)?).map(|mut s| {
         s.id = id;
         s
@@ -510,9 +508,23 @@ mod tests {
         assert_eq!(SavedList::parse(&text).items().len(), MAX_SAVED);
         // Long names and words are cut.
         let mut m = SavedList::default();
-        let id = m.add(s(&"n".repeat(500), &"w".repeat(5000))).unwrap();
+        let id = m
+            .add(s(&"n".repeat(500), &"w".repeat(MAX_QUERY_BYTES)))
+            .unwrap();
         assert_eq!(m.get(id).unwrap().name.chars().count(), MAX_NAME_CHARS);
-        assert_eq!(m.get(id).unwrap().query.len(), MAX_QUERY_BYTES);
+        assert_eq!(m.get(id).unwrap().query, "w".repeat(MAX_QUERY_BYTES));
+        // Words or a folder too long to keep whole are refused, not cut.
+        assert_eq!(
+            m.add(s("Long", &"w".repeat(MAX_QUERY_BYTES + 1))),
+            Err(Outcome::Invalid)
+        );
+        let mut far = s("Far", "x");
+        far.scope = 0;
+        far.folder = format!("file:///{}", "d".repeat(MAX_FOLDER_BYTES));
+        assert_eq!(m.add(far), Err(Outcome::Invalid));
+        // A damaged id cannot overflow the next one.
+        let huge = SavedList::parse("4294967295\tHuge\tq\t1\t\t0\t0\t0\t\t0\t0\n");
+        assert!(huge.items().is_empty());
     }
 
     #[test]

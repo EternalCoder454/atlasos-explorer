@@ -393,6 +393,7 @@ pub fn walk_content(
                         stats.too_large += 1;
                         continue;
                     }
+                    read_bytes += size;
                     match content::scan_pdf(&full, q, stop) {
                         Pdf::Scanned(Scan::Match(f)) => Some(f),
                         Pdf::Scanned(Scan::Stopped) => {
@@ -427,7 +428,10 @@ pub fn walk_content(
                         continue;
                     }
                     read_bytes += size;
-                    match open_regular(&full).and_then(|f| content::scan(f, q, stop, true)) {
+                    // Read at most the cap even if the file grows while it is read (a log).
+                    match open_regular(&full)
+                        .and_then(|f| content::scan(f.take(MAX_TEXT_BYTES), q, stop, true))
+                    {
                         Ok(Scan::Match(f)) => Some(f),
                         Ok(Scan::Stopped) => {
                             send_content(&mut batch, flush);
