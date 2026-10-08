@@ -519,7 +519,160 @@ Needs: Wave 7 (menu), others for content.
 | W13 Tags and metadata | **Done** (PR `files/w13-tags-properties`). Deviations: **tag edits are queue operations of a new kind (`Attrs`) whose undo puts values back only if they are still what the change left**, which is stricter than the move/copy checks (a tag, rating or mode edited since refuses the undo in words); colour tags are the seven names Red to Gray stored as plain names, **the dots show after the name (Details) or on the picture's corner (Icons, Gallery), at most four**; the Tags column is **off by default** with Dimensions, Duration and Date Taken (View > Details Columns), none of them sortable, none shown in the Trash; **a tag changed by another program shows on the next refresh** (the lister doesn't watch extended attributes); the sidebar Tags section is the index's `Tags()` plus the names seen this session, and the index is started for it only after the person has used tags once (any search starts it anyway); **the index service now records tags** (snapshot v2, `v2.idx`; new `Tags()` method and `tag` option, both additive to Search1) and the Launcher's use is unchanged; with the index off a tag click is a live walk of the home folder with Stop; **"can't keep tags" was tried against `/proc`** (a file system that refuses extended attributes, as FAT does) because a container can't mount a FAT image without privilege; a link can't be tagged and says so; Properties is **one modal Telamon.Ui dialog over the window** (not a window per item), with four pages (General, Permissions, Details, Checksums); the permission boxes show a dash for items that differ and apply only what was changed, and "Also change everything inside the folders" leaves files' Run bits alone; Open With changes the default application by writing `mimeapps.list` (not for folders or mixed kinds); checksums are SHA-256 (default), SHA-1, MD5 and SHA-512, written out in the core, and a pasted checksum of a kind not calculated yet starts its calculation; Details come from KFileMetaData (a new build and run dependency, `kf6-kfilemetadata`); a folder's size on a server is KIO's `directorySize` (no progress, can be stopped) and was not tried against a server. Added: `Details Columns` menu, the "Tag: Red" chip, `TelamonDetailGrid` replacement (`DetailRows`, a framework gap), `TagRowItem`, F5/Ctrl+R read tags again. |
 | W14 Split view, spring-loaded folders, quick actions on pictures | **Done** (PR `files/w14-split-actions`). Deviations: a tab holds at most **two** panes, side by side; the split has **no row in the View menu** (it is already as tall as a small window, and a row would have moved the ones the earlier tests click): the toolbar button (left of the operations ring) and F3 do it, and Ctrl+Shift+O gives the keyboard to the other pane; the toolbar's path bar hides while split (each pane has its own, with a ×); **F5 and F6 are Copy and Move to Other Pane only while split** (F5 refreshes and F6 edits the address otherwise; Ctrl+R and Ctrl+L, F4, Alt+D always do); a drop with no key held still **asks** (Move Here, Copy Here, Link Here, as since wave 6), so the badge then says "Move, Copy or Link" rather than the spec's move on one disk and copy across disks; the badge is a pill that follows the pointer, not a change of the system cursor (a `QDrag` can't change its cursor on Wayland); the sidebar's spring-load opens the place in the pane that has the keyboard, and a place that is a Trash or a drive that isn't mounted is not opened by hovering; dragging a pane's file over the *other pane's* folder row opens it there. Quick actions: they work on files on this computer in **one folder** (not on search results or other folders at once), at most 500, and write next to the originals ("photo (rotated).jpg", "photo.png", "Combined.pdf"); a JPEG is turned without decoding when its size is a multiple of a JPEG block (EXIF kept, orientation written as 1, entropy tables optimized), else decoded and written at quality 95 without its metadata; conversions drop metadata too and take only the first frame of an animation; a **truncated JPEG** is turned from what Qt can decode of it (the rest is grey), as no error is raised for it; Combine's page order is the selection's order (the clicks' order; a Shift range by row), its pictures are one page each at 150 dpi, and the result has the pages only (no outline, named destinations or forms of the source PDFs); password-protected PDFs are refused, not unlocked; a Replace answer makes the operation not undoable, as for a paste. Added: a new dependency, `lopdf` (pure Rust, 41 crates with its own inflate and crypto for the PDFs it refuses), `pkgconfig(libturbojpeg)` to build and `qt6-qtimageformats` to run (WebP); the drag icon is the first item's with the count. |
 | W15 Content search, saved searches, filter bar | **Done** (PR `files/w15-content-search`). Keys: **Ctrl+F is the folder filter and Ctrl+E is the search** (Ctrl+F used to open search; where there is nothing to filter, a page of Files' own or search results, Ctrl+F still lands in the search field). Deviations: the filter is the **pane's own and the folder's**: another folder or a search ends it (Dolphin keeps it, which is the forgotten filter the spec wants fixed), refresh, sorting and Show Hidden keep it; **Use pattern** is one switch per pane that drives both the filter and the search (so no `re:` prefix is parsed, and the chip stays in the Filters popover as the spec says); a pattern is always a **walk** (the index matches words, not patterns), with the walk's 5,000-hit cap; an invalid pattern is never run (the filter shows all items, the search shows "Not a Valid Pattern"); plain text is case-insensitive and a pattern ignores case unless it says `(?-i)`. **Inside Files** matches the content only (names are not matched while it is on), takes the words literally (or as a pattern), shows the first matching line of each file ("12: the line (+3 more)") in a **Match** column of the Details view, and works on folders on this computer (a server's files would have to be downloaded: it says so); limits: text files and PDFs up to **4 MiB and 50 MiB** (bigger ones are counted and named in the line under the search), a NUL in the first 8 KiB means binary, images, audio, video, archives, fonts and disk images are not opened, `node_modules` and `__pycache__` are not entered, 2,000 files at most, 4 GiB read or 5 minutes; PDFs through `pdftotext` (poppler-utils, now a Recommends and in the CI image; without it PDFs are counted and the line says so), 15 s each, 4 MiB of text each. A search inside files covers documents Files can read as text only: **.docx/.odt/.xlsx (zip) and other office files are binary and left out**. Saved searches keep the words, scope (and folder), Kind/Modified/Size, tag, Use pattern and Inside Files (never results), at most 50, in `telamon-explorerrc` rather than a JSON file (the settings file the framework already reads and backs up), under a "Saved Searches" section of the sidebar below Tags rather than under Favourites; a This Folder search goes to its folder first. The search row wraps to a second line in a narrow window (it grew: Inside Files, Filters and Save Search were added). Added: the `regex` crate was already there for Batch Rename; no new crate. |
-| W16 | Not started. |
+| W16 Settings, custom actions, accessibility pass | **Done** (PR `files/w16-settings-a11y`); **this was the last Functionable wave: the Functionable phase is complete.** Settings: one `TelamonPreferencesDialog` (Ctrl+, , the View menu's "Settings…" which took the place of "Empty Old Trash Items…", the tab menu) with the five pages of the spec; the quick switches stay where they were useful (View menu, tab menu, the Trash page's header) and change the same settings; the framework's search of the settings does not look inside **folded** sections (the menu entries and the service menus are folded, so the search can't find "Copy Path"; the headers open by keyboard). Added settings with no earlier home: where a new tab opens (Home page or home folder), Use patterns by default, Show Git status, the index's folders (add and remove, written to `indexrc`; this needed one **additive method on Search1, `Reload()`**: the service answers, then ends cleanly, and D-Bus activation starts it again with the new folders; Launcher unaffected). Custom actions: kept in `telamon-explorerrc` (`[CustomActions]`, at most 30), **not as a Dolphin-style `.desktop` service-menu file** as the spec's table suggested (one place for the settings, nothing written outside the settings file, no second parser; the cost is that Dolphin and other KDE apps don't see them); they appear first under More Actions for the items whose MIME types match (every selected item must match, inheritance counts); placeholders `%f %F %u %U %d %%`; `%f`, `%u`, `%d` run the program once for each item (at most 20 processes), `%F` and `%U` pass every file as an argument of its own; programs that run a command line (`sh`, `bash`, `env`, `sudo`, `pkexec`, `xargs` ... 22 names, also through a link) are refused as the program (the person could still start an interpreter such as `python -c` with a file name in the code, which Files can't judge); "Ask first" is on by default; no ordering, import or export. Hiding: every built-in entry of the menu model, the pictures' quick actions, Copy/Move to Other Pane, every service-menu action (by its `Actions=` name, so two files with the same action name share one switch) and every plugin has a switch; hiding More Actions hides the person's own actions with it; "Open With" entries themselves can't be hidden one by one. Git badges (off by default): M, N, I, C round badges (letters, so colour isn't the only sign) and "Git: modified" in the row's description; `git` by argument list, cleared environment, 5 s, 16 MiB, own-user repositories only, **a repository whose own configuration has a `[filter]` or an `[include]` section is skipped** (a filter's `clean` command is run by `git status` for the files the attributes name, and no option turns that off), `fsmonitor` and hooks off on the command line; deleted files show no badge (no row), a folder holding changes is "modified", submodules are not entered, renames count as modified; shown in every view. Accessibility: **the file rows had no accessible role at all before** (a screen reader found a bare list); now every row of every view is a list item with name, a description (type, size, Git state), selected and focused states that follow the keyboard, and the list is named; the keyboard now **starts on the folder** (it started nowhere) and **returns to it when a dialog or menu closes**; Details headers are column headers; Quick Look announces the file and "N of M"; unnamed drives get "Drive"; Alt+Return is Properties; Sort > Group By has Collapse All Groups and Expand All Groups (the headers folded with the mouse only); every `ContextMenu` of Files (eight had no `keyNavigationEnabled = false`) now has the workaround; right to left was checked with `-reverse` and **the Details view lost its names in a mirrored window** (an explicit `x`; fixed with anchors, and the compact list mirrored too); high contrast: solid selection, 3 px focus ring, stronger separators; reduced motion: Files has no animation of its own. Checked headless: AT-SPI dumps with `pyatspi` (a new `python3-pyatspi` in the test image only), a keyboard-only walk that opens, uses and closes every part, a portal stand-in that asks for high contrast and reduced motion, `-reverse`. Not done / not possible here: **no real Orca run** (the AT-SPI tree is what Orca reads; Orca itself can't be run in a container session), **Tab is not trapped inside a Telamon.Ui dialog** (it reaches the sidebar behind: framework), **`InfoBanner` exposes its hidden text** to AT-SPI (framework), the QML warning `TelamonFlowLayout ... _relayout is not a function` at start (framework, older than this wave), and 10 older `qmllint` warnings (none in W16's files). |
+
+
+### Backlog for Secure, Reliable and Performant
+
+What the 16 waves left open, gathered from their rows, DESIGN.md and this wave's
+checks. Functionable is done: nothing here blocks the features. It drives the
+next phases, in the order of the owner's rule (Secure, then Reliable, then
+Performant); within a phase the first lines matter most.
+
+**Secure** (modern security practice; nothing here was worked on while the
+features were built)
+- Archives: kio-extras' archive worker parses zip, tar, 7z and ar **inside the
+  Files process** (W9), unlike Archive's sandbox; the listing check (no `..`,
+  absolute path, outward link, encrypted zip, room) is Files' only guard.
+  Options: serve archives through Telamon Archive only, or run the worker out of
+  process with a seccomp/landlock profile; fuzz the listing check.
+- Untrusted-file parsers that run in the Files process: `lopdf` (Combine into
+  PDF, W14; 41 crates), the JPEG block rotation and image decoding (W14), the
+  checksum code, KFileMetaData (Details, W13), the text and PDF content reader
+  (W15), the Batch Rename pattern engine. Fuzz each; consider moving the PDF and
+  image work to a helper process with no network and a memory limit.
+- `pdftotext` (Inside Files, W15) reads untrusted PDFs: run it under landlock or
+  bwrap with a memory/CPU limit (today: 15 s and 4 MiB of text each).
+- Git badges (W16): the safe command and the "skip a repository with a filter or
+  include" rule are a heuristic; consider `git` under landlock/bwrap (read-only
+  work tree, no network), and fuzz `parse_porcelain_v2`.
+- Custom actions (W16): shells are refused by name, but an interpreter given
+  `-c` or `-e` is not (and a link to one under another name is only caught for
+  the shells); consider refusing known interpreters with code flags, running
+  actions with a reduced environment, and showing the real command (with the
+  files) in "Ask first".
+- Service menus (W7, W16): KIO starts a service's `Exec=` line; a hostile
+  `.desktop` in `~/.local/share/kio/servicemenus` is the person's own, but a
+  review of what KFileItemActions loads from system folders is due.
+- D-Bus: `FileManager1` and `Search1` accept any process of the user (W11/W4);
+  `Reload()` (W16) lets any process of the user end the index service (it comes
+  back on the next call). Decide what, if anything, to restrict; limit message
+  sizes everywhere (the index already caps Search options).
+- Files' own settings file is untrusted input: every list (saved searches, custom
+  actions, hidden entries, servers, recent servers, folder views) is read
+  defensively, but the flat keys (`[View]`, `[Trash]`, `[General]`) are read with
+  KConfig's defaults only; add a pass that bounds every value.
+- Servers (W11): SMB isn't marked "Not encrypted" because Files can't tell;
+  host-key and password prompts are KIO's own dialogs; "Preview Files on
+  Servers" downloads up to 5 MB per file to make a thumbnail; the TCP probe is one
+  more connection to the server (it shows in an SSH server's log).
+- `Open With` writes `mimeapps.list` (W13); thumbnails and previews of files from
+  other users' folders; the Trash's `.trashinfo` parser is Files' own (W12).
+- No privilege exists (CLAUDE.md); keep it so: re-check `atlas-system-helper`
+  is never called, no polkit action, no `admin:/`.
+- Index service: `Restart=on-failure` plus `Reload()` ending it with exit 0 is
+  deliberate (D-Bus activation restarts it); re-check the unit's sandbox
+  (`ProtectSystem=strict`, system-call filter) after every change to the service.
+- Supply chain: `lopdf`, `regex`, `zbus`, KFileMetaData; pin and audit
+  (`cargo deny`/`audit`); the dev image installs `python3-pyatspi` only in the
+  test layer.
+
+**Reliable** (quiet, predictable, does only its job)
+- Operation journal and crash recovery (W6: none is written; DESIGN's
+  "No data loss" describes the finished design). Undo of Replace/Merge is not
+  possible (the replaced file isn't trashed first); undo of Hide is not offered;
+  stale undo entries are refused in words but dropped.
+- Eject and unmount don't wait for the queue's operations on that drive (W3, W6),
+  and the room check runs once at the start of an operation, local-only.
+- KFileItemActions has no asynchronous form, so the context menu is made on the
+  GUI thread (W7): a slow service-menu plugin delays the menu. Measure; if it
+  matters, build the service part in a worker and show the menu without it.
+- Test coverage is scripts that drive the GUI under Xvfb with screenshots read by
+  eye (W1–W16); only the Rust crates have unit tests. Turn the regression scripts
+  into assertions (AT-SPI queries, log greps) that CI can run; keep the screenshot
+  runs as an aid.
+- Never tried on real hardware or servers: MTP phones (W3), Avahi/multicast
+  (W11: stand-in only), recent files through KActivities (W11), a real SFTP/SMB
+  server's folder size and live walk (W4, W13), password-protected 7z (W9), Archive
+  itself (W9: stand-in only). Plan a VM test with the real peers.
+- Files' log is quiet only in the good case: at start the framework prints
+  `TelamonFlowLayout _relayout is not a function` (twice), and the app's startup
+  prints a few Qt warnings; list them, fix or silence at the source.
+- Keyboard and focus: a Telamon.Ui dialog doesn't keep Tab inside it (W16), the
+  Properties/Settings dialogs return focus to the folder only through the window's
+  own "focus got lost" rule (W16); report to the framework session and remove the
+  workaround when it is fixed. `InfoBanner` exposes hidden text to AT-SPI.
+- Real Orca has not been run (no way to in this session): do a pass on the test
+  VM with Orca on (row reading, dialogs, Settings, Quick Look announcements).
+- The framework's settings search skips folded sections (W16): either unfold the
+  menu entries and service lists or ask the framework for a search that opens a
+  section.
+- Search: a `Reload()` of the index while a Launcher call is in flight is
+  retried by D-Bus activation; test it with the Launcher. The index ignores a
+  name added to `Exclude=` that Files doesn't know (W4).
+- Settings file: `telamon-explorerrc` is written by many classes through KConfig;
+  a second Files window or process could write over another's keys (there is one
+  window today; F13 "Open in New Window" would need a real answer).
+- `FolderModel`'s static git thread pool outlives the window by up to 5 s at exit
+  if a git is running; stop it at quit.
+- A tab dragged out into its own window (W1), Open in New Window (W7, F13): not
+  built; the single-instance and settings design need to be decided first.
+
+**Performant** (minimal memory, CPU and other resources; nothing was measured
+before Functionable was done, so the budgets in DESIGN.md are still targets)
+- First baseline recorded with wave 16 (`benchmarks.md`, not in git): startup,
+  idle and peak RSS, binary size. Everything in DESIGN's "Budgets" table is still
+  to be measured on a 100k-file folder: first rows, full sort, scroll frame time,
+  thumbnails after scrolling, RSS at 100k rows, idle CPU, search of 200k entries.
+- Rows: every visible delegate binds its accessible name and description (type,
+  size, Git state) and the icon, tag and Git roles; check the cost per frame on a
+  100k folder and make the descriptions lazy (only while a screen reader runs:
+  `AccessibilityState.active`) if it shows.
+- `FolderModel::data()` does a hash lookup for the Git role on every call even
+  when Git badges are off (it returns 0 first, but the role is still asked by
+  every delegate); drop the role from delegates while the setting is off.
+- The Details view makes the type and size texts for every row in view; group
+  headers, sorting and the group lines are recomputed on every change (W8):
+  incremental updates.
+- Search: results arrive as one batch for the index and as 5,000 at most for a
+  walk (W4); the walk is breadth first on a thread; Inside Files reads up to 4
+  GiB (W15). Tune the caps with real numbers; stream the Match snippets.
+- Thumbnails: `PreviewJob` per visible item; cache sizes; remote previews up to 5
+  MB each (W11). The software renderer is used for all drawing (`main.cpp`); the P
+  phase decides GPU or not for thumbnail grids and 100k-row scrolling.
+- Index service: memory ceiling in the unit (`MemoryHigh=96M`, `MemoryMax=1G`) and
+  the snapshot (v2) size for 4M entries; the tag scan reads extended attributes of
+  every file (W13); scan priority.
+- Startup: `telamon_adopt_legacy`, the settings reads in each `*Logic` constructor
+  (each opens `telamon-explorerrc` through KSharedConfig), the Home page's lists,
+  the places model and Solid; measure, then lazy-load.
+- `ActionsLogic` and `MenuPrefs` read the settings file on every menu (small
+  lists); cache with a change signal if profiling asks.
+
+**Functionable gaps left open on purpose** (decide whether any becomes a wave)
+- Share menu (F61), embedded terminal panel (F55), restoring previous versions
+  (F94), mounting `.iso` and `.img` through udisks, selection mode (F31), multiple
+  windows and tab tear-off (F13), a separate details pane and a resizable preview
+  pane (W5), Columns resizing and the left columns keeping the keyboard (W8),
+  Gallery slideshow and zoom (W8), grouping in Compact, Columns and Gallery (W8),
+  the "last 20" undo list (W6), the Open With "Other Application…" dialog in
+  Telamon.Ui (W7), Properties for several items in separate windows (not wanted),
+  Dolphin-compatible `.desktop` service-menu files for custom actions and
+  ordering of the menu entries (W16), Search inside office documents (W15), a
+  Custom range for Modified and Size (W4), the camera half of F105 (W3), a
+  "Drive ready" toast (W3), an indexed-folders exclude editor in Settings (W16:
+  only `Roots=`), Ctrl+1..9 view modes (W1).
+
+**Asks of the framework and KDE** (for the "Telamon OS Framework" session)
+- `TelamonDialog` should keep Tab inside a modal dialog and give the focus back to
+  what had it; `InfoBanner` should not expose text while shown is false;
+  `TelamonPreferencesDialog` search should open folded sections or take
+  entries from them; `ContextMenu`'s list navigation workaround
+  (`keyNavigationEnabled = false`) should become the default; a menu row with an
+  icon button group (`IconRowItem`, W7); `TelamonBreadcrumb` and
+  `TelamonAutocompleteField` lack what the path bar needs (W2); a
+  `TelamonDetailGrid` that selects text (W13); `TelamonFlowLayout` logs a TypeError
+  at start.
 
 ### Later (not scheduled)
 Mount `.iso`/`.img` through udisks; Share menu (F61); embedded terminal panel (F55); restore previous versions (F94, when Backups exists); selection mode (F31).

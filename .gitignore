@@ -1,3 +1,6 @@
 /target/
 /build/
 /out/
+
+# Benchmark log (kept on the machine, not in git)
+benchmarks.md

@@ -279,6 +279,8 @@ public:
     // are forgotten when another folder is shown or the grouping changes.
     Q_INVOKABLE bool isGroupCollapsed(const QString &group) const { return m_collapsed.contains(group); }
     Q_INVOKABLE void toggleGroup(const QString &group);
+    // Every group folded (or brought back): the keyboard's way to the headers.
+    Q_INVOKABLE void setGroupsCollapsed(bool collapsed);
     // {first, last} rows of a group (they are together); empty for none.
     Q_INVOKABLE QVariantList groupRange(const QString &group) const;
     // How many rows the group had when the rows were last grouped.

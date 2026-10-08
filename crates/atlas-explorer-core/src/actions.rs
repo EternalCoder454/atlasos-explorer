@@ -979,7 +979,7 @@ mod tests {
             url: "smb://s/x".into(),
         };
         assert_eq!(
-            expand("%f", &[remote.clone()]).unwrap_err(),
+            expand("%f", std::slice::from_ref(&remote)).unwrap_err(),
             Refusal::NotLocal
         );
         assert_eq!(

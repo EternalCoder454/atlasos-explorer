@@ -1564,6 +1564,27 @@ QList<FolderModel::GroupSpan> FolderModel::groupSpans() const
     return out;
 }
 
+void FolderModel::setGroupsCollapsed(bool collapsed)
+{
+    if (!grouped()) {
+        return;
+    }
+    if (collapsed) {
+        for (auto it = m_groupCounts.cbegin(); it != m_groupCounts.cend(); ++it) {
+            if (!it.key().isEmpty()) {
+                m_collapsed.insert(it.key());
+            }
+        }
+    } else {
+        m_collapsed.clear();
+    }
+    if (!m_rows.isEmpty()) {
+        Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {GroupCollapsedRole});
+    }
+    ++m_groupRevision;
+    Q_EMIT groupRevisionChanged();
+}
+
 void FolderModel::toggleGroup(const QString &group)
 {
     if (!grouped() || group.isEmpty()) {

@@ -131,7 +131,7 @@ Item {
         anchors.right: parent.right
         anchors.bottom: strip.top
         height: 1
-        color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+        color: Qt.alpha(Kirigami.Theme.textColor, TelamonStyle.highContrast ? 0.5 : 0.15)
     }
 
     ListView {
@@ -178,9 +178,9 @@ Item {
                 anchors.fill: parent
                 anchors.margins: 2
                 radius: TelamonStyle.radius
-                color: cell.selected ? Qt.alpha(Kirigami.Theme.highlightColor, 0.35) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
-                border.width: cell.current ? (root.fv.activeFocus ? 2 : 1) : 0
-                border.color: Kirigami.Theme.highlightColor
+                color: cell.selected ? (TelamonStyle.highContrast ? Kirigami.Theme.highlightColor : Qt.alpha(Kirigami.Theme.highlightColor, 0.35)) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
+                border.width: cell.current ? (root.fv.activeFocus ? (TelamonStyle.highContrast ? 3 : 2) : 1) : 0
+                border.color: TelamonStyle.focus
             }
             Item {
                 id: iconBox
@@ -227,7 +227,7 @@ Item {
                 elide: Text.ElideMiddle
                 maximumLineCount: 1
                 text: cell.name
-                color: Kirigami.Theme.textColor
+                color: TelamonStyle.highContrast && cell.selected ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
                 font.pointSize: TelamonStyle.fontSizeCaption
             }
             MouseArea {

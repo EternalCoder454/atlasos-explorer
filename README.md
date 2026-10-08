@@ -1,25 +1,57 @@
-# Telamon Explorer (Files)
+# Telamon Files
 
 The file manager of [Telamon OS](https://github.com/EternalCoder454/AtlasOS),
-shown as **Files**. It replaces Dolphin: Windows 11's File Explorer and macOS
-Finder, built on KDE's KIO.
+shown as **Files** (the crate and binary are `telamon-explorer`). It replaces
+Dolphin: the simple parts of Windows 11's File Explorer and macOS Finder, on
+KDE's KIO. Rust, Qt 6 Quick and the Telamon.Ui look (from
+[atlas-framework](https://github.com/EternalCoder454/atlas-framework)), with thin
+C++ adapters over KIO, Solid and KService.
 
-What works today (0.2.0 plus waves 1 to 5): tabs, each with one folder in Details, Icons and Compact
-views, a breadcrumb path bar (click a segment, a chevron lists its subfolders, drop files on a segment, type a path with completion),
-Back and Forward history menus, a status line (items, selection size, free space), search (type in the toolbar: ranked name matches from the index within a blink, This Folder or Everywhere, filters for kind, date and size, results as a Details view with a Path column, Open File Location, a live walk with Stop for folders the index doesn't hold), any KIO location (local, SMB, SFTP, Trash, Recent, Network and so on),
-a sidebar built from KDE's places (Home and the standard folders, pins you drag in or add from the menu, drives with usage bars and an eject button, phones, Network, the Trash with its count and Empty Trash), sorting, a command bar with copy, cut, paste, rename
-and trash, Quick Look (Space: a large preview of images, PDFs, video, audio, fonts, documents and text, arrow keys to browse, Enter to open), a preview pane (Alt+P), Columns and Gallery views, Group by, a view each folder remembers, Ctrl+scroll zoom, KIO's own conflict and delete dialogs with single-step undo, drag
-and drop, the context menu with Open With and service menus, single instance,
-`org.freedesktop.FileManager1`, and the file-name index service
-(`telamon-explorer-indexd`) that Atlas Launcher uses.
+The Functionable phase is complete (waves 1 to 16). What Files does today:
 
-Tabs (new, close, reopen, reorder, middle-click and Ctrl+Enter to open folders in the background, drop files on a tab, per-tab history, optional restore on start) are built. Planned (see `docs/ROADMAP.md`, in waves): one operation queue with a conflict dialog and undo/redo,
-split view, archives, batch rename, tags and a
-Settings page.
+**Browsing**
+- Tabs (new, close, reopen, reorder, duplicate, drag files onto a tab, optional
+  restore on start) and a split view of two folders with Copy and Move to the
+  other pane.
+- A path bar you click through (a menu per folder, drops on a segment) that
+  becomes a text field with completion; Back and Forward with history menus;
+  a status line with items, selection size and free space.
+- Details, Icons, Compact, Columns and Gallery views, Group by, a view each
+  folder remembers (or one for all), zoom, Quick Look on Space, a preview pane.
+- A sidebar of KDE's places: Home and the standard folders, pins, drives with
+  usage bars and eject, phones, Network, tags, saved searches and the Trash.
+- Any KIO location (local, SMB, SFTP, FTP, WebDAV ...), Connect to Server, a
+  Home page (pinned, recent and frequent) and a Network page; zip, tar and 7z
+  files open as read-only folders.
 
-Built with Rust, Qt 6 Quick and Kirigami on
-[atlas-framework](https://github.com/EternalCoder454/atlas-framework). See
-`CLAUDE.md` for how to build and test it, and `docs/DESIGN.md` for how it
-works.
+**Doing things**
+- Copy, move, link, trash and delete through one queue with a progress ring,
+  conflict dialog, problems dialog, undo and redo; drag and drop.
+- Rename in place, Batch Rename (find and replace, numbers, case, text), new
+  folders and files from templates, Properties with permissions, checksums, tags
+  and a star rating, quick actions on pictures (rotate, convert, combine to PDF),
+  extract and compress through Telamon Archive.
+- The Trash: Restore, Empty Trash, original place and date deleted, and
+  "Empty items older than N days".
+
+**Finding things**
+- A search field with ranked name matches from the file index within a blink
+  (`telamon-explorer-indexd`, which Atlas Launcher also uses), filters for kind,
+  date, size and tag, a live walk for folders the index doesn't hold, search
+  inside text files and PDFs, name patterns (regular expressions), saved
+  searches, and a filter for the folder shown (Ctrl+F).
+
+**Yours** (one Settings window, Ctrl+,)
+- Five short pages: General, View, Search, Context Menu and Actions, Trash.
+- Your own actions under More Actions: a program, arguments with `%f %F %u %U %d`,
+  the file types, ask first. They are started with an argument list, never a shell.
+- A switch for every context-menu entry and every service menu.
+- Git status badges on modified, new and ignored files (off by default).
+- Keyboard-only use, a screen-reader description on every row, right-to-left
+  layouts, reduced motion and high contrast.
+
+See `docs/DESIGN.md` for how it works, `docs/ROADMAP.md` for what each wave did
+and what is left for the Secure, Reliable and Performant phases, and `CLAUDE.md`
+for how to build and test it (in the dev container, never on the host).
 
 Licence: MIT.

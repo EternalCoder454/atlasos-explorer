@@ -1523,6 +1523,8 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copy(root.selected, false) }
     Shortcut { sequence: "Ctrl+X"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.copy(root.selected, true) }
     Shortcut { sequence: "Ctrl+Shift+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copyPath(root.selected) }
+    // Properties of the selection (of the folder when nothing is selected), as in Dolphin.
+    Shortcut { sequences: ["Alt+Return", "Alt+Enter"]; enabled: !root.typing && !quickLook.opened; onActivated: fileActions.showProperties(root.selected) }
     Shortcut { sequence: "Ctrl+V"; enabled: !root.typing && root.canWrite && !root.searching; onActivated: fileActions.paste() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !root.typing; onActivated: fileActions.redo() }

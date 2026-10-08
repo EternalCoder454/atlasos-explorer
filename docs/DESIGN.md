@@ -15,8 +15,8 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 15 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window; split view, spring-loaded folders and the quick actions on pictures; the folder filter, search inside files, name patterns and saved searches)
-only these parts of the sections below exist: a tab strip with one folder per
+0.2.0 plus waves 1 to 16 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window; split view, spring-loaded folders and the quick actions on pictures; the folder filter, search inside files, name patterns and saved searches; Settings, custom actions, hidden menu entries, optional Git badges and the accessibility pass)
+the Functionable phase is done and the sections below are built. Of the whole design these parts exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
 shows the index's answer (or a live walk) as a Details view with a Path column, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
@@ -57,7 +57,11 @@ Explorer replaces Dolphin completely.
   (`servers`),
   the search filters' meaning, where a search runs, and the search texts
   (`search`), patterns with their caps (`pattern`), looking inside one file
-  (`content`) and saved searches (`saved`). The live search walker (names and
+  (`content`), saved searches (`saved`), the custom actions of the Settings
+  window (`actions`: the arguments split into words, the placeholders, the
+  program checked, the argument lists), the context-menu entries the person
+  hid (`menuprefs`) and Git status badges (`gitstatus`: the safe `git`
+  command, its answer read, the badges of a folder). The live search walker (names and
   content) is in `atlas-file-index` (`walk`), beside the matcher it shares with
   the index, and the folder filter's matcher is `namefilter` there.
 - `crates/atlas-file-index`: no Qt. The index (scanner, inotify watcher,
@@ -84,12 +88,20 @@ Explorer replaces Dolphin completely.
     QtDBus and the SMB worker's browsing).
   - `cpp/kio/SavedLogic.*` (the sidebar's Saved Searches: the list kept in
     the settings file, read and changed by the core).
+  - `cpp/kio/SettingsLogic.*` (the Settings window's own settings: the page a
+    new tab opens, the pattern default, Git badges on or off, and the folders
+    of the file index), `cpp/kio/ActionsLogic.*` (custom actions: the list
+    in the settings file, what the menu offers for the items under the
+    pointer, running one with `QProcess` and an argument list) and
+    `cpp/kio/MenuPrefs.*` (the hidden menu entries, and the service menus and
+    plugins found on this computer for the Settings list).
   - `cpp/kio/ArchiveClient.*` (Archive1 over D-Bus and `ArchiveJob`),
     `cpp/kio/ArchiveGuard.*` (what Files checks before KIO copies out of an
     archive).
   - `cpp/main.cpp`: Qt start, telamon-framework-ui startup, single instance,
     FileManager1.
-  - `qml/`: the window, views and dialogs, all from Telamon.Ui.
+  - `qml/`: the window, views and dialogs, all from Telamon.Ui (the Settings
+    window is a `TelamonPreferencesDialog`, `qml/SettingsDialog.qml`).
 - `apps/telamon-explorer-indexd`: the index service binary (zbus), plus its
   systemd user unit and D-Bus activation file.
 - `apps/telamon-explorer-search`: the index CLI.
@@ -438,6 +450,19 @@ Explorer replaces Dolphin completely.
     by name, Sort and View (the same menus as the toolbar's buttons), Open
     Terminal Here, Pin This Folder to Sidebar, Properties. Show Hidden Files
     is in View.
+  - **Hidden entries and your own actions (wave 16).** Every entry of the
+    core's menu model (`menu::Cmd`), the quick actions on pictures, Copy and
+    Move to Other Pane, every service-menu action (by its `Actions=` name)
+    and every plugin of KDE's file-item actions (by its id) has a switch in
+    Settings > Context Menu and Actions. A hidden entry is left out when the
+    menu is made: the core drops it from the model
+    (`menuprefs::Hidden::filter`, through `telamon_menu_state_hiding`), the
+    exclude list of `KFileItemActions::addActionsTo` carries the service
+    actions and plugins, and the snapshot's `hidden` map tells the QML for the
+    entries the model doesn't decide. The set is `[Menu] Hidden=` in
+    `telamon-explorerrc`. Settings opens from the View menu, the tab menu and
+    Ctrl+, whatever is hidden. The person's own actions come first in More
+    Actions, then the service menus (see "Custom actions" below).
   - **Names** (wave 10): F2, Rename and the toolbar's pencil edit one item's
     name where it is shown (`qml/InlineRename.qml`, in Details, Icons,
     Compact and the tab's own column of Columns): the field opens with the
@@ -509,9 +534,103 @@ Explorer replaces Dolphin completely.
     folder shown otherwise; only on this computer.
   - **Not built:** "Open in New Window" (there is one window; the launch
     parser reads `--new-window` and opens tabs), the Settings list that hides
-    entries (wave 16; the entries simply exist), and a Telamon.Ui menu row that
+    entries (built in wave 16, below), and a Telamon.Ui menu row that
     holds icon buttons: `qml/IconRowItem.qml` has the shape such a row would
     ask for, and moves upstream when the framework has one.
+- **Settings (wave 16)** (`qml/SettingsDialog.qml`: Telamon.Ui's
+  `TelamonPreferencesDialog`, one modal dialog over the window, Ctrl+, from
+  anywhere, also in the View menu and the tab menu): five short pages, the
+  common things first and the details folded away, a one-line description under
+  every control, the framework's own search of the settings (it does not look
+  inside folded sections).
+  - **General:** where a new tab opens (the Home page or the home folder),
+    restore tabs on start (W1), show hidden files.
+  - **View:** the same view for every folder (W8), the preview pane, preview
+    files on servers (W11), Show Git status (below, off by default), and the
+    Details columns (W13) folded.
+  - **Search:** use patterns by default (W15), and the File Index folded: its
+    state, Rebuild, and the folders it holds, which can be added and removed.
+    The folders are the index service's `indexrc` (`Roots=`, edited by
+    `atlas_file_index::config::with_roots`, every other line kept); the
+    service reads it when it starts, so Files calls the new `Reload()` of
+    Search1 (the service answers and ends cleanly; the next call starts it
+    again with the new folders).
+  - **Context Menu and Actions:** the person's own actions (add, edit,
+    remove), then the menu entries and the service menus and plugins, each
+    with a switch, both folded.
+  - **Trash:** empty old items after N days (W12).
+
+  The quick switches stay where they were useful (the View menu's Show Hidden
+  Files, Preview Pane, Preview Files on Servers and the same-view row; the
+  tab menu's Restore Tabs on Start; the Trash page's header) and change the
+  same settings; the View menu's "Empty Old Trash Items…" is now "Settings…".
+  Every value is kept by the class that already kept it (`TabLogic`,
+  `ViewMemory`, `ServerLogic`, `ColumnLogic`, `PreviewLogic`, `TrashLogic`,
+  plus `SettingsLogic`, `ActionsLogic` and `MenuPrefs`), in
+  `telamon-explorerrc`; the window only reads and changes them.
+- **Custom actions (wave 16).** An action is a name, a program, arguments, the
+  file types it is for and "Ask first". It is added in a dialog of its own
+  (`qml/ActionEditor.qml`), checked as it is typed (the core says why in
+  plain words), kept in `[CustomActions] Items=` (one line each, every field
+  percent-encoded, at most 30) and shown under More Actions for the items it is
+  for (MIME patterns such as `image/*`, matched with the types an item
+  inherits from; every selected item must match). It runs through
+  `QProcess::startDetached` with a **program and an argument list, never a
+  shell**: the program is looked for when it is saved and again when it runs (a
+  full path, or a name found in `PATH`; a regular file that can be executed;
+  never `sh`, `bash`, `env`, `sudo`, `pkexec` and the like, which would run a
+  command line), the typed arguments are split into words by the core
+  (single and double quotes and a backslash group; nothing is expanded) and the
+  placeholders are replaced afterwards: `%f` one file (the action then runs once
+  for each item, at most 20), `%F` all the files, `%u` one URL, `%U` all the
+  URLs, `%d` the folder of one item, `%%` a percent sign. A file name becomes
+  one argument whatever it holds (spaces, quotes, `$(...)`, backquotes, `;`, a
+  leading `-`, a line break, `%f`), is never split or expanded again, and is an
+  absolute path or URL, so it can't be an option. The action runs in the first
+  item's folder, with its input and output closed. "Ask first" shows the
+  command and the number of items, Cancel the default. Dolphin's `.desktop`
+  service-menu file was not used for the list (see ROADMAP, W16).
+- **Git status badges (wave 16)**, off by default (Settings > View). In a
+  folder on this computer inside a git work tree, items that are modified,
+  new, ignored or in conflict get a round badge with a letter (M, N, I, C) and
+  the row says "Git: modified" to a screen reader. `FolderModel` asks a moment
+  after the folder or its items change, on a worker pool of its own,
+  `atlas_explorer_core::gitstatus::status`: it finds the work tree, checks it,
+  runs `git` **by argument list** (`--no-optional-locks -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null -c core.attributesFile=/dev/null status
+  --porcelain=v2 -z --untracked-files=normal --ignored=matching
+  --ignore-submodules=all --no-renames -- .`) in the folder, with an emptied
+  environment (no `GIT_*` of ours, no global or system configuration, no
+  prompt, no lazy fetch), a 5 s timeout and at most 16 MiB of answer, and
+  reads the answer as untrusted bytes. A repository is **skipped, with no
+  badge and no error**, when its work tree or its git directory belongs to
+  another user (git's `safe.directory` rule), or when its own configuration
+  has a `[filter ...]` section (`status` runs a filter's `clean` command for a
+  file the attributes name) or an `[include]` (it could pull one in). Hooks and
+  `core.fsmonitor` are switched off on the command line. A folder inside an
+  ignored folder shows every item ignored. Nothing is shown for search
+  results, the Trash, servers or Files' own pages, and no git is started when
+  the setting is off.
+- **Accessibility (wave 16).** Every row of every view (Details, Icons,
+  Compact, Columns, Gallery) is a list item with its name, a description with
+  the type, the size and the Git state, and `selected` and `focused` states that
+  follow the keyboard (Orca reads "name, type, size, selected"); the list is
+  "Files"; the Details headers are column headers a screen reader can press;
+  Quick Look reads "name, N of M" when it opens and at each step; a drive the
+  system gives no name is called "Drive". The keyboard starts on the folder,
+  and when a dialog or a menu closes and leaves it nowhere the window puts it
+  back on the folder. Alt+Return shows Properties. Sort > Group By has
+  Collapse All Groups and Expand All Groups for the keyboard. Every
+  `ContextMenu` of Files turns the framework list's own Up and Down off
+  (`contentItem.keyNavigationEnabled = false`). Right to left: the layout
+  mirrors (tested with `-reverse`: the sidebar, the path bar's order, the
+  Details rows (an anchor, not an `x`), the compact list); under reduced
+  motion Files has no animation of its own (its parts come from Telamon.Ui,
+  which has none then); under high contrast a selected row is solid with the
+  selection's text colour, the focus ring is 3 px, separators are stronger and
+  the Git badge has a border. The checks are scripted: AT-SPI dumps
+  (`pyatspi`) of every state, a keyboard-only walk, a portal stand-in for high
+  contrast and reduced motion, and `-reverse`.
 - **Sidebar** (TelamonSidebar): Home (a Windows-style home: pinned folders,
   recent files, frequent folders), Recent (`recentlyused:/`), pinned
   favourites (`user-places.xbel`, drag to pin and reorder), Desktop,
@@ -663,7 +782,7 @@ Explorer replaces Dolphin completely.
     type comes from its name (KIO's `MatchExtension`; nothing is read to find
     it), and no folder size is worked out, unless the switch **Preview Files on
     Servers** in the View menu is on (`[Remote] PreviewFiles`, off by default;
-    the Settings window of wave 16 will hold it). With it on, thumbnails of
+    the Settings window holds it too, wave 16). With it on, thumbnails of
     files up to 5 MB on a server are asked of KIO's thumbnailers (which download
     the file), `PreviewSettings/MaximumRemoteSize` being set for that. Quick Look
     and the preview pane stay local-only.
@@ -1165,6 +1284,10 @@ Status() -> (a{sv})
 
 NotifyChanged(as uris)    hint from Explorer after its own operations
 Refresh()                 rescan now (the Settings "Rebuild" button)
+Reload()                  (wave 16, an addition) read indexrc again: the
+                          service answers, then ends cleanly, and the next
+                          call starts it again with the new folders. Settings
+                          calls it after changing the folders to index.
 
 signal StatusChanged(a{sv} status)
 ```
@@ -1610,9 +1733,8 @@ trash, delete, rename, new folder, new file, hide, restore from trash and empty 
     left completely empty.
   - **Empty items older than N days** (`[Trash] AutoEmpty`, `AutoEmptyDays` in
     `telamon-explorerrc`; off, 30; 1 to 3650) is the switch and the number in
-    the Trash page's header, and the same two controls in a dialog opened from
-    the View menu ("Empty Old Trash Items…"), until the Settings window of wave
-    16 has them. **Turning it on asks first** (Cancel the default) and says how
+    the Trash page's header, and the same two controls in Settings > Trash (wave
+    16; the dialog the View menu opened is gone, its row is "Settings…"). **Turning it on asks first** (Cancel the default) and says how
     many items are older than that right now (a read-only count by the core);
     lowering the days while it is on asks the same when something would go;
     raising them, or changing them while it is off, is kept at once. What
@@ -1706,6 +1828,15 @@ Untrusted input, checked where it enters:
   Cancel. Scripts are opened in the text editor by default.
 - **Service menus:** loaded by KFileItemActions with KIO's rules (a user's
   own service menu must be executable to load).
+- **Custom actions** (wave 16) are the person's own commands, run with a
+  program and an argument list only: no shell, no `sh -c`, the program checked
+  at the time it runs, a file name one argument, a limit on how many processes
+  one use starts, and "Ask first" showing the command. The list is read from
+  the settings file as untrusted text (a damaged line is dropped).
+- **Git** (wave 16): see "Git status badges". A work tree can come from
+  anywhere, so `git` runs with a cleared environment and safe options, on
+  repositories of the user's own only, and not at all on one whose own
+  configuration names a filter or an include.
 - **Thumbnails** are made out of process by the KIO thumbnail worker, with
   KIO's size caps (MaximumSize); a crash there costs one thumbnail.
 - **File content in Quick Look and the pane:** shown only as a picture from
@@ -1784,6 +1915,11 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Inside Files meets a binary file, a file over 4 MiB, a PDF without `pdftotext`, a PDF that can't be read or takes over 15 s | Left out and counted; the line under the search says what ("Left out: …") |
 | Inside Files on a server's folder | "Can't Search Inside These Files" with a hint to turn Inside Files off |
 | The settings file's Saved Searches are damaged | The searches that are fine are kept, the rest dropped |
+| A custom action's program is gone, is not executable, or too many items for one run | Nothing is started; the line over the view says why in plain words |
+| A custom action needs a path and an item is on a server | The same line: "This action needs files on this computer…" |
+| `git` missing, slow (over 5 s), failing, or the repository is another user's or runs filters | No Git badges for that folder, and no message; the files show as usual |
+| The index service ends after Reload and a call arrives at once | D-Bus activation starts it again; the call waits for the name |
+| The `indexrc` file is too big or damaged | The service uses its defaults (the home folder) and logs a warning; Settings shows the folders as the service will read them |
 | Peer app missing (Archive, Backups, Disks) | Its menu items are hidden; Open on an archive and the Extract button in an archive still work through KIO |
 | Archive busy, not running, or a job it runs fails | The popover row says why in Archive's words (or "Archive is busy, try again when a job finishes."); nothing is retried |
 | An archive KIO can't read, or a zip that needs a password | "This archive couldn't be read…" or "\"a.zip\" needs a password, which Files can't enter."; nothing is extracted |

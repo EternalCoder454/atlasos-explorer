@@ -41,6 +41,13 @@ FocusScope {
     layer.enabled: true
     Accessible.role: Accessible.Dialog
     Accessible.name: qsTr("Quick Look")
+    // Which file, and where it is among the others: read when it opens and again at each step.
+    Accessible.description: info.name !== undefined ? qsTr("%1, %2 of %3").arg(info.name).arg(position).arg(total) : ""
+    onInfoChanged: {
+        if (visible && info.name !== undefined) {
+            ql.Accessible.announce(qsTr("%1, %2 of %3").arg(info.name).arg(position).arg(total));
+        }
+    }
 
     // Shows the file selected in `view`; nothing happens when there is none.
     function openFor(view) {
