@@ -294,11 +294,12 @@ pub fn looks_binary(raw: &[u8]) -> bool {
 pub fn sanitize_text(raw: &[u8], cut: bool) -> String {
     let decoded: String = match utf16_bom(raw) {
         Some(little) => {
-            let units = raw[2..].chunks_exact(2).map(|p| {
+            let (pairs, _) = raw[2..].as_chunks::<2>();
+            let units = pairs.iter().map(|&p| {
                 if little {
-                    u16::from_le_bytes([p[0], p[1]])
+                    u16::from_le_bytes(p)
                 } else {
-                    u16::from_be_bytes([p[0], p[1]])
+                    u16::from_be_bytes(p)
                 }
             });
             char::decode_utf16(units)

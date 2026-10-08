@@ -262,7 +262,10 @@ FocusScope {
         case Qt.Key_Space:
             // Space is Quick Look, unless it is part of a name being typed.
             if (typed.length === 0 && (mods & ~Qt.KeypadModifier) === 0) {
-                quickLookRequested();
+                // A key held down opens it once.
+                if (!event.isAutoRepeat) {
+                    quickLookRequested();
+                }
                 event.accepted = true;
                 return;
             }

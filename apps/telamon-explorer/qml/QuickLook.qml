@@ -34,7 +34,11 @@ FocusScope {
     anchors.fill: parent
     visible: false
     z: 100
+    // Drawn as one layer: without it the software renderer paints the icons
+    // of the rows behind (Kirigami.Icon) over the card.
     layer.enabled: true
+    Accessible.role: Accessible.Dialog
+    Accessible.name: qsTr("Quick Look")
 
     // Shows the file selected in `view`; nothing happens when there is none.
     function openFor(view) {
@@ -169,6 +173,11 @@ FocusScope {
         }
         switch (event.key) {
         case Qt.Key_Space:
+            // A key held down since before Quick Look opened must not close it again.
+            if (!event.isAutoRepeat) {
+                close();
+            }
+            break;
         case Qt.Key_Escape:
             close();
             break;
@@ -200,7 +209,8 @@ FocusScope {
     // The dimmed window behind: a click on it closes.
     Rectangle {
         anchors.fill: parent
-        color: Qt.alpha("black", 0.5)
+        // A scrim is black in both themes, as TelamonDialog's is. // telamon-lint: allow-raw
+        color: Qt.rgba(0, 0, 0, 0.5)
         TapHandler {
             onTapped: ql.close()
         }
@@ -217,10 +227,10 @@ FocusScope {
         anchors.centerIn: parent
         width: Math.min(parent.width - Kirigami.Units.gridUnit * 4, Kirigami.Units.gridUnit * 64)
         height: Math.min(parent.height - Kirigami.Units.gridUnit * 4, Kirigami.Units.gridUnit * 44)
-        radius: TelamonStyle.radius
-        color: Kirigami.Theme.backgroundColor
+        radius: TelamonStyle.radiusLarge
+        color: TelamonStyle.floatingBackground
         border.width: 1
-        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.2)
+        border.color: TelamonStyle.separator
         // A click on the card is not a click on the dimmed window.
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds

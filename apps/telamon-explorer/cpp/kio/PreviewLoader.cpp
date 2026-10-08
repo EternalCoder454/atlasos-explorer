@@ -140,7 +140,7 @@ PreviewLoader::Result PreviewLoader::compute(const QString &path, bool isDir, co
     const QFileInfo fi(path);
     if (!fi.exists()) {
         r.category = Other;
-        r.note = QObject::tr("This file isn't there any more.");
+        r.note = QObject::tr("The file isn't there, or it is a link to something that isn't.");
         return r;
     }
     if (fi.isDir()) {

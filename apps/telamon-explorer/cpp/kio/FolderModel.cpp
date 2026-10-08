@@ -706,14 +706,21 @@ QVariantMap FolderModel::detailsAt(int row) const
     const QModelIndex idx = index(row, 0);
     const Entry &e = m_rows.at(row);
     const auto when = [](qint64 secs) { return secs > 0 ? QLocale().toString(QDateTime::fromSecsSinceEpoch(secs), QLocale::ShortFormat) : QString(); };
-    // Where the file is on this computer, if it is: a file: URL, or what the
-    // worker says (the Trash lists its files with their real place).
-    QString local = e.item.localPath();
-    if (!QDir::isAbsolutePath(local)) {
-        local.clear();
+    // Where the file is on this computer, if it is: a file: URL, or the real
+    // place the Trash's worker lists its files with. No other worker's word
+    // is taken for a path that is then read.
+    QString local;
+    const QUrl url = e.item.url();
+    if (url.isLocalFile()) {
+        local = url.toLocalFile();
+    } else if (url.scheme() == QLatin1String("trash")) {
+        local = e.item.localPath();
+        if (!QDir::isAbsolutePath(local)) {
+            local.clear();
+        }
     }
     return {{QStringLiteral("name"), data(idx, NameRole)},
-            {QStringLiteral("url"), e.item.url()},
+            {QStringLiteral("url"), url},
             {QStringLiteral("localPath"), local},
             {QStringLiteral("isDir"), e.isDir},
             {QStringLiteral("isLink"), e.item.isLink()},
@@ -758,9 +765,9 @@ FolderModel::Entry FolderModel::makeSearchEntry(const SearchHit &hit, quint32 ra
     KIO::UDSEntry u;
     // A file on this computer is named by its URL (the real name, which the
     // index's display name may have changed); the name given is for the rest.
-    if (!hit.url.isLocalFile()) {
-        u.fastInsert(KIO::UDSEntry::UDS_NAME, hit.name);
-    }
+    // KFileItem takes its name from the entry only, never from the URL, so
+    // without UDS_NAME the row has no name at all.
+    u.fastInsert(KIO::UDSEntry::UDS_NAME, hit.url.isLocalFile() ? hit.url.fileName() : hit.name);
     u.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, hit.isDir ? S_IFDIR : S_IFREG);
     u.fastInsert(KIO::UDSEntry::UDS_SIZE, qlonglong(hit.size));
     u.fastInsert(KIO::UDSEntry::UDS_MODIFICATION_TIME, qlonglong(hit.mtime));

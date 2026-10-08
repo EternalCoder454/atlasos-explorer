@@ -15,16 +15,16 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 4 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search)
+0.2.0 plus waves 1 to 5 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
 shows the index's answer (or a live walk) as a Details view with a Path column, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
 with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs with KIO's own
 dialogs, `FileManager1`, the launch parser and the index service. Everything
-else (preview and details panes, Quick
-Look, the operations popover and queue wiring, Columns and Gallery
-views, split view) is design, not behaviour. Sections that
+else (the details pane, the operations
+popover and queue wiring, Columns and Gallery views, split view) is design,
+not behaviour. Sections that
 have been built say so in a "Built" line.
 
 ## Scope
@@ -370,6 +370,50 @@ Explorer replaces Dolphin completely.
   first 256 KB of a text file as plain text, and audio and video playable
   through QtMultimedia. Arrow keys move through the selection. Space or Esc
   closes.
+
+  **Built (wave 5):** `qml/QuickLook.qml`, `qml/PreviewPane.qml`,
+  `qml/PreviewBody.qml` (what both show) and `qml/MediaControls.qml` (the
+  player), over `PreviewLoader` (`cpp/kio/PreviewLoader.*`, a QML type that
+  finds out on a worker what a file is and, for text, reads it) and
+  `PreviewLogic` (`cpp/kio/PreviewLogic.*`, the settings below). The core
+  decides in `atlas_explorer_core::preview` (the category of a MIME type, the
+  text reader and its cleaning, the details' texts) and `::zoom` (limits,
+  steps, wheel arithmetic); both are tested without a display.
+  - Space in a view (not while a name is being typed ahead) opens Quick Look
+    over the window for the selected file (the row with the cursor when none is
+    selected). With two files or more selected, Left/Up and Right/Down move
+    through those files, starting at the one with the cursor, and only the
+    cursor follows; with one or none they move through everything the view
+    shows (a folder, search results, the Trash) and the selection follows.
+    They stop at the ends (no wrap); Home and End go to the first and last.
+    Enter opens the file in its app (`FileActions::openUrls`, with the usual
+    "Run or open?" prompts; a folder opens in the tab) and closes it; Space,
+    Escape or a click outside close it. Quick Look keeps the keyboard while
+    it is open; the window's Delete, Copy, Cut, Paste and the like are off,
+    and it closes when another tab is shown, the tab goes elsewhere, a text
+    field takes the keyboard, or its file is gone.
+  - What is shown: a picture from KIO's thumbnailers (`image://thumb/`, 1024 px
+    here, 512 px in the pane) for images, PDF, video, audio, fonts and
+    documents, and the file's icon with a line in plain words where no
+    thumbnailer has one; for text and source code the first 256 KiB as plain
+    text; for audio and video of this computer a player. The player opens
+    the file when the preview shows it (so its length and picture size are
+    known) and plays only when its button is pressed; moving on, closing
+    or covering the pane with Quick Look ends it. A file on a server is not
+    fetched: its preview is its icon and details, and Enter opens it.
+  - The preview pane (Alt+P, View menu "Preview Pane"; off by default, kept in
+    `[View] PreviewPane`) is on the right of the window, 20 grid units wide: for
+    one selected file the same preview with Name, Kind, Size, Dimensions,
+    Duration, Modified, Created and, among search results, Where; for several
+    "N Items Selected" and their size. It never takes the keyboard. The
+    details pane (Alt+Shift+P) and a pane that can be resized are not built.
+  - Zoom: Ctrl+scroll, Ctrl+plus, Ctrl+minus change the icons' size in the
+    Icons view (48 to 256 px, steps of 16, default 96) and the rows' height in
+    Details and Compact (24 to 64 px, steps of 4, default two grid units);
+    Ctrl+0 resets the one in use. Both are kept in `[View] IconSize` and
+    `RowHeight` (anything out of range in the file is brought back by the
+    core), shared by every tab, and the View menu has Zoom In, Zoom Out and
+    Reset Zoom.
 - **Status line** (in the details pane footer when it is shown, at the
   bottom otherwise): item count, selection size, free space.
 
@@ -633,6 +677,12 @@ The GUI thread never blocks.
   `qt_thread().queue` or a queued signal. The MIME type on the GUI thread is
   the fast one, from the name; a content check, when the name gives none,
   runs on a worker and updates the row.
+- Quick Look and the pane: `PreviewLoader` asks a worker (two threads) for
+  the MIME type, a picture's size and a text file's first 256 KiB; the answer
+  returns through the application object and an answer to a file that is no
+  longer shown is dropped (and a queued file that is no longer wanted is not
+  read). Thumbnails come through the same `image://thumb/` provider as the
+  Icons view.
 - Path bar: the subfolder menus and completions read a local folder on a
   worker (`LocationLogic`, QThreadPool) and a server's through a `KIO::listDir`
   job with a timeout; free space (`QStorageInfo`) is a worker too. Results
@@ -742,6 +792,21 @@ Untrusted input, checked where it enters:
   own service menu must be executable to load).
 - **Thumbnails** are made out of process by the KIO thumbnail worker, with
   KIO's size caps (MaximumSize); a crash there costs one thumbnail.
+- **File content in Quick Look and the pane:** shown only as a picture from
+  the thumbnailers or as plain text, never as HTML, Markdown or any markup
+  (`TextEdit.PlainText`; the same goes for every name and detail). The text
+  reader (`atlas_explorer_core::preview::read_text`) opens the file without
+  blocking and without taking a controlling terminal, refuses anything that is
+  not a regular file once it is open (a named pipe, a device, a socket, a
+  folder; a symlink to a regular file is followed, a link to a device is not),
+  reads at most 256 KiB, refuses binary content (a NUL byte, mostly controls
+  or invalid UTF-8) and shows control, bidi and invisible characters as the
+  markers names get (an escape sequence is shown, never sent), with lines cut
+  at 2,000 characters. Only a path on this computer is read: a `file:` URL, or
+  the real place the Trash's worker reports for a `trash:` item; no other
+  worker's answer is used as a path. Pictures are decoded by the thumbnailer
+  process, only their header is read here (`QImageReader::size`, SVG
+  excepted). Audio and video play only when the user presses Play.
 - **D-Bus callers** (FileManager1, Window1, Search1): any process in the
   session. Arguments are capped and parsed like launch arguments; nothing
   they send is executed or opened with an app.
@@ -769,6 +834,8 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Folder removed while open | The tab goes to the nearest existing parent with a message |
 | Slow or dead server | Listing shows a spinner and Stop; the window stays responsive; KIO's timeouts end it |
 | Thumbnailer crashes or hangs | That file falls back to its icon; PreviewJob's timeout |
+| A file can't be previewed (no thumbnailer, binary, unreadable, special, gone) | The icon and one plain line saying why; Quick Look and the pane stay usable |
+| Media can't be played | The player says "This file can't be played."; nothing else changes |
 | Index missing, corrupt, older version | Rebuilt; Status says "scanning"; queries answer from what is ready |
 | inotify watches exhausted | Lazy mtime rechecks on query (above) |
 | Disk full, drive pulled, crash mid-copy | See "No data loss" |
