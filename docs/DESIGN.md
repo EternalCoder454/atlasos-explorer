@@ -15,13 +15,13 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 13 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window)
+0.2.0 plus waves 1 to 14 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window; split view, spring-loaded folders and the quick actions on pictures)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
 shows the index's answer (or a live walk) as a Details view with a Path column, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
 with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs run by one operation queue (ring and popover, conflict dialog, undo and redo), `FileManager1`, the launch parser and the index service. Everything
-else (the details pane, split view) is design,
+else (the details pane) is design,
 not behaviour. Sections that
 have been built say so in a "Built" line.
 
@@ -135,7 +135,8 @@ Explorer replaces Dolphin completely.
     mouse side buttons.
   - Files dragged onto a tab go to that tab's folder through the same KIO drop
     menu as a drop on a folder (Move Here, Copy Here, Link Here); holding the
-    drag over another tab for 0.8 s shows it first.
+    drag over another tab for 1 s shows it first (the delay of every
+    spring-loaded folder, wave 14).
   - **Restore Tabs on Start:** with the setting on, the window keeps its tabs'
     locations and the shown tab in `telamon-explorerrc` (`[Tabs]`, written
     half a second after a change and at close, the last tab included), and the
@@ -654,7 +655,117 @@ Explorer replaces Dolphin completely.
   player) and a details pane (Alt+Shift+P: name, kind, size, dates,
   dimensions or duration from KFileMetaData's extractors run in a worker,
   permissions summary, tags). **Split view** (F3): two panes in one
-  tab, drag between them, F5/F6 copy and move to the other side.
+  tab, drag between them, F5/F6 copy and move to the other side (wave 14,
+  below).
+- **Split view, drag and drop, quick actions on pictures** (wave 14).
+
+  **Built (wave 14):**
+  - **Panes.** A tab is a `qml/FilesTabPage.qml`: one or two `qml/FilesPane.qml`
+    (what a tab was before: a `FolderView`, its own back and forward lists,
+    view, selection, search and scroll). The tab answers for the *active* pane
+    (the one that has the keyboard, or was clicked last): the window's
+    `page`, `view` and `search`, and so the toolbar, the shortcuts, the menus,
+    the status line, Quick Look, the preview pane and `FileActions.folder`, are
+    that pane's, and nothing in the window knows about the other one except
+    through `page.panes` and `page.otherPane`. F3 and the toolbar button (it
+    is left of the operations ring, so the View and Sort buttons keep their
+    places) split the tab: the new pane shows the same folder and view, takes
+    the keyboard, and sits on the right (on the left in a right-to-left
+    layout). With two panes each shows its own path bar (the toolbar's hides:
+    Back, Forward, Up and Search stay and act on the active pane; Ctrl+L, F4 and
+    Alt+D edit the active pane's bar), an accent line on the active pane, and
+    a × that closes *that* pane (one click, on the inactive one too); F3 or
+    the button again closes the pane that does not have the keyboard.
+    Ctrl+Shift+O gives the keyboard to the other pane. The limit is two. Panes
+    live and die with their tab: duplicating a tab duplicates both panes (the
+    history of the first), a closed split tab comes back split, and Restore Tabs
+    on Start keeps both folders and which had the keyboard (`[Tabs]` `Splits=`,
+    `Active=`, one entry for each of `Urls=`; each entry is checked by the
+    launch parser on its own, so a refused tab does not shift the splits of
+    the others). `--split` (and `FileManager1`) show the first location in a
+    second pane of the tab shown. The View menu has no row for it: it is
+    already as tall as a small window.
+  - **Copy and Move to Other Pane.** F5 copies and F6 moves the selection
+    into the other pane's folder while split (F5 refreshes and F6 edits the
+    address when the tab is not split; Ctrl+R still refreshes). More Actions
+    has both ("Copy to Other Pane", "Move to Other Pane") while split. They go
+    through the queue like a drop on a path segment, so a taken name opens the
+    conflict dialog and the result is one step to undo. They say why they
+    can't in a line when the other pane shows a page (Home, Network), search
+    results, an archive or a folder that can't be written to, when nothing is
+    selected, when both panes show the same folder, or, for Move, when the
+    items can't be moved from where they are.
+  - **Files dragged over the window** (`cpp/kio/DragWatch.*`, a QML singleton
+    with an event filter on the window). It sees every drag of files (the drag
+    itself is `FileActions::startDrag`, a `QDrag` whose icon is the first item's
+    and which carries the count) and tells the QML targets nothing: it keeps the
+    pointer's place and the keys (`QGuiApplication::queryKeyboardModifiers`, as
+    the application's own record is not updated during a drag), what a drop on
+    the target under the pointer would do (`kind`: move, copy, link, or ask),
+    and the spring-load timer. Targets with a `DropArea` say what they do
+    (`mode = "direct"`: path segments and the sidebar's places, which move or,
+    with Ctrl, copy; the default "ask": the folder views and the tabs, whose
+    drop with no key held shows Move Here, Copy Here, Link Here; Ctrl copies,
+    Shift moves, Ctrl+Shift links; what is in an archive is copied). The
+    badge is a small pill by the pointer (`qml/Main.qml`) that says Move, Copy,
+    Link, or "Move, Copy or Link" when the drop will ask; the path bar's
+    "Move to Documents" line and the highlight of the folder row under a drag
+    (and a frame round the folder a drop would land in) say where. The sidebar's
+    places have no drop area of their own to ask (Telamon.Ui's `TelamonSidebar`
+    owns one over the whole bar), so the place under the pointer is found by
+    position.
+  - **Spring-loaded folders.** `DragWatch.spring(key, callback)`: held on the
+    same target for 1 s (one constant for all), the callback runs once and does
+    not run again until the drag has been over something else. The targets: a
+    folder row of a view (that pane goes into it; not a folder that is itself
+    being dragged), a path segment other than the last (that pane goes there),
+    a place of the sidebar that opens (the pane that has the keyboard goes there; the
+    Trash and drives that are not mounted do not open), and a tab (it is shown;
+    this was 0.8 s in wave 1).
+  - **Quick actions on pictures** (More Actions; `cpp/kio/ImageWork.*`, the
+    core's `imageops` and `pdfmerge`, `src/image_ffi.rs`). Rotate Left, Rotate
+    Right, Convert to PNG, JPEG or WebP, and Combine into PDF are offered when
+    every selected item is a file on this computer in one folder that can be
+    written to, of a kind the action takes (by MIME type from the name: JPEG,
+    PNG, WebP, BMP, GIF, TIFF, AVIF and JPEG 2000 where Qt can read them; PDFs
+    only for Combine), at most 500 of them. A conversion leaves out the ones
+    already in that format. They never touch the originals and never write in
+    place: a worker (`OperationQueue::produce`) makes the new files in a private
+    folder under the cache ("New files"), then the queue copies them into the
+    folder like a paste, so a name that is taken opens the conflict dialog
+    (Replace, Skip, Keep Both) and the result is one undo step that takes only
+    the new files to the Trash (Replace makes it not undoable, as everywhere).
+    The new ones are selected. The names are the core's: "photo (rotated).jpg",
+    "photo.png", "Combined.pdf" (in the folder of the items; the order of the
+    pages is the order the items were selected in: the selection model's
+    ranges, a Shift range by row), told apart inside a batch with " (2)".
+    Rotating a JPEG does not decode it when that can be avoided: libjpeg-turbo
+    moves the DCT blocks (`tj3Transform`, `TJXOPT_PERFECT`, Huffman tables
+    optimized, all markers kept), and the EXIF orientation is taken into account
+    (the core works out which of the eight transforms turns the picture *as it
+    is shown*, and the orientation tag is written as 1 afterwards). A JPEG whose
+    size is not a multiple of a JPEG block (the turn would cut an edge) is
+    decoded and written again at quality 95; so is anything that is not a JPEG
+    (PNG, WebP lossless and BMP stay in their format, the rest become PNG). A
+    conversion decodes (EXIF orientation applied) and writes: JPEG at quality
+    92 on white where the picture has see-through parts, WebP at 90, PNG as it
+    is; metadata is not carried over, and only the first frame of an animation.
+    A picture is refused before it is decoded when its file is over 256 MB or it
+    has over 150 million pixels (the header says; the reason is in words). Combine
+    makes one page for each picture (150 dots to the inch, less for a huge one:
+    a PDF page is at most 200 inches) with `QPdfWriter`, and joins them and the
+    PDFs with `lopdf` in this process, no program run: each PDF is checked
+    first (a PDF header, at most 256 MB each and 1 GB together, not
+    password-protected (Files does not take protection off), at least one
+    page, at most 5,000 pages in all, streams inflate to at most 256 MB), the
+    page tree is flattened with what pages inherit written into each page, and
+    what belongs to the document (outline, named destinations, forms,
+    structure) is left behind. A file that can't be used is named in a line
+    ("broken.pdf: It can't be read as a PDF."); the others are still made.
+  - **Packages:** `pkgconfig(libturbojpeg)` to build, `qt6-qtimageformats`
+    for WebP. The core now depends on `lopdf` (pure Rust; it brings its own
+    inflate and PDF parsing, and the crypto crates for the files it refuses).
+
 - **Tags and Properties** (wave 13).
 
   **Built (wave 13):**

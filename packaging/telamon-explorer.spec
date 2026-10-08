@@ -48,6 +48,8 @@ BuildRequires:  cmake(KF6Service)
 BuildRequires:  cmake(KF6CoreAddons)
 BuildRequires:  cmake(KF6Config)
 BuildRequires:  cmake(KF6FileMetaData)
+# Rotate Left and Right turn a JPEG without decoding it (libjpeg-turbo's TurboJPEG).
+BuildRequires:  pkgconfig(libturbojpeg)
 # QML modules qmlcachegen resolves at build time (not linked). telamon-ui comes
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
@@ -64,6 +66,8 @@ Requires:       kf6-qqc2-desktop-style
 Requires:       qt6-qtdeclarative
 # the player of Quick Look and the preview pane
 Requires:       qt6-qtmultimedia
+# WebP, for Convert to WebP and for showing WebP files.
+Requires:       qt6-qtimageformats
 # the app icon and Breeze's icons are SVG
 Requires:       qt6-qtsvg
 # KIO's workers beyond file:/ and trash:/ (smb, sftp, mtp, network,

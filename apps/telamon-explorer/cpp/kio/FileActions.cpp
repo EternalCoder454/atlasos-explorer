@@ -33,10 +33,13 @@
 #include <QDrag>
 #include <QDropEvent>
 #include <QFuture>
+#include <QImageReader>
 #include <QFutureWatcher>
 #include <QMenu>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QPainter>
+#include <QPixmap>
 #include <QSet>
 #include <QStandardPaths>
 #include <QThreadPool>
@@ -715,6 +718,221 @@ void FileActions::setPermissions(const QList<QUrl> &urls, uint setBits, uint cle
     m_ops->setAttributes(urls, edit, tr("Change Permissions of %1").arg(labelOf(urls)));
 }
 
+// ---- Quick actions on pictures ----
+
+namespace
+{
+// The MIME types Qt can read here (plug-ins differ from system to system).
+const QSet<QByteArray> &readableMimeTypes()
+{
+    static const QSet<QByteArray> set = [] {
+        QSet<QByteArray> s;
+        for (const QByteArray &m : QImageReader::supportedMimeTypes()) {
+            s.insert(m);
+        }
+        return s;
+    }();
+    return set;
+}
+
+// The name of the action's result in words: "Rotate", "Convert to PNG" ...
+QString actionTitle(int action, const QString &what)
+{
+    switch (action) {
+    case ImageWork::RotateLeft:
+        return FileActions::tr("Rotate %1 Left").arg(what);
+    case ImageWork::RotateRight:
+        return FileActions::tr("Rotate %1 Right").arg(what);
+    case ImageWork::ToPng:
+        return FileActions::tr("Convert %1 to PNG").arg(what);
+    case ImageWork::ToJpeg:
+        return FileActions::tr("Convert %1 to JPEG").arg(what);
+    case ImageWork::ToWebp:
+        return FileActions::tr("Convert %1 to WebP").arg(what);
+    default:
+        return FileActions::tr("Combine %1 into PDF").arg(what);
+    }
+}
+}
+
+FileActions::PictureSet FileActions::pictureSet(const QList<QUrl> &urls, int action) const
+{
+    PictureSet set;
+    if (urls.isEmpty()) {
+        return set;
+    }
+    if (urls.size() > int(telamon_image_limit(0))) {
+        set.why = tr("Pictures can be changed %1 at a time.").arg(telamon_image_limit(0));
+        return set;
+    }
+    if (action == ImageWork::ToWebp && !ImageWork::canWrite("webp")) {
+        set.why = tr("WebP files can't be written on this system.");
+        return set;
+    }
+    const QMimeDatabase db;
+    QString dir;
+    QList<uint32_t> kinds;
+    QByteArray names;
+    for (const QUrl &u : urls) {
+        if (!u.isLocalFile()) {
+            set.why = tr("These actions are for files on this computer.");
+            return set;
+        }
+        const QFileInfo info(u.toLocalFile());
+        const QString here = info.absolutePath();
+        if (dir.isEmpty()) {
+            dir = here;
+        } else if (dir != here) {
+            set.why = tr("These files are in different folders. Choose files from one folder.");
+            return set;
+        }
+        if (info.isDir()) {
+            set.why = tr("A folder can't be changed.");
+            return set;
+        }
+        const QMimeType type = db.mimeTypeForFile(info.fileName(), QMimeDatabase::MatchExtension);
+        const QByteArray mime = type.name().toUtf8();
+        const uint32_t kind = telamon_image_kind(reinterpret_cast<const uint8_t *>(mime.constData()), size_t(mime.size()));
+        if (kind == 0 || !telamon_image_accepts(uint32_t(action), kind)) {
+            set.why = action == ImageWork::CombinePdf ? tr("Only pictures and PDFs can be combined.") : tr("Only pictures can be changed this way.");
+            return set;
+        }
+        // A picture Qt can't read here is not offered (a PDF is read by the core).
+        if (kind != ImageWork::Pdf && !readableMimeTypes().contains(mime)) {
+            set.why = tr("This system can't read one of these pictures.");
+            return set;
+        }
+        if (action != ImageWork::CombinePdf && telamon_image_skips(uint32_t(action), kind)) {
+            continue;
+        }
+        kinds << kind;
+        names += QFile::encodeName(info.fileName());
+        names.append('\0');
+        set.sources.append({info.absoluteFilePath(), int(kind)});
+    }
+    if (set.sources.isEmpty()) {
+        set.why = tr("They are in that format already.");
+        return set;
+    }
+    if (!QFileInfo(dir).isWritable()) {
+        set.why = tr("This folder can't be written to.");
+        return set;
+    }
+    if (action == ImageWork::CombinePdf) {
+        set.names = {QStringLiteral("Combined.pdf")};
+    } else {
+        QByteArray out(names.size() * 2 + 512, 0);
+        size_t n = telamon_image_names(uint32_t(action), kinds.constData(), size_t(kinds.size()), reinterpret_cast<const uint8_t *>(names.constData()),
+                                       size_t(names.size()), reinterpret_cast<uint8_t *>(out.data()), size_t(out.size()));
+        if (n > size_t(out.size())) {
+            out.resize(qsizetype(n));
+            n = telamon_image_names(uint32_t(action), kinds.constData(), size_t(kinds.size()), reinterpret_cast<const uint8_t *>(names.constData()),
+                                    size_t(names.size()), reinterpret_cast<uint8_t *>(out.data()), size_t(out.size()));
+        }
+        if (n == 0 || n > size_t(out.size())) {
+            set.why = tr("The new names couldn't be worked out.");
+            return set;
+        }
+        for (const QByteArray &part : QByteArray(out.constData(), qsizetype(n)).split('\0')) {
+            if (!part.isEmpty()) {
+                set.names << QFile::decodeName(part);
+            }
+        }
+        if (set.names.size() != set.sources.size()) {
+            set.why = tr("The new names couldn't be worked out.");
+            return set;
+        }
+    }
+    set.folder = QUrl::fromLocalFile(dir);
+    set.ok = true;
+    return set;
+}
+
+QVariantMap FileActions::pictureMenu(const QList<QUrl> &urls) const
+{
+    static const char *const keys[] = {"rotateLeft", "rotateRight", "png", "jpeg", "webp", "combine"};
+    QVariantMap out;
+    bool any = false;
+    for (int a = 0; a <= ImageWork::CombinePdf; ++a) {
+        const bool ok = urls.size() <= int(telamon_image_limit(0)) && pictureSet(urls, a).ok;
+        out.insert(QLatin1String(keys[a]), ok);
+        any = any || ok;
+    }
+    out.insert(QStringLiteral("any"), any);
+    return out;
+}
+
+void FileActions::pictureAction(const QList<QUrl> &urls, int action)
+{
+    const PictureSet set = pictureSet(urls, action);
+    if (!set.ok) {
+        if (!set.why.isEmpty()) {
+            Q_EMIT failed(set.why);
+        }
+        return;
+    }
+    const int count = int(set.sources.size());
+    const QString what = count == 1 ? rustDisplayName(QFileInfo(set.sources.first().path).fileName().toUtf8())
+                                    : (action == ImageWork::CombinePdf ? tr("%n files", "", count) : tr("%n pictures", "", count));
+    const QString title = actionTitle(action, what);
+    const QString running = [&] {
+        switch (action) {
+        case ImageWork::RotateLeft:
+            return tr("Turning %1 left").arg(what);
+        case ImageWork::RotateRight:
+            return tr("Turning %1 right").arg(what);
+        case ImageWork::CombinePdf:
+            return tr("Combining %1 into a PDF").arg(what);
+        default:
+            return tr("Converting %1").arg(what);
+        }
+    }();
+    const QList<ImageWork::Source> sources = set.sources;
+    const QStringList names = set.names;
+    m_ops->produce(title, running, set.folder, names, count,
+                   [sources, names, action](const QString &dir, const std::atomic<bool> &cancel, const std::function<void(int)> &progress) -> QStringList {
+                       QStringList problems;
+                       auto shown = [](const QString &path) { return rustDisplayName(QFileInfo(path).fileName().toUtf8()); };
+                       if (action == ImageWork::CombinePdf) {
+                           int bad = -1;
+                           const QString why = ImageWork::combine(sources, QDir(dir).filePath(names.first()), dir, &cancel, &bad);
+                           if (!why.isEmpty() && why != QLatin1String("cancelled")) {
+                               problems << (bad >= 0 && bad < sources.size() ? shown(sources.at(bad).path) + QStringLiteral(": ") : QString()) + why;
+                           }
+                           progress(int(sources.size()));
+                           return problems;
+                       }
+                       for (int i = 0; i < sources.size() && !cancel.load(); ++i) {
+                           const QString out = QDir(dir).filePath(names.at(i));
+                           QString why;
+                           if (action == ImageWork::RotateLeft || action == ImageWork::RotateRight) {
+                               why = ImageWork::rotate(sources.at(i), out, action == ImageWork::RotateRight);
+                           } else {
+                               why = ImageWork::convert(sources.at(i), out, ImageWork::Action(action));
+                           }
+                           if (!why.isEmpty()) {
+                               problems << shown(sources.at(i).path) + QStringLiteral(": ") + why;
+                           }
+                           progress(i + 1);
+                       }
+                       return problems;
+                   });
+}
+
+void FileActions::transferTo(const QList<QUrl> &urls, const QUrl &folder, bool move)
+{
+    if (urls.isEmpty() || !folder.isValid()) {
+        return;
+    }
+    if (dropIsPointless(urls, folder)) {
+        Q_EMIT failed(tr("The other pane shows the folder these items are in."));
+        return;
+    }
+    // Out of an archive the items can only be copied.
+    const bool fromArchive = std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); });
+    m_ops->transfer(move && !fromArchive ? OperationQueue::Move : OperationQueue::Copy, urls, folder);
+}
+
 // What the Tags submenu offers for these items, from what the folder has read
 // of their tags (nothing is read here). {available, why, colours: [{name,
 // colour, state}], named: [{name, text, state}], hasTags}; state 0 no item has
@@ -1023,7 +1241,8 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
             {QStringLiteral("terminalFolder"), terminal},
             {QStringLiteral("openWith"), openWith},
             {QStringLiteral("services"), services},
-            {QStringLiteral("tags"), tagMenu(itemUrls)}};
+            {QStringLiteral("tags"), tagMenu(itemUrls)},
+            {QStringLiteral("pictures"), pictureMenu(itemUrls)}};
 }
 
 QVariantMap FileActions::backgroundMenu()
@@ -1337,7 +1556,35 @@ void FileActions::startDrag(const QList<QUrl> &urls)
         KUrlMimeData::setUrls(urls, urls, md);
         auto *drag = new QDrag(m_window);
         drag->setMimeData(md);
-        drag->setPixmap(QIcon::fromTheme(QStringLiteral("text-x-generic")).pixmap(32));
+        // The first item's icon, and how many there are.
+        const QString iconName = QMimeDatabase().mimeTypeForFile(urls.first().fileName(), QMimeDatabase::MatchExtension).iconName();
+        QIcon icon = QIcon::fromTheme(iconName);
+        if (icon.isNull()) {
+            icon = QIcon::fromTheme(QStringLiteral("text-x-generic"));
+        }
+        QPixmap pix = icon.pixmap(32);
+        if (urls.size() > 1) {
+            const qreal dpr = pix.devicePixelRatio();
+            QPixmap withCount(pix.size() + QSize(8, 8) * dpr);
+            withCount.setDevicePixelRatio(dpr);
+            withCount.fill(Qt::transparent);
+            QPainter p(&withCount);
+            p.drawPixmap(QPointF(0, 8), pix);
+            const QString n = urls.size() > 99 ? QStringLiteral("99+") : QString::number(urls.size());
+            QFont f = p.font();
+            f.setBold(true);
+            f.setPixelSize(10);
+            p.setFont(f);
+            const QRect badge(0, 0, qMax(16, p.fontMetrics().horizontalAdvance(n) + 8), 16);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0x68, 0x58, 0xE2));
+            p.drawRoundedRect(badge, 8, 8);
+            p.setPen(Qt::white);
+            p.drawText(badge, Qt::AlignCenter, n);
+            pix = withCount;
+        }
+        drag->setPixmap(pix);
         // What is in an archive can only be copied out of it.
         const bool inArchive = std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); });
         drag->exec(inArchive ? Qt::CopyAction : (Qt::CopyAction | Qt::MoveAction | Qt::LinkAction), Qt::CopyAction);

@@ -17,12 +17,25 @@ ContextMenu {
     // What FileActions.itemMenu made for the items under the pointer.
     property var snap: ({})
     property var _command: null
+    // The tab is split in two panes: Copy to Other Pane and Move to Other Pane
+    // show, and these say why they can't be used ("": they can). Set by the window.
+    property bool split: false
+    property string copyProblem
+    property string moveProblem
+
+    // Send these items to the other pane's folder (the window does it).
+    signal toOtherPane(var urls, bool move)
 
     function has(key) {
         return snap.state !== undefined && snap.state[key] !== undefined;
     }
     function on(key) {
         return snap.state !== undefined && snap.state[key] === true;
+    }
+    // Whether the quick action on pictures `key` (rotateLeft, rotateRight, png,
+    // jpeg, webp, combine) applies to the items.
+    function pic(key) {
+        return snap.pictures !== undefined && snap.pictures[key] === true;
     }
 
     // Shows the menu for `urls` at (x, y) of `anchor`. Nothing is shown for
@@ -279,6 +292,72 @@ ContextMenu {
             visible: menu.has("pinToSidebar")
             enabled: menu.has("pinToSidebar") && menu.on("pinToSidebar")
             onTriggered: menu.later(() => PlacesLogic.pinFolder(menu.snap.urls[0]))
+        }
+        ContextMenuSeparator {
+            visible: menu.split
+        }
+        ContextMenuItem {
+            text: qsTr("Copy to Other Pane")
+            symbol: Symbols.FileCopy
+            shortcutText: "F5"
+            visible: menu.split
+            // A hidden row is off too: the arrow keys would stop on it.
+            enabled: menu.split && menu.copyProblem.length === 0
+            onTriggered: menu.later(() => menu.toOtherPane(menu.snap.urls, false))
+        }
+        ContextMenuItem {
+            text: qsTr("Move to Other Pane")
+            symbol: Symbols.DriveFileMove
+            shortcutText: "F6"
+            visible: menu.split
+            enabled: menu.split && menu.moveProblem.length === 0
+            onTriggered: menu.later(() => menu.toOtherPane(menu.snap.urls, true))
+        }
+        // Quick actions on pictures, and PDFs to join: new files, the originals stay.
+        ContextMenuSeparator {
+            visible: menu.snap.pictures !== undefined && menu.snap.pictures.any === true
+        }
+        ContextMenuItem {
+            text: qsTr("Rotate Left")
+            symbol: Symbols.Rotate90DegreesCcw
+            visible: menu.pic("rotateLeft")
+            enabled: menu.pic("rotateLeft")
+            onTriggered: menu.later(() => menu.actions.pictureAction(menu.snap.urls, 0))
+        }
+        ContextMenuItem {
+            text: qsTr("Rotate Right")
+            symbol: Symbols.Rotate90DegreesCw
+            visible: menu.pic("rotateRight")
+            enabled: menu.pic("rotateRight")
+            onTriggered: menu.later(() => menu.actions.pictureAction(menu.snap.urls, 1))
+        }
+        ContextMenuItem {
+            text: qsTr("Convert to PNG")
+            symbol: Symbols.Transform
+            visible: menu.pic("png")
+            enabled: menu.pic("png")
+            onTriggered: menu.later(() => menu.actions.pictureAction(menu.snap.urls, 2))
+        }
+        ContextMenuItem {
+            text: qsTr("Convert to JPEG")
+            symbol: Symbols.Transform
+            visible: menu.pic("jpeg")
+            enabled: menu.pic("jpeg")
+            onTriggered: menu.later(() => menu.actions.pictureAction(menu.snap.urls, 3))
+        }
+        ContextMenuItem {
+            text: qsTr("Convert to WebP")
+            symbol: Symbols.Transform
+            visible: menu.pic("webp")
+            enabled: menu.pic("webp")
+            onTriggered: menu.later(() => menu.actions.pictureAction(menu.snap.urls, 4))
+        }
+        ContextMenuItem {
+            text: qsTr("Combine into PDF")
+            symbol: Symbols.PictureAsPdf
+            visible: menu.pic("combine")
+            enabled: menu.pic("combine")
+            onTriggered: menu.later(() => menu.actions.pictureAction(menu.snap.urls, 5))
         }
         ContextMenuSeparator {}
         ContextMenuItem {

@@ -131,6 +131,8 @@ void TabLogic::setRestoreOnStart(bool on)
         // Nothing stays behind that the user turned off.
         g.deleteEntry("Urls");
         g.deleteEntry("Current");
+        g.deleteEntry("Splits");
+        g.deleteEntry("Active");
     }
     g.sync();
 }
@@ -138,10 +140,45 @@ void TabLogic::setRestoreOnStart(bool on)
 QVariantMap TabLogic::savedSession() const
 {
     const KConfigGroup g = tabsGroup();
-    return checkSession(g.readEntry("Urls", QStringList()), g.readEntry("Current", 0));
+    const QStringList saved = g.readEntry("Urls", QStringList());
+    const QStringList splits = g.readEntry("Splits", QStringList());
+    const QList<int> active = g.readEntry("Active", QList<int>());
+    const int current = g.readEntry("Current", 0);
+    // Each entry is checked on its own, so that a tab and its second pane
+    // stay together when another tab's entry is refused.
+    QStringList urls, kept;
+    QList<int> keptActive;
+    int shown = -1;
+    for (int i = 0; i < saved.size() && urls.size() < maxTabs(); ++i) {
+        const QStringList one = checkSession({saved.at(i)}, 0).value(QStringLiteral("urls")).toStringList();
+        if (one.size() != 1) {
+            continue;
+        }
+        if (shown < 0 && i >= current) {
+            shown = int(urls.size());
+        }
+        urls << one.first();
+        QString split;
+        if (!splits.value(i).isEmpty()) {
+            split = checkSession({splits.at(i)}, 0).value(QStringLiteral("urls")).toStringList().value(0);
+        }
+        kept << split;
+        keptActive << (split.isEmpty() ? 0 : qBound(0, active.value(i), 1));
+    }
+    if (urls.isEmpty()) {
+        return {{QStringLiteral("urls"), QStringList()}, {QStringLiteral("current"), 0}, {QStringLiteral("splits"), QStringList()}, {QStringLiteral("active"), QVariantList()}};
+    }
+    QVariantList act;
+    for (int a : std::as_const(keptActive)) {
+        act << a;
+    }
+    return {{QStringLiteral("urls"), urls},
+            {QStringLiteral("current"), shown < 0 ? int(urls.size()) - 1 : shown},
+            {QStringLiteral("splits"), kept},
+            {QStringLiteral("active"), act}};
 }
 
-void TabLogic::saveSession(const QStringList &urls, int current)
+void TabLogic::saveSession(const QStringList &urls, int current, const QStringList &splits, const QList<int> &active)
 {
     if (!restoreOnStart()) {
         return;
@@ -149,5 +186,7 @@ void TabLogic::saveSession(const QStringList &urls, int current)
     KConfigGroup g = tabsGroup();
     g.writeEntry("Urls", urls.mid(0, maxTabs()));
     g.writeEntry("Current", current);
+    g.writeEntry("Splits", splits.mid(0, maxTabs()));
+    g.writeEntry("Active", active.mid(0, maxTabs()));
     g.sync();
 }

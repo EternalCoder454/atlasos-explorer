@@ -8,6 +8,7 @@
 #pragma once
 
 #include "FolderModel.h"
+#include "ImageWork.h"
 #include "OperationQueue.h"
 
 #include <KFileItem>
@@ -146,6 +147,17 @@ public:
     // Permissions: bits of 0777 to turn on and off; `recursive` also changes
     // what is inside folders (files keep their run bits).
     Q_INVOKABLE void setPermissions(const QList<QUrl> &urls, uint setBits, uint clearBits, bool recursive);
+    // Quick actions on pictures (More Actions): 0 Rotate Left, 1 Rotate Right,
+    // 2 Convert to PNG, 3 to JPEG, 4 to WebP, 5 Combine into PDF (pictures and
+    // PDFs, in the order of `urls`). They make new files beside the originals
+    // (a worker; the copy into place goes through the queue, so a taken name
+    // asks, and Undo takes the new files to the Trash). Says in a line why
+    // when it can't.
+    Q_INVOKABLE void pictureAction(const QList<QUrl> &urls, int action);
+    // Copies or moves `urls` into `folder` (the other pane's), through the
+    // queue like a drop on a path bar segment; says so when it would change
+    // nothing.
+    Q_INVOKABLE void transferTo(const QList<QUrl> &urls, const QUrl &folder, bool move);
     // A terminal in `folder` (the folder shown when empty).
     Q_INVOKABLE void openTerminal(const QUrl &folder = {});
     Q_INVOKABLE void startDrag(const QList<QUrl> &urls);
@@ -228,6 +240,17 @@ private:
     QString labelOf(const QList<QUrl> &urls) const;
     // The Tags submenu of the context menu, from what is known of the items now.
     QVariantMap tagMenu(const QList<QUrl> &urls) const;
+    // Which picture actions `urls` take: {rotate, png, jpeg, webp, combine}.
+    QVariantMap pictureMenu(const QList<QUrl> &urls) const;
+    struct PictureSet {
+        bool ok = false;
+        QString why;
+        QUrl folder;
+        QList<ImageWork::Source> sources;
+        QStringList names;
+    };
+    // The files an action would work on, in the order given, or why not.
+    PictureSet pictureSet(const QList<QUrl> &urls, int action) const;
     void loadTemplates();
     QString suggestName(const QUrl &folder, const QString &wanted) const;
 

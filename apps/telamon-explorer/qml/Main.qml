@@ -25,6 +25,11 @@ TelamonWindow {
     property int currentIndex: -1
     property FilesTabPage page: null
     readonly property FolderView view: page ? page.view : null
+    // The tab is split in two panes; `page` and `view` are those of the active one.
+    readonly property bool split: page ? page.split : false
+    // The path bar the keyboard goes to: the toolbar's, or, when the tab is
+    // split, the active pane's own.
+    readonly property PathBar activePathBar: split && page.activeBar ? page.activeBar : pathBar
     // Closed tabs, the newest last (at most TabLogic.maxClosed).
     property var closedTabs: []
     // Tabs opened in a row from one tab keep their click order beside it.
@@ -41,9 +46,9 @@ TelamonWindow {
     property string launchText
     // Why the address typed in the path bar was refused, shown under it.
     property string addressError
-    readonly property bool editingAddress: pathBar.editing
+    readonly property bool editingAddress: activePathBar.editing
     // A text field has the keyboard.
-    readonly property bool inTextField: pathBar.editing || searchField.activeFocus || searchBar.activeFocus || (view ? view.renaming : false)
+    readonly property bool inTextField: activePathBar.editing || searchField.activeFocus || searchBar.activeFocus || (view ? view.renaming : false)
     // Keys that mean something to a text field, or to Quick Look (which shows
     // a file and must not act on it), are not the window's.
     readonly property bool typing: inTextField || quickLook.opened
@@ -143,10 +148,11 @@ TelamonWindow {
         onJobFinished: {
             // Any tab may be the one whose results were changed.
             for (const id in root.pages) {
-                const f = root.pages[id].view.folder;
-                if (f.searching) {
-                    f.pruneSearchResults();
-                    searchAgain.restart();
+                for (const v of root.pages[id].allViews()) {
+                    if (v.folder.searching) {
+                        v.folder.pruneSearchResults();
+                        searchAgain.restart();
+                    }
                 }
             }
         }
@@ -179,9 +185,10 @@ TelamonWindow {
         }
         const folder = StandardPlaces.parentUrl(urls[0]).toString().replace(/\/+$/, "");
         for (const id in root.pages) {
-            const p = root.pages[id];
-            if (p.loaded && p.location.toString().replace(/\/+$/, "") === folder) {
-                p.showItems(urls);
+            for (const p of root.pages[id].panes) {
+                if (p.loaded && p.location.toString().replace(/\/+$/, "") === folder) {
+                    p.showItems(urls);
+                }
             }
         }
     }
@@ -287,6 +294,7 @@ TelamonWindow {
     FileMenu {
         id: fileMenu
         actions: fileActions
+        onToOtherPane: (urls, move) => root.transferUrls(urls, move)
     }
     BackgroundMenu {
         id: backgroundMenu
@@ -295,6 +303,9 @@ TelamonWindow {
     }
     function showContextMenu(urls, anchor, x, y) {
         if (urls.length > 0) {
+            fileMenu.split = split;
+            fileMenu.copyProblem = split ? otherPaneProblem(false, urls.length) : "";
+            fileMenu.moveProblem = split ? otherPaneProblem(true, urls.length) : "";
             fileMenu.openFor(urls, anchor, x, y);
         } else {
             backgroundMenu.openFor(anchor, x, y);
@@ -306,9 +317,10 @@ TelamonWindow {
         interval: 900
         onTriggered: {
             for (const id in root.pages) {
-                const s = root.pages[id].search;
-                if (s.active && !s.live) {
-                    s.rerun();
+                for (const p of root.pages[id].panes) {
+                    if (p.search.active && !p.search.live) {
+                        p.search.rerun();
+                    }
                 }
             }
         }
@@ -628,6 +640,64 @@ TelamonWindow {
         }
     }
 
+    // ---- Files dragged over the window ----
+    // The sidebar's places have no drop area of their own to ask, so the
+    // place under a drag is found by the pointer's position: a drop on it
+    // moves (or copies with Ctrl held), and held there for a second it opens.
+    property string sidebarSpring: ""
+    function springSidebar(x, y) {
+        const local = sidebar.mapFromItem(null, x, y);
+        if (local.x < 0 || local.y < 0 || local.x >= sidebar.width || local.y >= sidebar.height) {
+            if (sidebarSpring.length > 0) {
+                DragWatch.springClear(sidebarSpring);
+                sidebarSpring = "";
+            }
+            return;
+        }
+        DragWatch.mode = "direct";
+        for (const rep of [favouritesRepeater, drivesRepeater, networkRepeater, trashRepeater]) {
+            for (let i = 0; i < rep.count; ++i) {
+                const place = rep.itemAt(i);
+                if (!place || !place.visible) {
+                    continue;
+                }
+                const q = place.mapFromItem(null, x, y);
+                if (q.x < 0 || q.y < 0 || q.x >= place.width || q.y >= place.height) {
+                    continue;
+                }
+                const key = place.placeKey;
+                const info = PlacesLogic.menuFor(key);
+                // The Trash takes a drop but is not opened by one; a drive that is not mounted is not mounted by one.
+                const key2 = "place:" + key;
+                if (info.open === true && place.placeKind !== PlacesLogic.TrashPlace) {
+                    sidebarSpring = key2;
+                    DragWatch.spring(key2, () => PlacesLogic.open(key, false));
+                } else if (sidebarSpring.length > 0) {
+                    DragWatch.springClear(sidebarSpring);
+                    sidebarSpring = "";
+                }
+                return;
+            }
+        }
+        if (sidebarSpring.length > 0) {
+            DragWatch.springClear(sidebarSpring);
+            sidebarSpring = "";
+        }
+    }
+    Connections {
+        target: DragWatch
+        function onMoved() {
+            if (DragWatch.active) {
+                root.springSidebar(DragWatch.x, DragWatch.y);
+            }
+        }
+        function onChanged() {
+            if (!DragWatch.active) {
+                root.sidebarSpring = "";
+            }
+        }
+    }
+
     // ---- Address ----
     function goToAddress(text) {
         const r = fileActions.parseAddress(text);
@@ -638,7 +708,7 @@ TelamonWindow {
             // A server typed here is one of the recent servers too (never with a password).
             ServerLogic.remember(target);
             navigate(target);
-            pathBar.endEdit();
+            activePathBar.endEdit();
         } else {
             addressError = r.text;
         }
@@ -650,7 +720,9 @@ TelamonWindow {
         const on = !view.folder.showHidden;
         // Every tab, so switching tabs doesn't change what is shown.
         for (const id in pages) {
-            pages[id].view.folder.showHidden = on;
+            for (const v of pages[id].allViews()) {
+                v.folder.showHidden = on;
+            }
         }
         fileActions.saveShowHidden(on);
     }
@@ -674,7 +746,9 @@ TelamonWindow {
     function setPreviewRemote(on) {
         ServerLogic.previewRemote = on;
         for (const id in pages) {
-            pages[id].view.folder.thumbnailsChanged();
+            for (const v of pages[id].allViews()) {
+                v.folder.thumbnailsChanged();
+            }
         }
     }
     // "Use the Same View for Every Folder" on or off: the view shown stays.
@@ -709,7 +783,7 @@ TelamonWindow {
     // ---- Search ----
     // Puts the keyboard in the search field (which opens the search row).
     function focusSearch() {
-        pathBar.endEdit();
+        activePathBar.endEdit();
         searchField.forceActiveFocus(Qt.ShortcutFocusReason);
         searchField.selectAll();
     }
@@ -798,7 +872,7 @@ TelamonWindow {
         p.visible = true;
         tabsModel.setProperty(i, "modified", false);
         openerId = -1;
-        pathBar.endEdit();
+        activePathBar.endEdit();
         p.focusContent();
         markSession();
     }
@@ -821,6 +895,8 @@ TelamonWindow {
             "startViewMode": o.viewMode || "",
             "startBack": o.back || [],
             "startForward": o.forward || [],
+            "startSplit": o.split ? o.split : Qt.url(""),
+            "startActive": o.active || 0,
             "lazy": !!o.lazy,
             "pendingSelect": [],
             "visible": false
@@ -832,7 +908,12 @@ TelamonWindow {
         p.openInNewTab.connect(u => root.openInNewTab(u));
         p.openLocation.connect(urls => root.openFileLocation(urls));
         p.quickLookRequested.connect(() => root.showQuickLook(p));
-        p.contextMenuRequested.connect((urls, x, y) => root.showContextMenu(urls, p.view, x, y));
+        p.contextMenuRequested.connect((urls, x, y, anchor) => root.showContextMenu(urls, anchor, x, y));
+        p.addressAccepted.connect(text => root.goToAddress(text));
+        p.addressEdited.connect(() => root.addressError = "");
+        p.paneLayoutChanged.connect(() => root.markSession());
+        // Either pane moving is a change of the session (the tab's own location is the active pane's).
+        p.paneMoved.connect(() => root.markSession());
         p.navigated.connect(() => root.freshStart = false);
         // A folder the user went to is counted for Home's Frequent Folders.
         p.navigated.connect(() => HomeLogic.visited(p.location));
@@ -886,11 +967,14 @@ TelamonWindow {
         const p = pageAt(i);
         if (p) {
             freshStart = false;
-            addTab(p.location, {
+            const first = p.panes[0];
+            addTab(first.location, {
                 "index": i + 1,
-                "viewMode": p.view.viewMode,
-                "back": p.backStack.slice(-TabLogic.maxHistory),
-                "forward": p.forwardStack.slice(-TabLogic.maxHistory)
+                "viewMode": first.view.viewMode,
+                "back": first.backStack.slice(-TabLogic.maxHistory),
+                "forward": first.forwardStack.slice(-TabLogic.maxHistory),
+                "split": p.split ? p.panes[1].location : undefined,
+                "active": p.activeIndex
             });
         }
     }
@@ -917,11 +1001,14 @@ TelamonWindow {
         if (!p) {
             return;
         }
+        const first = p.panes[0];
         closedTabs = closedTabs.concat([{
-                    "url": p.location,
-                    "viewMode": p.view.viewMode,
-                    "back": p.backStack.slice(-TabLogic.maxHistory),
-                    "forward": p.forwardStack.slice(-TabLogic.maxHistory),
+                    "url": first.location,
+                    "viewMode": first.view.viewMode,
+                    "back": first.backStack.slice(-TabLogic.maxHistory),
+                    "forward": first.forwardStack.slice(-TabLogic.maxHistory),
+                    "split": p.split ? p.panes[1].location : undefined,
+                    "active": p.activeIndex,
                     "index": i
                 }]).slice(-TabLogic.maxClosed);
         if (p === page) {
@@ -971,7 +1058,9 @@ TelamonWindow {
             "index": t.index,
             "viewMode": t.viewMode,
             "back": t.back,
-            "forward": t.forward
+            "forward": t.forward,
+            "split": t.split,
+            "active": t.active
         })) {
             closedTabs = closedTabs.slice(0, -1);
         }
@@ -995,6 +1084,70 @@ TelamonWindow {
         }
     }
 
+    // ---- Split view ----
+    // F3 and the toolbar's button: splits the tab shown into two panes, or
+    // closes the pane that does not have the keyboard.
+    function toggleSplit() {
+        if (page) {
+            freshStart = false;
+            page.toggleSplit();
+        }
+    }
+    // Ctrl+Shift+O: the other pane takes the keyboard.
+    function switchPane() {
+        if (page && page.split) {
+            page.activate(page.otherPane);
+            page.focusContent();
+        }
+    }
+    // --split: the first location is shown in a second pane of the tab shown;
+    // any others open as tabs.
+    function openLocationSplit(locations, select) {
+        const u = Qt.url(locations[0]);
+        const folder = select || StandardPlaces.isLocalFile(u) ? StandardPlaces.parentUrl(u) : u;
+        freshStart = false;
+        const second = page.openSplit(folder);
+        if (second && (select || StandardPlaces.isLocalFile(u)) && !Qt.url(locations[0]).toString().endsWith("/")) {
+            second.showItems([u]);
+        }
+        if (locations.length > 1) {
+            openLocations(locations.slice(1), select);
+        }
+    }
+    // Whether the selection can go to the other pane: why not is a line of words, "" when it can.
+    function otherPaneProblem(move, count) {
+        const other = page ? page.otherPane : null;
+        if (!other || !view) {
+            return qsTr("Split the view first.");
+        }
+        if (count === 0) {
+            return qsTr("Select something to send to the other pane first.");
+        }
+        const f = other.view.folder;
+        if (f.inTrash) {
+            return qsTr("The other pane shows the Trash. Use Move to Trash to put items there.");
+        }
+        if (other.pageKind.length > 0 || f.searching || !f.canWrite || f.inArchive) {
+            return qsTr("The other pane can't take files here.");
+        }
+        if (move && (!canWrite || searching || inTrash)) {
+            return qsTr("These items can't be moved from here. Copy them instead.");
+        }
+        return "";
+    }
+    // F5 and F6 while split, and "Copy to Other Pane", "Move to Other Pane".
+    function transferToOther(move) {
+        transferUrls(selected, move);
+    }
+    function transferUrls(urls, move) {
+        const why = otherPaneProblem(move, urls.length);
+        if (why.length > 0) {
+            toast(why);
+            return;
+        }
+        fileActions.transferTo(urls, page.otherPane.view.url, move);
+    }
+
     // ---- The tabs kept for the next start ----
     function setRestoreTabs(on) {
         restoreTabs = on;
@@ -1005,11 +1158,17 @@ TelamonWindow {
         if (!restoreTabs || tabsModel.count === 0) {
             return;
         }
+        // The first pane of each tab, and the second ("" when the tab is not split).
         const urls = [];
+        const splits = [];
+        const active = [];
         for (let i = 0; i < tabsModel.count; ++i) {
-            urls.push(TabLogic.encode(pageAt(i).location));
+            const t = pageAt(i);
+            urls.push(TabLogic.encode(t.panes[0].location));
+            splits.push(t.split ? TabLogic.encode(t.panes[1].location) : "");
+            active.push(t.split ? t.activeIndex : 0);
         }
-        TabLogic.saveSession(urls, currentIndex);
+        TabLogic.saveSession(urls, currentIndex, splits, active);
     }
     function markSession() {
         if (restoreTabs) {
@@ -1080,10 +1239,15 @@ TelamonWindow {
         target: root.backend
         function onOpen(locations, select, newWindow, split) {
             // A launch with no location only raises the window. A new window
-            // and split view come later: the locations open as tabs.
+            // comes later: the locations open as tabs. With --split the first
+            // location is shown in a second pane of the tab shown.
             if (locations.length > 0) {
                 root.launchText = "";
-                root.openLocations(locations, select);
+                if (split && root.page && !root.page.split) {
+                    root.openLocationSplit(locations, select);
+                } else {
+                    root.openLocations(locations, select);
+                }
             }
         }
         function onInspected(locations) {
@@ -1095,6 +1259,7 @@ TelamonWindow {
     }
 
     Component.onCompleted: {
+        DragWatch.attach(root);
         PreviewLogic.rowDefault = Kirigami.Units.gridUnit * 2;
         restoreTabs = TabLogic.restoreOnStart();
         const saved = restoreTabs ? TabLogic.savedSession() : null;
@@ -1103,7 +1268,9 @@ TelamonWindow {
             for (let i = 0; i < saved.urls.length; ++i) {
                 addTab(Qt.url(saved.urls[i]), {
                     "background": true,
-                    "lazy": i !== saved.current
+                    "lazy": i !== saved.current,
+                    "split": saved.splits[i] ? Qt.url(saved.splits[i]) : undefined,
+                    "active": saved.active[i] || 0
                 });
                 tabsModel.setProperty(i, "modified", false);
             }
@@ -1129,7 +1296,14 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching && !quickLook.opened; onActivated: fileActions.newFolder() }
     Shortcut { sequence: "Ctrl+H"; enabled: !root.typing; onActivated: root.toggleHidden() }
     Shortcut { sequence: "Shift+F4"; enabled: !quickLook.opened; onActivated: fileActions.openTerminal() }
-    Shortcut { sequences: ["Ctrl+L", "F4", "F6", "Alt+D"]; onActivated: pathBar.startEdit() }
+    Shortcut { sequences: ["Ctrl+L", "F4", "Alt+D"]; onActivated: root.activePathBar.startEdit() }
+    // F6 edits the address; with two panes it moves to the other pane, as F5 copies.
+    Shortcut { sequence: "F6"; enabled: !root.split; onActivated: root.activePathBar.startEdit() }
+    Shortcut { sequence: "F6"; enabled: root.split && !root.typing; onActivated: root.transferToOther(true) }
+    Shortcut { sequence: "F5"; enabled: root.split && !root.typing; onActivated: root.transferToOther(false) }
+    Shortcut { sequence: "F3"; enabled: !quickLook.opened && !root.typing; onActivated: root.toggleSplit() }
+    // Split: the keyboard goes to the other pane.
+    Shortcut { sequence: "Ctrl+Shift+O"; enabled: root.split && !quickLook.opened; onActivated: root.switchPane() }
     Shortcut { sequences: ["Ctrl+F", "Ctrl+E"]; onActivated: root.focusSearch() }
     Shortcut { sequence: "Alt+P"; enabled: !quickLook.opened; onActivated: PreviewLogic.paneShown = !PreviewLogic.paneShown }
     Shortcut { sequences: ["Ctrl++", "Ctrl+=", "Ctrl+Plus"]; enabled: !root.typing; onActivated: root.zoom(1) }
@@ -1137,7 +1311,8 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+0"; enabled: !root.typing; onActivated: root.zoom(0) }
     Shortcut { sequence: "Alt+Left"; enabled: !root.typing; onActivated: root.goBack() }
     Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
-    Shortcut { sequences: ["F5", "Ctrl+R"]; enabled: !root.typing; onActivated: { if (root.view) root.view.folder.refresh(); } }
+    Shortcut { sequence: "F5"; enabled: !root.typing && !root.split; onActivated: { if (root.view) root.view.folder.refresh(); } }
+    Shortcut { sequence: "Ctrl+R"; enabled: !root.typing; onActivated: { if (root.view) root.view.folder.refresh(); } }
     Shortcut { sequence: "Ctrl+Shift+K"; enabled: !quickLook.opened && !connectDialog.opened; onActivated: connectDialog.ask() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
     Shortcut { sequence: "Ctrl+W"; onActivated: root.closeTab(root.currentIndex) }
@@ -1231,6 +1406,7 @@ TelamonWindow {
             onDropped: (entry, drop) => root.dropOnPlace(entry, drop)
 
             Repeater {
+                id: favouritesRepeater
                 model: favouritesModel
                 delegate: SidebarPlace {}
             }
@@ -1288,6 +1464,7 @@ TelamonWindow {
             // The Trash stays under the list.
             footer: [
                 Repeater {
+                    id: trashRepeater
                     model: trashModel
                     delegate: SidebarPlace {}
                 }
@@ -1359,32 +1536,35 @@ TelamonWindow {
                         }
                         return -1;
                     }
-                    onPositionChanged: drag => {
+                    // Held over another tab for a second shows it, to drop deeper
+                    // (the same delay as every spring-loaded folder).
+                    function hover(drag) {
                         const i = tabAt(tabBar, drag.x, drag.y);
-                        if (i !== over) {
-                            over = i;
-                            springTimer.restart();
+                        over = i;
+                        if (i >= 0 && i !== root.currentIndex) {
+                            DragWatch.spring("tab:" + root.pageAt(i).tabId, () => root.selectTab(root.indexOfTab(root.pageAt(i).tabId)));
+                        } else {
+                            DragWatch.springClear();
                         }
                     }
-                    onEntered: drag => drag.accepted = drag.hasUrls
+                    onPositionChanged: drag => hover(drag)
+                    onEntered: drag => {
+                        drag.accepted = drag.hasUrls;
+                        hover(drag);
+                    }
                     onExited: {
                         over = -1;
-                        springTimer.stop();
+                        DragWatch.springClear();
                     }
                     onDropped: drop => {
                         const i = tabAt(tabBar, drop.x, drop.y);
                         const p = root.pageAt(i);
                         over = -1;
-                        springTimer.stop();
+                        DragWatch.springClear();
                         if (p && drop.hasUrls) {
                             drop.accepted = true;
                             fileActions.drop(drop.urls, p.location);
                         }
-                    }
-                    Timer {
-                        id: springTimer
-                        interval: 800
-                        onTriggered: if (tabDrop.over >= 0) root.selectTab(tabDrop.over)
                     }
                 }
             }
@@ -1449,9 +1629,15 @@ TelamonWindow {
                 }
                 // The path: segments to click, a menu per chevron, drops on a
                 // segment; a click on the empty part edits it as text.
+                // Split: each pane has its own path bar, in its header.
+                Item {
+                    visible: root.split
+                    Layout.fillWidth: true
+                }
                 PathBar {
                     id: pathBar
-                    Layout.fillWidth: true
+                    visible: !root.split
+                    Layout.fillWidth: !root.split
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     location: root.currentUrl
                     showHidden: root.view?.folder.showHidden ?? false
@@ -1661,6 +1847,16 @@ TelamonWindow {
                 Item {
                     Layout.fillWidth: true
                 }
+                ToolbarButton {
+                    symbol: Symbols.VerticalSplit
+                    text: root.split ? qsTr("Close Split") : qsTr("Split View")
+                    toolTipText: root.split ? qsTr("Close the Other Pane") : qsTr("Split the View in Two Panes")
+                    shortcutText: "F3"
+                    checkable: true
+                    checked: root.split
+                    focusable: true
+                    onClicked: root.toggleSplit()
+                }
                 OperationsButton {
                     queue: fileActions.operations
                 }
@@ -1717,6 +1913,41 @@ TelamonWindow {
             visible: PreviewLogic.paneShown
             view: PreviewLogic.paneShown ? root.view : null
             covered: quickLook.opened
+        }
+    }
+
+    // What a drop of files would do, next to the pointer while files are dragged
+    // over the window: Move, Copy or Link (the keys held decide), or all three
+    // when the drop will ask.
+    Rectangle {
+        id: dragBadge
+        visible: DragWatch.active
+        z: 1000
+        enabled: false
+        // Beside the drag's own icon (which hangs from the pointer), on the side with room.
+        x: {
+            const right = DragWatch.x + Kirigami.Units.gridUnit * 2.4;
+            return right + width <= root.contentItem.width ? right : Math.max(0, DragWatch.x - Kirigami.Units.gridUnit * 0.6 - width);
+        }
+        y: Math.max(0, Math.min(DragWatch.y + Kirigami.Units.gridUnit * 0.5, root.contentItem.height - height))
+        radius: height / 2
+        color: DragWatch.kind === "copy" ? TelamonStyle.accent : DragWatch.kind === "link" ? TelamonStyle.accentStrong : TelamonStyle.floatingBackground
+        border.width: 1
+        border.color: TelamonStyle.accent
+        implicitWidth: badgeText.implicitWidth + TelamonStyle.spacingLarge * 2
+        implicitHeight: badgeText.implicitHeight + TelamonStyle.spacingSmall * 2
+        width: implicitWidth
+        height: implicitHeight
+        Accessible.ignored: true
+        Text {
+            id: badgeText
+            anchors.centerIn: parent
+            text: DragWatch.verb
+            textFormat: Text.PlainText
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeCaption
+            font.weight: Font.Medium
+            color: DragWatch.kind === "copy" || DragWatch.kind === "link" ? TelamonStyle.accentText : TelamonStyle.text
         }
     }
 

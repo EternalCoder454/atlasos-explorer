@@ -17,6 +17,7 @@
 #include <QUrl>
 #include <QVariantMap>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -134,6 +135,16 @@ public:
         quint32 clearBits = 0;
     };
     void setAttributes(const QList<QUrl> &urls, const AttrEdit &edit, const QString &title, std::function<void(bool)> done = {});
+    // New files made by a worker, then copied into `destination` like a paste:
+    // `work` runs on a worker thread and writes the files `names` (those it
+    // can) into the folder it is given, returns what went wrong as lines of
+    // text, and reports how many of `count` items are done through `progress`.
+    // The copy goes through the queue, so a name that is taken opens the
+    // conflict dialog (Replace, Keep Both, Skip) and the result is one step to
+    // undo: the new files go to the Trash. Nothing in `destination` changes
+    // before that. The new files are selected when done.
+    using ProduceWork = std::function<QStringList(const QString &dir, const std::atomic<bool> &cancel, const std::function<void(int)> &progress)>;
+    void produce(const QString &title, const QString &running, const QUrl &destination, const QStringList &names, int count, ProduceWork work);
     // Pastes text or an image from the clipboard as a file (KIO asks for the name).
     void pasteData(const QMimeData *data, const QUrl &destination);
     void emptyTrash();

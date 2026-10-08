@@ -41,8 +41,9 @@ public:
     // A location as text for the saved session (percent-encoded, without a password).
     Q_INVOKABLE QString encode(const QUrl &url) const;
 
-    // What the window saved for the next start, checked by the core: {urls, current}
-    // with urls empty when there is nothing usable.
+    // What the window saved for the next start, checked by the core: {urls,
+    // current, splits, active} with urls empty when there is nothing usable;
+    // `splits` and `active` go with `urls` one for one.
     Q_INVOKABLE QVariantMap checkSession(const QStringList &saved, int current) const;
 
     // The "Restore Tabs on Start" setting and the tabs kept for it.
@@ -50,5 +51,7 @@ public:
     Q_INVOKABLE void setRestoreOnStart(bool on);
     Q_INVOKABLE QVariantMap savedSession() const;
     // Keeps `urls` for the next start; with the setting off nothing is kept.
-    Q_INVOKABLE void saveSession(const QStringList &urls, int current);
+    // `splits` has, for each tab, the folder of its second pane ("" for a tab
+    // that is not split) and `active` which pane (0 or 1) had the keyboard.
+    Q_INVOKABLE void saveSession(const QStringList &urls, int current, const QStringList &splits = {}, const QList<int> &active = {});
 };
