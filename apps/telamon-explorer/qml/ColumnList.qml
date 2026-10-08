@@ -50,6 +50,7 @@ Item {
             sortColumn: col.fv.folder.sortColumn
             sortDescending: col.fv.folder.sortDescending
             foldersFirst: col.fv.folder.foldersFirst
+            gitBadges: col.fv.folder.gitBadges
         }
     }
     Connections {
@@ -79,7 +80,7 @@ Item {
         anchors.right: parent.right
         width: 1
         height: parent.height
-        color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+        color: Qt.alpha(Kirigami.Theme.textColor, TelamonStyle.highContrast ? 0.5 : 0.15)
     }
 
     ListView {
@@ -103,6 +104,9 @@ Item {
             required property bool isHidden
             required property bool isCut
             required property var tagColours
+            required property string typeText
+            required property string sizeText
+            required property int gitBadge
             width: list.width
             height: col.rowHeight
             readonly property bool selected: col.primary && col.fv.isSelected(index, col.fv.selRevision)
@@ -111,21 +115,30 @@ Item {
             // The name is being edited where it is shown (the tab's own column only).
             readonly property bool editing: col.primary && col.fv.renaming && col.fv.renameUrl.toString() === url.toString()
 
+            // What a screen reader says: the name, then the type, size and Git state, and whether the row is selected.
+            Accessible.role: Accessible.ListItem
+            Accessible.name: row.name
+            Accessible.description: col.fv.rowDescription(row.typeText, row.sizeText, row.gitBadge)
+            Accessible.selectable: true
+            Accessible.selected: row.selected
+            Accessible.focusable: true
+            Accessible.focused: row.current && col.fv.activeFocus
+
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
                 radius: TelamonStyle.radiusSmall
                 color: {
                     if (row.selected) {
-                        return Qt.alpha(Kirigami.Theme.highlightColor, 0.35);
+                        return TelamonStyle.highContrast ? Kirigami.Theme.highlightColor : Qt.alpha(Kirigami.Theme.highlightColor, 0.35);
                     }
                     if (row.picked) {
                         return Qt.alpha(Kirigami.Theme.textColor, 0.16);
                     }
                     return mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent";
                 }
-                border.width: row.current && col.fv.activeFocus ? 1 : 0
-                border.color: Kirigami.Theme.highlightColor
+                border.width: row.current && col.fv.activeFocus ? (TelamonStyle.highContrast ? 3 : 2) : 0
+                border.color: TelamonStyle.focus
             }
             Row {
                 anchors.fill: parent
@@ -142,12 +155,13 @@ Item {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - icon.width - chevron.width - dots.width - parent.spacing * 3
+                    width: parent.width - icon.width - chevron.width - dots.width - (git.visible ? git.width + parent.spacing : 0) - parent.spacing * 3
                     visible: !row.editing
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
+                    horizontalAlignment: Text.AlignLeft
                     text: row.name
-                    color: Kirigami.Theme.textColor
+                    color: TelamonStyle.highContrast && row.selected ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
                 }
                 Loader {
                     anchors.verticalCenter: parent.verticalCenter
@@ -164,6 +178,12 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     colours: row.tagColours
                     dot: Math.round(col.iconSide * 0.5)
+                }
+                GitBadge {
+                    id: git
+                    anchors.verticalCenter: parent.verticalCenter
+                    code: row.gitBadge
+                    dot: Math.round(col.iconSide * 0.8)
                 }
                 Symbol {
                     id: chevron

@@ -131,7 +131,7 @@ Item {
         anchors.right: parent.right
         anchors.bottom: strip.top
         height: 1
-        color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+        color: Qt.alpha(Kirigami.Theme.textColor, TelamonStyle.highContrast ? 0.5 : 0.15)
     }
 
     ListView {
@@ -157,18 +157,30 @@ Item {
             required property bool isCut
             required property string thumbnailSource
             required property var tagColours
+            required property string typeText
+            required property string sizeText
+            required property int gitBadge
             width: root.cellW
             height: strip.height
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
             readonly property bool current: root.fv.currentRow === index
 
+            // What a screen reader says: the name, then the type, size and Git state, and whether the item is selected.
+            Accessible.role: Accessible.ListItem
+            Accessible.name: cell.name
+            Accessible.description: root.fv.rowDescription(cell.typeText, cell.sizeText, cell.gitBadge)
+            Accessible.selectable: true
+            Accessible.selected: cell.selected
+            Accessible.focusable: true
+            Accessible.focused: cell.current && root.fv.activeFocus
+
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 2
                 radius: TelamonStyle.radius
-                color: cell.selected ? Qt.alpha(Kirigami.Theme.highlightColor, 0.35) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
-                border.width: cell.current ? (root.fv.activeFocus ? 2 : 1) : 0
-                border.color: Kirigami.Theme.highlightColor
+                color: cell.selected ? (TelamonStyle.highContrast ? Kirigami.Theme.highlightColor : Qt.alpha(Kirigami.Theme.highlightColor, 0.35)) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
+                border.width: cell.current ? (root.fv.activeFocus ? (TelamonStyle.highContrast ? 3 : 2) : 1) : 0
+                border.color: TelamonStyle.focus
             }
             Item {
                 id: iconBox
@@ -199,6 +211,12 @@ Item {
                 colours: cell.tagColours
                 dot: 12
             }
+            GitBadge {
+                x: iconBox.x - Math.round(dot * 0.3)
+                y: iconBox.y + iconBox.height - height + Math.round(dot * 0.2)
+                code: cell.gitBadge
+                dot: 14
+            }
             Text {
                 x: Kirigami.Units.smallSpacing
                 y: iconBox.y + iconBox.height + Kirigami.Units.smallSpacing
@@ -209,7 +227,7 @@ Item {
                 elide: Text.ElideMiddle
                 maximumLineCount: 1
                 text: cell.name
-                color: Kirigami.Theme.textColor
+                color: TelamonStyle.highContrast && cell.selected ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
                 font.pointSize: TelamonStyle.fontSizeCaption
             }
             MouseArea {

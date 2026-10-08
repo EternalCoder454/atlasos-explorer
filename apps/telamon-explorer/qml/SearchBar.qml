@@ -43,6 +43,8 @@ FocusScope {
     // One filter's menu: "Any" first, then the choices, one chosen.
     component FilterMenu: ContextMenu {
         id: menu
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         property var names: []
         property int current: 0
         // Words after the name, e.g. "Small (under 1 MB)".

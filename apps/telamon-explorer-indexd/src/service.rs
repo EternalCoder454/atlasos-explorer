@@ -214,6 +214,24 @@ impl Search1 {
         self.engine.refresh();
     }
 
+    /// Read `indexrc` again (the Settings window changed the folders to
+    /// index): the service answers, then ends cleanly (it writes its snapshot
+    /// first, as on any SIGTERM) and the next call starts it again through
+    /// D-Bus activation with the new folders. An addition to Search1; the
+    /// Launcher does not call it.
+    async fn reload(&self) {
+        let spawned = std::thread::Builder::new().name("reload".into()).spawn(|| {
+            // After the reply has gone out.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            // SAFETY: kill on our own pid with a valid signal number; main
+            // waits for SIGTERM and shuts down in order.
+            unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+        });
+        if spawned.is_err() {
+            log::warn!("Reload: could not start the thread that ends the service");
+        }
+    }
+
     #[zbus(signal)]
     async fn status_changed(
         emitter: &SignalEmitter<'_>,

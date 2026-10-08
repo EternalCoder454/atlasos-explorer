@@ -204,7 +204,26 @@ Item {
                         width: root.widths[modelData.key]
                         height: root.headerHeight
                         readonly property bool sorted: root.fv.folder.sortColumn === modelData.sort
+                        // Clicking a header sorts by it, then turns the order round.
+                        function sortBy() {
+                            const f = root.fv.folder;
+                            if (cell.modelData.sort < 0) {
+                                return;
+                            }
+                            if (f.sortColumn === cell.modelData.sort) {
+                                f.sortDescending = !f.sortDescending;
+                            } else {
+                                f.sortColumn = cell.modelData.sort;
+                                f.sortDescending = false;
+                            }
+                        }
+                        // A column header, sorted or not, that a screen reader can press (the Sort menu is the keyboard's way).
+                        Accessible.role: Accessible.ColumnHeader
+                        Accessible.name: cell.modelData.title
+                        Accessible.description: cell.sorted ? (root.fv.folder.sortDescending ? qsTr("Sorted, descending") : qsTr("Sorted, ascending")) : ""
+                        Accessible.onPressAction: cell.sortBy()
                         Text {
+                            Accessible.ignored: true
                             anchors.fill: parent
                             anchors.leftMargin: Kirigami.Units.largeSpacing
                             anchors.rightMargin: Kirigami.Units.gridUnit * 1.5
@@ -218,21 +237,13 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             enabled: cell.modelData.sort >= 0
-                            onClicked: {
-                                const f = root.fv.folder;
-                                if (f.sortColumn === cell.modelData.sort) {
-                                    f.sortDescending = !f.sortDescending;
-                                } else {
-                                    f.sortColumn = cell.modelData.sort;
-                                    f.sortDescending = false;
-                                }
-                            }
+                            onClicked: cell.sortBy()
                         }
                         Rectangle {
                             anchors.right: parent.right
                             width: 1
                             height: parent.height
-                            color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+                            color: Qt.alpha(Kirigami.Theme.textColor, TelamonStyle.highContrast ? 0.5 : 0.15)
                         }
                         MouseArea {
                             anchors.right: parent.right
@@ -281,22 +292,35 @@ Item {
             required property string durationText
             required property string takenText
             required property bool groupCollapsed
+            required property int gitBadge
             width: Math.max(list.width, root.totalWidth)
             // The rows of a collapsed group take no room.
             height: groupCollapsed ? 0 : root.rowHeight
             visible: !groupCollapsed
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
             readonly property bool current: root.fv.currentRow === index
+            // Text colours: under high contrast a selected row is solid and its text goes with it.
+            readonly property color ink: TelamonStyle.highContrast && selected ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+            readonly property color inkMuted: TelamonStyle.highContrast ? ink : Qt.alpha(Kirigami.Theme.textColor, 0.75)
             // The name is being edited where it is shown.
             readonly property bool editing: root.fv.renaming && root.fv.renameUrl.toString() === url.toString()
+
+            // What a screen reader says: the name, then the type, size and Git state, and whether the row is selected.
+            Accessible.role: Accessible.ListItem
+            Accessible.name: row.name
+            Accessible.description: root.fv.rowDescription(row.typeText, row.sizeText, row.gitBadge)
+            Accessible.selectable: true
+            Accessible.selected: row.selected
+            Accessible.focusable: true
+            Accessible.focused: row.current && root.fv.activeFocus
 
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 1
-                radius: 4
-                color: row.selected ? Qt.alpha(Kirigami.Theme.highlightColor, 0.35) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
-                border.width: row.current && root.fv.activeFocus ? 1 : 0
-                border.color: Kirigami.Theme.highlightColor
+                radius: TelamonStyle.radiusSmall
+                color: row.selected ? (TelamonStyle.highContrast ? Kirigami.Theme.highlightColor : Qt.alpha(Kirigami.Theme.highlightColor, 0.35)) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
+                border.width: row.current && root.fv.activeFocus ? (TelamonStyle.highContrast ? 3 : 2) : 0
+                border.color: TelamonStyle.focus
             }
             Row {
                 opacity: (row.isHidden ? 0.6 : 1) * (row.isCut ? 0.5 : 1)
@@ -305,16 +329,26 @@ Item {
                     height: root.rowHeight
                     Kirigami.Icon {
                         id: icon
-                        x: Kirigami.Units.largeSpacing
+                        // An anchor, not an x: it follows a right-to-left layout.
+                        anchors.left: parent.left
+                        anchors.leftMargin: Kirigami.Units.largeSpacing
                         anchors.verticalCenter: parent.verticalCenter
                         width: root.iconSide
                         height: width
                         source: row.iconName
                     }
-                    TagDots {
-                        id: dots
+                    GitBadge {
+                        id: git
                         anchors.right: parent.right
                         anchors.rightMargin: Kirigami.Units.largeSpacing
+                        anchors.verticalCenter: parent.verticalCenter
+                        code: row.gitBadge
+                        dot: Math.round(root.iconSide * 0.8)
+                    }
+                    TagDots {
+                        id: dots
+                        anchors.right: git.visible ? git.left : parent.right
+                        anchors.rightMargin: git.visible ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
                         anchors.verticalCenter: parent.verticalCenter
                         colours: row.tagColours
                         dot: Math.round(root.iconSide * 0.5)
@@ -323,14 +357,15 @@ Item {
                         anchors.left: icon.right
                         anchors.leftMargin: Kirigami.Units.largeSpacing
                         anchors.right: parent.right
-                        anchors.rightMargin: Kirigami.Units.largeSpacing + (dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0)
+                        anchors.rightMargin: Kirigami.Units.largeSpacing + (dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0) + (git.visible ? git.width + Kirigami.Units.smallSpacing : 0)
                         height: parent.height
                         visible: !row.editing
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         elide: Text.ElideMiddle
+                        horizontalAlignment: Text.AlignLeft
                         text: row.name
-                        color: Kirigami.Theme.textColor
+                        color: row.ink
                     }
                     Loader {
                         anchors.left: icon.right
@@ -355,8 +390,9 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
+                    horizontalAlignment: Text.AlignLeft
                     text: root.withTrash ? row.originText : row.pathText
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                    color: row.inkMuted
                 }
                 // The matching line of a search inside files ("12: the line").
                 Text {
@@ -368,8 +404,9 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignLeft
                     text: row.snippetText
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                    color: row.inkMuted
                 }
                 Text {
                     width: root.widths.size
@@ -378,8 +415,9 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignLeft
                     text: row.sizeText
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                    color: row.inkMuted
                 }
                 Text {
                     width: root.widths.type
@@ -388,8 +426,9 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignLeft
                     text: row.typeText
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                    color: row.inkMuted
                 }
                 Text {
                     width: root.widths.modified
@@ -398,8 +437,9 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignLeft
                     text: root.withTrash ? row.deletedText : row.modifiedText
-                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                    color: row.inkMuted
                 }
                 Repeater {
                     model: [
@@ -419,8 +459,9 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                         textFormat: Text.PlainText
                         elide: Text.ElideRight
+                        horizontalAlignment: Text.AlignLeft
                         text: extra.modelData.text
-                        color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                        color: row.inkMuted
                     }
                 }
             }

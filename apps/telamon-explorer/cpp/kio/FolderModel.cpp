@@ -19,6 +19,7 @@
 #include <QLocale>
 #include <QPointer>
 #include <QSet>
+#include <QThreadPool>
 #include <QTimeZone>
 #include <QHostAddress>
 #include <QTcpSocket>
@@ -136,6 +137,9 @@ FolderModel::FolderModel(QObject *parent)
     m_metaTimer.setSingleShot(true);
     m_metaTimer.setInterval(40);
     connect(&m_metaTimer, &QTimer::timeout, this, &FolderModel::readMetaBatch);
+    m_gitTimer.setSingleShot(true);
+    m_gitTimer.setInterval(400);
+    connect(&m_gitTimer, &QTimer::timeout, this, &FolderModel::runGit);
     m_probeTimer.setSingleShot(true);
     m_probeTimer.setInterval(ProbeTimeoutMs);
     connect(&m_probeTimer, &QTimer::timeout, this, &FolderModel::onUnreachable);
@@ -226,6 +230,7 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {DurationRole, "durationText"},
         {TakenRole, "takenText"},
         {SnippetRole, "snippetText"},
+        {GitBadgeRole, "gitBadge"},
     };
 }
 
@@ -427,6 +432,8 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
     }
     case SnippetRole:
         return e.snippet;
+    case GitBadgeRole:
+        return m_gitOn && !m_searching ? m_gitMap.value(e.item.name(), m_gitAll) : 0;
     case DimensionsRole:
     case DurationRole:
     case TakenRole:
@@ -724,6 +731,9 @@ void FolderModel::open(const QUrl &url, const QString &notice)
     m_sortTimer.stop();
     const bool urlDiffers = url != m_url;
     m_url = url;
+    if (urlDiffers) {
+        forgetGit();
+    }
     if (urlDiffers && !m_collapsed.isEmpty()) {
         m_collapsed.clear();
     }
@@ -982,6 +992,7 @@ void FolderModel::addItems(const KFileItemList &items)
     endInsertRows();
     updateCounts();
     scheduleSort();
+    scheduleGit();
 }
 
 void FolderModel::removeItems(const KFileItemList &items)
@@ -1035,6 +1046,7 @@ void FolderModel::removeItems(const KFileItemList &items)
     }
     updateCounts();
     scheduleSort();
+    scheduleGit();
 }
 
 void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
@@ -1095,6 +1107,7 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
         updateCounts();
         scheduleSort();
     }
+    scheduleGit();
 }
 
 // Takes the rows out, in ranges from the end; the entries go to `into` when given.
@@ -1133,6 +1146,7 @@ void FolderModel::onCompleted()
     setLoading(false);
     m_hiddenTimer.start();
     m_listedUrl = m_url;
+    scheduleGit();
     const KFileItem root = m_lister->rootItem();
     // An archive is opened for reading only (kio-extras' worker reports its
     // folders as writable).
@@ -1550,6 +1564,27 @@ QList<FolderModel::GroupSpan> FolderModel::groupSpans() const
     return out;
 }
 
+void FolderModel::setGroupsCollapsed(bool collapsed)
+{
+    if (!grouped()) {
+        return;
+    }
+    if (collapsed) {
+        for (auto it = m_groupCounts.cbegin(); it != m_groupCounts.cend(); ++it) {
+            if (!it.key().isEmpty()) {
+                m_collapsed.insert(it.key());
+            }
+        }
+    } else {
+        m_collapsed.clear();
+    }
+    if (!m_rows.isEmpty()) {
+        Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {GroupCollapsedRole});
+    }
+    ++m_groupRevision;
+    Q_EMIT groupRevisionChanged();
+}
+
 void FolderModel::toggleGroup(const QString &group)
 {
     if (!grouped() || group.isEmpty()) {
@@ -1822,6 +1857,7 @@ void FolderModel::beginSearch()
     }
     m_searching = true;
     m_gone = false;
+    forgetGit();
     // The lister stops: its signals are ignored from here (see the constructor).
     m_lister->stop();
     ++m_structGen;
@@ -2003,4 +2039,127 @@ void FolderModel::removeSearchRows(const QSet<QUrl> &gone)
     }
     ++m_structGen;
     Q_EMIT countChanged();
+}
+
+// ---- Git status badges ----
+
+void FolderModel::setGitBadges(bool on)
+{
+    if (on == m_gitOn) {
+        return;
+    }
+    m_gitOn = on;
+    if (on) {
+        scheduleGit();
+    } else {
+        const bool had = !m_gitMap.isEmpty() || m_gitAll != 0;
+        forgetGit();
+        if (had && !m_rows.isEmpty()) {
+            Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {GitBadgeRole});
+        }
+    }
+    Q_EMIT gitBadgesChanged();
+}
+
+// Whatever was known is of another folder (or none): the answers still on their way are dropped.
+void FolderModel::forgetGit()
+{
+    ++m_gitSerial;
+    m_gitTimer.stop();
+    m_gitMap.clear();
+    m_gitAll = 0;
+}
+
+void FolderModel::scheduleGit()
+{
+    // Only a folder on this computer that is listed, not results, the Trash or one of Files' pages.
+    if (!m_gitOn || m_searching || !m_url.isLocalFile() || !pageOfUrl().isEmpty() || m_gone) {
+        return;
+    }
+    // At most one run in a burst of changes (a build writing files).
+    if (!m_gitTimer.isActive()) {
+        m_gitTimer.start();
+    }
+}
+
+void FolderModel::runGit()
+{
+    if (!m_gitOn || m_searching || !m_url.isLocalFile()) {
+        return;
+    }
+    // One git at a time: a change while it runs asks for one more run when it ends.
+    if (m_gitBusy) {
+        m_gitAgain = true;
+        return;
+    }
+    m_gitBusy = true;
+    const quint64 serial = ++m_gitSerial;
+    const QByteArray folder = m_url.toLocalFile().toUtf8();
+    const QByteArray path = qgetenv("PATH");
+    // git is a program that may be slow: its own pool, apart from the sorting's.
+    static QThreadPool pool;
+    static const bool once = [] {
+        pool.setMaxThreadCount(2);
+        return true;
+    }();
+    Q_UNUSED(once)
+    QPointer<FolderModel> self(this);
+    pool.start([self, serial, folder, path] {
+        uint32_t status = 6;
+        // A buffer that holds almost any answer, so git is asked once (a second call would run it again).
+        const QByteArray text = rustText([&](uint8_t *out, size_t cap) { return telamon_git_status(rustPtr(folder), size_t(folder.size()), rustPtr(path), size_t(path.size()), 5000, out, cap, &status); }, 1 << 20);
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, serial, status, text] {
+            if (self) {
+                self->gitFinished(serial, status, text);
+            }
+        });
+    });
+}
+
+void FolderModel::gitFinished(quint64 serial, uint32_t status, const QByteArray &text)
+{
+    m_gitBusy = false;
+    applyGit(serial, status, text);
+    if (m_gitAgain) {
+        m_gitAgain = false;
+        scheduleGit();
+    }
+}
+
+void FolderModel::applyGit(quint64 serial, uint32_t status, const QByteArray &text)
+{
+    if (serial != m_gitSerial || !m_gitOn || m_searching) {
+        return;
+    }
+    QHash<QString, int> map;
+    int all = 0;
+    if (status == 0) {
+        const QList<QByteArray> lines = text.split('\n');
+        if (!lines.isEmpty() && lines.first().startsWith("all=")) {
+            const int v = lines.first().mid(4).toInt();
+            all = (v == 2 || v == 3) ? v : 0;
+        }
+        for (qsizetype i = 1; i < lines.size(); ++i) {
+            const qsizetype tab = lines.at(i).indexOf('\t');
+            if (tab < 1) {
+                continue;
+            }
+            const int code = lines.at(i).left(tab).toInt();
+            if (code < 1 || code > 4) {
+                continue;
+            }
+            map.insert(QString::fromUtf8(QByteArray::fromPercentEncoding(lines.at(i).mid(tab + 1))), code);
+        }
+    }
+    if (map == m_gitMap && all == m_gitAll) {
+        return;
+    }
+    m_gitMap = map;
+    m_gitAll = all;
+    if (!m_rows.isEmpty()) {
+        Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {GitBadgeRole});
+    }
 }

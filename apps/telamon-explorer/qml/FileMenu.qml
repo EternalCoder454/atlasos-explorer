@@ -25,12 +25,20 @@ ContextMenu {
 
     // Send these items to the other pane's folder (the window does it).
     signal toOtherPane(var urls, bool move)
+    // One of the person's own actions was chosen (Settings > Context Menu and
+    // Actions); the window asks first when the action says so, then runs it.
+    signal customRequested(int id, var urls)
 
     function has(key) {
         return snap.state !== undefined && snap.state[key] !== undefined;
     }
     function on(key) {
         return snap.state !== undefined && snap.state[key] === true;
+    }
+    // Whether the person hides the entry `key` (Settings > Context Menu and
+    // Actions) for the entries the model does not decide.
+    function shows(key) {
+        return snap.hidden === undefined || snap.hidden[key] !== true;
     }
     // Whether the quick action on pictures `key` (rotateLeft, rotateRight, png,
     // jpeg, webp, combine) applies to the items.
@@ -138,6 +146,9 @@ ContextMenu {
         text: qsTr("Open")
         symbol: Symbols.OpenInNew
         shortcutText: "Enter"
+        visible: menu.has("open")
+        // A hidden row is off too: the arrow keys would stop on it.
+        enabled: menu.has("open")
         onTriggered: menu.later(() => menu.actions.openItems(menu.snap.urls))
     }
     // Only in the Trash: puts the items back where they were.
@@ -153,10 +164,15 @@ ContextMenu {
         id: openWith
         title: qsTr("Open With")
         emptyText: qsTr("No Applications Found")
+        visible: menu.has("openWith")
+        enabled: menu.has("openWith")
         onActivated: entry => menu.later(() => menu.actions.runMenuAction(entry.id))
     }
-    ContextMenuSeparator {}
+    ContextMenuSeparator {
+        visible: menu.has("open") || menu.has("openWith") || menu.has("restore")
+    }
     IconRowItem {
+        visible: buttons.length > 0
         buttons: [
             {
                 "symbol": Symbols.ContentCut,
@@ -189,13 +205,15 @@ ContextMenu {
                 "destructive": true,
                 "command": "trash"
             }
-        ]
+        ].filter(b => menu.has(b.command))
         onChosen: command => {
             menu.later(() => menu.quick(command));
             menu.dismiss();
         }
     }
-    ContextMenuSeparator {}
+    ContextMenuSeparator {
+        visible: menu.has("cut") || menu.has("copy") || menu.has("paste") || menu.has("rename") || menu.has("trash")
+    }
     // Telamon Archive's: items only appear when it is installed (and Extract
     // only for archives); they work on files on this computer.
     ContextMenuItem {
@@ -257,14 +275,20 @@ ContextMenu {
     ContextMenuItem {
         text: qsTr("Properties")
         symbol: Symbols.Info
+        visible: menu.has("properties")
+        enabled: menu.has("properties")
         onTriggered: menu.later(() => menu.actions.showProperties(menu.snap.urls))
     }
-    ContextMenuSeparator {}
+    ContextMenuSeparator {
+        visible: menu.has("moreActions")
+    }
 
     // Rare things, and the service menus, in one place that never moves.
     ActionMenu {
         id: more
         title: qsTr("More Actions")
+        visible: menu.has("moreActions")
+        enabled: menu.has("moreActions")
         ContextMenuItem {
             text: menu.snap.urls && menu.snap.urls.length > 1 ? qsTr("Open in New Tabs") : qsTr("Open in New Tab")
             symbol: Symbols.Tab
@@ -283,6 +307,7 @@ ContextMenu {
         ContextMenuItem {
             text: qsTr("Open Terminal Here")
             symbol: Symbols.Terminal
+            visible: menu.has("openTerminal")
             enabled: menu.on("openTerminal")
             onTriggered: menu.later(() => menu.actions.openTerminal(menu.snap.terminalFolder))
         }
@@ -294,23 +319,23 @@ ContextMenu {
             onTriggered: menu.later(() => PlacesLogic.pinFolder(menu.snap.urls[0]))
         }
         ContextMenuSeparator {
-            visible: menu.split
+            visible: menu.split && (menu.shows("copyToOtherPane") || menu.shows("moveToOtherPane"))
         }
         ContextMenuItem {
             text: qsTr("Copy to Other Pane")
             symbol: Symbols.FileCopy
             shortcutText: "F5"
-            visible: menu.split
+            visible: menu.split && menu.shows("copyToOtherPane")
             // A hidden row is off too: the arrow keys would stop on it.
-            enabled: menu.split && menu.copyProblem.length === 0
+            enabled: menu.split && menu.shows("copyToOtherPane") && menu.copyProblem.length === 0
             onTriggered: menu.later(() => menu.toOtherPane(menu.snap.urls, false))
         }
         ContextMenuItem {
             text: qsTr("Move to Other Pane")
             symbol: Symbols.DriveFileMove
             shortcutText: "F6"
-            visible: menu.split
-            enabled: menu.split && menu.moveProblem.length === 0
+            visible: menu.split && menu.shows("moveToOtherPane")
+            enabled: menu.split && menu.shows("moveToOtherPane") && menu.moveProblem.length === 0
             onTriggered: menu.later(() => menu.toOtherPane(menu.snap.urls, true))
         }
         // Quick actions on pictures, and PDFs to join: new files, the originals stay.
@@ -364,6 +389,8 @@ ContextMenu {
             text: qsTr("Copy Path")
             symbol: Symbols.Link
             shortcutText: "Ctrl+Shift+C"
+            visible: menu.has("copyPath")
+            enabled: menu.has("copyPath")
             onTriggered: menu.later(() => menu.actions.copyPath(menu.snap.urls))
         }
         ContextMenuItem {
@@ -385,12 +412,19 @@ ContextMenu {
             symbol: Symbols.DeleteForever
             shortcutText: "Shift+Del"
             destructive: true
+            visible: menu.has("deleteForGood")
             enabled: menu.on("deleteForGood")
             onTriggered: menu.later(() => menu.actions.deleteForGood(menu.snap.urls))
         }
         ContextMenuSeparator {
             visible: more.entries.length > 0
         }
-        onActivated: entry => menu.later(() => menu.actions.runMenuAction(entry.id))
+        onActivated: entry => {
+            if (entry.customId !== undefined) {
+                menu.later(() => menu.customRequested(entry.customId, menu.snap.urls));
+            } else {
+                menu.later(() => menu.actions.runMenuAction(entry.id));
+            }
+        }
     }
 }

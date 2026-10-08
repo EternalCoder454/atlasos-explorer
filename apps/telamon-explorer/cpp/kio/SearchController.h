@@ -46,6 +46,15 @@ public:
     QStringList roots() const;
     // Whether the service has told us its state (and it is reachable).
     bool known() const { return m_state != Unknown && m_state != Unavailable; }
+    // How many items the index holds (0 until the service has said).
+    quint64 entries() const { return m_entries; }
+    // Whether the service is running now (asking never starts it).
+    bool running() const;
+    // Rescan now (Settings > Search, Rebuild the Index); starts the service if it isn't running.
+    void rebuild();
+    // The folders to index were changed in indexrc: the service reads it again
+    // by ending (the next call starts it). Only when it is running.
+    void reload();
 
     // Asks Status (which starts the service if it isn't running); `done` runs
     // on the GUI thread, also when the service can't be reached.
@@ -80,6 +89,7 @@ private:
     State m_state = Unknown;
     QString m_error;
     QStringList m_roots;
+    quint64 m_entries = 0;
     bool m_subscribed = false;
     // Status calls in flight are answered together.
     bool m_asking = false;

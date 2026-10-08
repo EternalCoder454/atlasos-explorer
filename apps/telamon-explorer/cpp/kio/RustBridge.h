@@ -232,6 +232,26 @@ size_t telamon_servers_label(const uint8_t *url, size_t len, uint8_t *out, size_
 size_t telamon_servers_recent_clean(const uint8_t *saved, size_t savedLen, uint8_t *out, size_t cap);
 size_t telamon_servers_recent_push(const uint8_t *saved, size_t savedLen, const uint8_t *url, size_t urlLen, uint8_t *out, size_t cap);
 size_t telamon_servers_recent_remove(const uint8_t *saved, size_t savedLen, const uint8_t *url, size_t urlLen, uint8_t *out, size_t cap);
+
+// ---- Settings: custom actions, hidden menu entries, Git badges, the index's folders (src/settings_ffi.rs) ----
+size_t telamon_actions_limit(uint32_t which);
+size_t telamon_actions_clean(const uint8_t *list, size_t listLen, uint8_t *out, size_t cap);
+size_t telamon_actions_problem(const uint8_t *record, size_t recordLen, const uint8_t *path, size_t pathLen, uint8_t *out, size_t cap);
+size_t telamon_actions_add(const uint8_t *list, size_t listLen, const uint8_t *record, size_t recordLen, const uint8_t *path, size_t pathLen, uint8_t *out, size_t cap, uint32_t *status);
+size_t telamon_actions_update(const uint8_t *list, size_t listLen, uint32_t id, const uint8_t *record, size_t recordLen, const uint8_t *path, size_t pathLen, uint8_t *out, size_t cap, uint32_t *status);
+size_t telamon_actions_remove(const uint8_t *list, size_t listLen, uint32_t id, uint8_t *out, size_t cap);
+size_t telamon_actions_resolve(const uint8_t *program, size_t programLen, const uint8_t *path, size_t pathLen, uint8_t *out, size_t cap, uint32_t *status);
+size_t telamon_actions_expand(const uint8_t *args, size_t argsLen, const uint8_t *items, size_t itemsLen, uint8_t *out, size_t cap);
+bool telamon_actions_type_matches(const uint8_t *types, size_t typesLen, const uint8_t *mimes, size_t mimesLen);
+size_t telamon_actions_command_text(const uint8_t *program, size_t programLen, const uint8_t *args, size_t argsLen, uint8_t *out, size_t cap);
+size_t telamon_menuprefs_clean(const uint8_t *list, size_t listLen, uint8_t *out, size_t cap);
+size_t telamon_menuprefs_set(const uint8_t *list, size_t listLen, const uint8_t *key, size_t keyLen, bool hidden, uint8_t *out, size_t cap);
+size_t telamon_menuprefs_builtin(uint8_t *out, size_t cap);
+size_t telamon_menuprefs_excluded(const uint8_t *list, size_t listLen, uint8_t *out, size_t cap);
+size_t telamon_menu_state_hiding(uint32_t kind, size_t count, size_t folders, uint32_t flags, const uint8_t *hidden, size_t hiddenLen, uint8_t *out, size_t cap);
+size_t telamon_git_status(const uint8_t *folder, size_t folderLen, const uint8_t *path, size_t pathLen, uint32_t timeoutMs, uint8_t *out, size_t cap, uint32_t *status);
+size_t telamon_indexrc_roots(const uint8_t *text, size_t textLen, const uint8_t *home, size_t homeLen, uint8_t *out, size_t cap);
+size_t telamon_indexrc_set_roots(const uint8_t *text, size_t textLen, const uint8_t *roots, size_t rootsLen, uint8_t *out, size_t cap, uint32_t *status);
 }
 
 using RustFn = size_t (*)(const uint8_t *, size_t, uint8_t *, size_t);
@@ -610,10 +630,13 @@ constexpr uint32_t TrashTop = 1u << 16;
 }
 
 // The entries a menu has and whether each is enabled: key -> enabled. `items`: the menu of items; else the background's.
-inline QList<QPair<QString, bool>> rustMenuState(bool items, size_t count, size_t folders, uint32_t flags)
+inline QList<QPair<QString, bool>> rustMenuState(bool items, size_t count, size_t folders, uint32_t flags, const QByteArray &hidden = {})
 {
     QByteArray buf(512, 0);
-    auto call = [&] { return telamon_menu_state(items ? 0 : 1, count, folders, flags, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size())); };
+    auto call = [&] {
+        return telamon_menu_state_hiding(items ? 0 : 1, count, folders, flags, reinterpret_cast<const uint8_t *>(hidden.constData()), size_t(hidden.size()), reinterpret_cast<uint8_t *>(buf.data()),
+                                         size_t(buf.size()));
+    };
     size_t len = call();
     if (len > size_t(buf.size())) {
         buf.resize(qsizetype(len));
@@ -802,4 +825,24 @@ inline RustBatch rustBatchPlan(const TelamonBatchSpec &spec, const QList<QPair<Q
     }
     out.valid = true;
     return out;
+}
+
+// Calls a core function that writes text (`call(out, cap)` gives its length) and
+// returns the text, retrying once with a buffer of the size it asked for.
+template<typename F>
+inline QByteArray rustText(F call, size_t first = 1024)
+{
+    QByteArray buf(qsizetype(first), 0);
+    size_t n = call(reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    if (n > size_t(buf.size())) {
+        buf.resize(qsizetype(n));
+        n = call(reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    }
+    buf.truncate(qsizetype(n));
+    return buf;
+}
+
+inline const uint8_t *rustPtr(const QByteArray &b)
+{
+    return reinterpret_cast<const uint8_t *>(b.constData());
 }

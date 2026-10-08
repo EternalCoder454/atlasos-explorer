@@ -467,6 +467,55 @@ fn activation_serves_a_restart_from_the_snapshot() {
     );
 }
 
+#[test]
+fn reload_ends_the_service_and_the_next_call_reads_indexrc_again() {
+    let Some(b) = bus("reload", 0, true) else {
+        return;
+    };
+    let other = b.dir.join("other");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("papaya-file.txt"), b"x").unwrap();
+    fs::write(b.root.join("mango-file.txt"), b"x").unwrap();
+    let conn = b.conn();
+    let p = b.proxy(&conn);
+    // The first call starts the service through the bus.
+    let _ = search(&p, "mango-file", 10, HashMap::new()).unwrap();
+    wait_state(&p, "ready");
+    assert_eq!(
+        search(&p, "mango-file", 10, HashMap::new()).unwrap().len(),
+        1
+    );
+    assert!(
+        search(&p, "papaya-file", 10, HashMap::new())
+            .unwrap()
+            .is_empty()
+    );
+    let pid = b
+        .service_pid(&conn)
+        .expect("the service runs under the bus");
+    // Settings wrote new folders; Reload makes the service end.
+    fs::write(
+        b.dir.join("home/.config/telamon-explorer/indexrc"),
+        format!("[Index]\nRoots={}\n", other.display()),
+    )
+    .unwrap();
+    let _: () = p.call("Reload", &()).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while Path::new(&format!("/proc/{pid}")).exists() && !zombie(pid) {
+        assert!(Instant::now() < end, "the service did not end after Reload");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The next call starts it again, with the new folder.
+    wait_until("the new folder is indexed", || {
+        search(&p, "papaya-file", 10, HashMap::new()).is_ok_and(|h| h.len() == 1)
+    });
+    let left = search(&p, "mango-file", 10, HashMap::new()).unwrap();
+    assert!(left.is_empty(), "still indexed: {left:?}");
+    let st = status(&p);
+    let roots: Vec<String> = st["roots"].clone().try_into().unwrap();
+    assert_eq!(roots, vec![format!("file://{}", other.display())]);
+}
+
 fn old_proxy<'a>(conn: &'a Connection) -> Proxy<'a> {
     Proxy::new(conn, OLD_NAME, OLD_PATH, OLD_IFACE).unwrap()
 }

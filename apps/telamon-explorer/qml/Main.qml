@@ -232,6 +232,8 @@ TelamonWindow {
         id: dropMenu
         property var urls: []
         property url destination
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         ContextMenuItem {
             text: qsTr("Move Here")
             onTriggered: fileActions.dropWith(dropMenu.urls, dropMenu.destination, "move")
@@ -297,6 +299,7 @@ TelamonWindow {
         id: fileMenu
         actions: fileActions
         onToOtherPane: (urls, move) => root.transferUrls(urls, move)
+        onCustomRequested: (id, urls) => root.runCustom(id, urls)
     }
     BackgroundMenu {
         id: backgroundMenu
@@ -450,6 +453,8 @@ TelamonWindow {
         id: placeMenu
         property string key
         property var info: ({})
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         ContextMenuItem {
             text: qsTr("Open")
             visible: placeMenu.info.open === true
@@ -735,32 +740,68 @@ TelamonWindow {
         }
     }
 
-    // The Trash setting, for now (the Settings window comes in a later wave).
-    function openTrashSettings() {
-        trashSettingsDialog.open();
+    // ---- Settings ----
+    // The one place every setting is changed (Ctrl+, the View menu, the tab
+    // menu). `page` is 0 General, 1 View, 2 Search, 3 Context Menu and Actions, 4 Trash.
+    function openSettings(page) {
+        // Made the first time it is asked for: its pages hold a hundred controls.
+        settingsLoader.active = true;
+        (settingsLoader.item as SettingsDialog).showPage(page);
     }
-    TelamonDialog {
-        id: trashSettingsDialog
-        title: qsTr("Trash")
-        preferredWidth: Kirigami.Units.gridUnit * 30
-        footerContent: [
-            SecondaryButton {
-                text: qsTr("Close")
-                onClicked: trashSettingsDialog.close()
+    Loader {
+        id: settingsLoader
+        active: false
+        sourceComponent: SettingsDialog {
+            win: root
+            onEditActionRequested: id => actionEditor.openFor(id)
+            onRemoveActionRequested: id => {
+                removeActionDialog.actionId = id;
+                removeActionDialog.text = qsTr("The action \u201c%1\u201d is taken out of the menu. The program it runs is not touched.").arg(ActionsLogic.get(id).name ?? "");
+                removeActionDialog.open();
             }
-        ]
-        TrashAutoEmpty {
-            Layout.fillWidth: true
         }
-        Text {
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-            text: qsTr("Files deletes what has been in the Trash for longer than that, for good, when it starts and once a day while it is open. Newer items are never touched.")
-            font.family: TelamonStyle.fontFamily
-            font.pointSize: TelamonStyle.fontSizeBody
-            color: TelamonStyle.textMuted
+    }
+    ActionEditor {
+        id: actionEditor
+    }
+    ConfirmDialog {
+        id: removeActionDialog
+        property int actionId: 0
+        title: qsTr("Remove This Action?")
+        acceptText: qsTr("Remove")
+        rejectText: qsTr("Cancel")
+        destructive: true
+        defaultButton: "reject"
+        focusReject: true
+        onAccepted: ActionsLogic.remove(actionId)
+    }
+    // One of the person's own actions was chosen in the menu: some ask first.
+    function runCustom(id, urls) {
+        if (ActionsLogic.asksFirst(id)) {
+            customAskDialog.actionId = id;
+            customAskDialog.urls = urls;
+            customAskDialog.text = ActionsLogic.confirmText(id, urls);
+            customAskDialog.open();
+        } else {
+            startCustom(id, urls);
         }
+    }
+    function startCustom(id, urls) {
+        const why = ActionsLogic.run(id, urls);
+        if (why.length > 0) {
+            launchText = why;
+        }
+    }
+    ConfirmDialog {
+        id: customAskDialog
+        property int actionId: 0
+        property var urls: []
+        title: qsTr("Run This Action?")
+        acceptText: qsTr("Run")
+        rejectText: qsTr("Cancel")
+        defaultButton: "reject"
+        focusReject: true
+        onAccepted: root.startCustom(actionId, urls)
     }
 
     // ---- Files dragged over the window ----
@@ -1121,9 +1162,13 @@ TelamonWindow {
             "opener": page ? page.tabId : 0
         });
     }
+    // What a new tab shows first (Settings > General).
+    function startUrl() {
+        return StandardPlaces.place(SettingsLogic.startPage === 1 ? "home" : "homepage");
+    }
     function newTab() {
         freshStart = false;
-        addTab(StandardPlaces.place("homepage"), {});
+        addTab(startUrl(), {});
     }
     function duplicateTab(i) {
         const p = pageAt(i);
@@ -1420,6 +1465,38 @@ TelamonWindow {
         }
     }
 
+    // A dialog or menu that closes leaves the keyboard nowhere (the window's
+    // own item has it): it goes back to what the tab shows, so the arrow keys,
+    // the Menu key and the shortcuts of the view work again without a click.
+    // No item has the keyboard: only the window's own root (or content) item.
+    function nowhereFocused() {
+        // The window's root item has no parent.
+        return activeFocusItem === null || activeFocusItem.parent === null || activeFocusItem === contentItem;
+    }
+    onActiveFocusItemChanged: {
+        if (nowhereFocused()) {
+            lostFocusTimer.restart();
+        }
+    }
+    Timer {
+        id: startFocusTimer
+        interval: 150
+        onTriggered: {
+            if (root.page) {
+                root.page.focusContent();
+            }
+        }
+    }
+    Timer {
+        id: lostFocusTimer
+        interval: 80
+        onTriggered: {
+            if (root.nowhereFocused() && root.page) {
+                root.page.focusContent();
+            }
+        }
+    }
+
     Component.onCompleted: {
         DragWatch.attach(root);
         PreviewLogic.rowDefault = Kirigami.Units.gridUnit * 2;
@@ -1439,9 +1516,11 @@ TelamonWindow {
             selectTab(saved.current);
             freshStart = false;
         } else {
-            addTab(StandardPlaces.place("homepage"), {});
+            addTab(startUrl(), {});
         }
         TrashLogic.begin();
+        // The keyboard starts on what the tab shows (the arrow keys work at once).
+        startFocusTimer.restart();
     }
 
     // The keys. Those that mean something to a text field are off while the
@@ -1449,6 +1528,8 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copy(root.selected, false) }
     Shortcut { sequence: "Ctrl+X"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.copy(root.selected, true) }
     Shortcut { sequence: "Ctrl+Shift+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copyPath(root.selected) }
+    // Properties of the selection (of the folder when nothing is selected), as in Dolphin.
+    Shortcut { sequences: ["Alt+Return", "Alt+Enter"]; enabled: !root.typing && !quickLook.opened; onActivated: fileActions.showProperties(root.selected) }
     Shortcut { sequence: "Ctrl+V"; enabled: !root.typing && root.canWrite && !root.searching; onActivated: fileActions.paste() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !root.typing; onActivated: fileActions.redo() }
@@ -1477,6 +1558,7 @@ TelamonWindow {
     Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
     Shortcut { sequence: "F5"; enabled: !root.typing && !root.split; onActivated: { if (root.view) root.view.folder.refresh(); } }
     Shortcut { sequence: "Ctrl+R"; enabled: !root.typing; onActivated: { if (root.view) root.view.folder.refresh(); } }
+    Shortcut { sequences: ["Ctrl+,", "Ctrl+Comma"]; enabled: !quickLook.opened; onActivated: root.openSettings() }
     Shortcut { sequence: "Ctrl+Shift+K"; enabled: !quickLook.opened && !connectDialog.opened; onActivated: connectDialog.ask() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
     Shortcut { sequence: "Ctrl+W"; onActivated: root.closeTab(root.currentIndex) }
@@ -1508,6 +1590,8 @@ TelamonWindow {
         id: historyMenu
         property bool forward: false
         property var places: []
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         Instantiator {
             model: historyMenu.places
             delegate: ContextMenuItem {
@@ -1529,16 +1613,22 @@ TelamonWindow {
     // The menu of the strip's "..." button.
     ContextMenu {
         id: tabOptionsMenu
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         ContextMenuItem { text: qsTr("New Tab"); shortcutText: "Ctrl+T"; onTriggered: root.newTab() }
         ContextMenuItem { text: qsTr("Reopen Closed Tab"); shortcutText: "Ctrl+Shift+T"; enabled: root.closedTabs.length > 0; onTriggered: root.reopenClosedTab() }
         ContextMenuSeparator {}
         ContextMenuItem { text: qsTr("Restore Tabs on Start"); checkable: true; checked: root.restoreTabs; onTriggered: root.setRestoreTabs(!root.restoreTabs) }
+        ContextMenuSeparator {}
+        ContextMenuItem { text: qsTr("Settings…"); shortcutText: "Ctrl+,"; onTriggered: root.openSettings() }
     }
 
     // The menu of a tab (right click on it).
     ContextMenu {
         id: tabMenu
         property int tab: -1
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
         ContextMenuItem { text: qsTr("New Tab"); onTriggered: root.newTab() }
         ContextMenuItem { text: qsTr("Duplicate Tab"); onTriggered: root.duplicateTab(tabMenu.tab) }
         ContextMenuSeparator {}

@@ -2,10 +2,12 @@
 
 #include "RustBridge.h"
 
+#include <KConfigGroup>
 #include <KIO/Global>
 #include <KIO/Job>
 #include <KIO/ListJob>
 #include <KIO/UDSEntry>
+#include <KSharedConfig>
 
 #include <QCoreApplication>
 #include <QDBusArgument>
@@ -138,12 +140,37 @@ void SearchService::apply(const QVariantMap &status)
             roots << url.toLocalFile();
         }
     }
-    if (s != m_state || error != m_error || roots != m_roots) {
+    const quint64 entries = status.value(QStringLiteral("entries")).toULongLong();
+    if (s != m_state || error != m_error || roots != m_roots || entries != m_entries) {
         m_state = s;
         m_error = error;
         m_roots = roots;
+        m_entries = entries;
         Q_EMIT stateChanged();
     }
+}
+
+bool SearchService::running() const
+{
+    const QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
+    return bus && bus->isServiceRegistered(ServiceName);
+}
+
+void SearchService::rebuild()
+{
+    const QDBusMessage msg = QDBusMessage::createMethodCall(ServiceName, ObjectPath, Interface, QStringLiteral("Refresh"));
+    QDBusConnection::sessionBus().asyncCall(msg, CallTimeoutMs);
+}
+
+void SearchService::reload()
+{
+    const QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
+    if (!bus || !bus->isServiceRegistered(ServiceName)) {
+        // Not running: it reads indexrc when it starts.
+        return;
+    }
+    const QDBusMessage msg = QDBusMessage::createMethodCall(ServiceName, ObjectPath, Interface, QStringLiteral("Reload"));
+    QDBusConnection::sessionBus().asyncCall(msg, CallTimeoutMs);
 }
 
 void SearchService::setUnavailable()
@@ -375,6 +402,8 @@ void contentCallback(void *user, const uint8_t *batch, size_t len, uint32_t end,
 SearchController::SearchController(QObject *parent)
     : QObject(parent)
 {
+    // Settings > Search > Use patterns by default.
+    m_pattern = KSharedConfig::openConfig(QStringLiteral("telamon-explorerrc"))->group(QStringLiteral("Search")).readEntry("UsePattern", false);
     m_kick.setSingleShot(true);
     m_kick.setInterval(0);
     connect(&m_kick, &QTimer::timeout, this, &SearchController::run);

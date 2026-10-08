@@ -12,6 +12,7 @@ mod preview_ffi;
 mod props_ffi;
 mod saved_ffi;
 mod search_ffi;
+mod settings_ffi;
 mod trash_ffi;
 mod views_ffi;
 

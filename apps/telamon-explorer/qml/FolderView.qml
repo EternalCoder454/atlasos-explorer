@@ -96,7 +96,27 @@ FocusScope {
     FolderModel {
         id: folderModel
         groupBy: (top.shown === "details" || top.shown === "icons") ? top.groupBy : FolderModel.GroupNone
+        // Settings > View > Show Git status (a folder's own check: only a folder on this computer is asked).
+        gitBadges: SettingsLogic.gitBadges
     }
+
+    // What a screen reader says of a row besides its name: the type, the size
+    // (folders have none) and the Git state.
+    function rowDescription(typeText, sizeText, gitBadge) {
+        const parts = [typeText];
+        if (sizeText.length > 0) {
+            parts.push(sizeText);
+        }
+        const git = [ "", qsTr("Git: modified"), qsTr("Git: new"), qsTr("Git: ignored"), qsTr("Git: conflict") ][gitBadge] ?? "";
+        if (git.length > 0) {
+            parts.push(git);
+        }
+        return parts.join(", ");
+    }
+
+    // The folder's items, as a list for a screen reader.
+    Accessible.role: Accessible.List
+    Accessible.name: qsTr("Files")
 
     // ---- What the folder remembers of its view ----
     // True while the remembered view is being put back (nothing is remembered then).
@@ -534,6 +554,24 @@ FocusScope {
             if (to >= 0) {
                 setCurrent(to);
             }
+        }
+    }
+    // Every group folded away or brought back (Sort > Group By): the way to the
+    // headers for the keyboard, which moves among the rows. Folding deselects.
+    function setAllGroups(collapsed) {
+        if (!folderModel.grouped) {
+            return;
+        }
+        if (collapsed) {
+            sel.clearSelection();
+        }
+        folderModel.setGroupsCollapsed(collapsed);
+        if (collapsed) {
+            // Nothing is shown to be on.
+            sel.clearCurrentIndex();
+            top.currentRow = -1;
+        } else if (currentRow < 0 && folderModel.count > 0) {
+            setCurrent(0);
         }
     }
     // The row the keyboard reaches from `from` going to `target`: not in a
@@ -1050,7 +1088,7 @@ FocusScope {
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottomMargin: Kirigami.Units.largeSpacing
-        radius: 6
+        radius: TelamonStyle.radius
         color: Kirigami.Theme.backgroundColor
         border.color: Qt.alpha(Kirigami.Theme.textColor, 0.2)
         implicitWidth: noticeText.implicitWidth + Kirigami.Units.gridUnit

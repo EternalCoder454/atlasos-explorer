@@ -92,7 +92,9 @@ SidebarItem {
     readonly property real barHeight: 4
     readonly property bool ejectable: placeCanUnmount && placeKind === PlacesLogic.Removable
 
-    text: placeText
+    // A drive the system gives no name still has one to show and to read out.
+    readonly property string shownName: placeText.length > 0 ? placeText : (placeKind === PlacesLogic.Removable ? qsTr("Removable Drive") : placeKind === PlacesLogic.Phone ? qsTr("Phone") : qsTr("Drive"))
+    text: shownName
     symbol: symbolOf()
     value: ejectable ? "" : placeValue
     selected: PlacesLogic.sameLocation(placeUrl, current)
@@ -102,7 +104,7 @@ SidebarItem {
     bottomPadding: hasBar ? Math.round(barHeight) + 6 : 0
     z: dragHandler.active ? 100 : 0
     Accessible.description: placeUsageText.length > 0 ? placeUsageText : placeValue
-    Accessible.name: placeText
+    Accessible.name: shownName
 
     // Ctrl+click opens a new tab, as does a middle click.
     onClicked: PlacesLogic.open(placeKey, TabLogic.controlHeld())
@@ -167,7 +169,7 @@ SidebarItem {
         }
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
-        Accessible.name: qsTr("Eject %1").arg(item.placeText)
+        Accessible.name: qsTr("Eject %1").arg(item.shownName)
         onClicked: PlacesLogic.unmount(item.placeKey)
         background: Rectangle {
             radius: TelamonStyle.radiusSmall

@@ -131,6 +131,9 @@ qt_add_qml_module(telamon-explorer-app
         qml/TagItem.qml
         qml/PropertiesDialog.qml
         qml/DetailRows.qml
+        qml/SettingsDialog.qml
+        qml/ActionEditor.qml
+        qml/GitBadge.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
@@ -162,6 +165,9 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/PropsBridge.h
         cpp/kio/ImageWork.h cpp/kio/ImageWork.cpp
         cpp/kio/DragWatch.h cpp/kio/DragWatch.cpp
+        cpp/kio/ActionsLogic.h cpp/kio/ActionsLogic.cpp
+        cpp/kio/MenuPrefs.h cpp/kio/MenuPrefs.cpp
+        cpp/kio/SettingsLogic.h cpp/kio/SettingsLogic.cpp
         cpp/kio/RustBridge.h
 )
 

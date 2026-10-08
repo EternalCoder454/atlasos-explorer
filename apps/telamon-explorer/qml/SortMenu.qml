@@ -94,4 +94,17 @@ ContextMenu {
             }
         }
     }
+    // The headers fold with the mouse; these are the keyboard's way (and a screen reader's).
+    ContextMenuItem {
+        text: qsTr("Collapse All Groups")
+        visible: menu.win.view?.folder.grouped ?? false
+        enabled: menu.win.view?.folder.grouped ?? false
+        onTriggered: menu.win.view.setAllGroups(true)
+    }
+    ContextMenuItem {
+        text: qsTr("Expand All Groups")
+        visible: menu.win.view?.folder.grouped ?? false
+        enabled: menu.win.view?.folder.grouped ?? false
+        onTriggered: menu.win.view.setAllGroups(false)
+    }
 }

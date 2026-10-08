@@ -68,6 +68,11 @@
     </method>
     <!-- Rescan now (the Settings "Rebuild" button). -->
     <method name="Refresh"/>
+    <!-- Reload() (added in wave 16 of Files): read indexrc again. The service
+         answers, then ends cleanly; the next call starts it again with the
+         folders indexrc names. Called by Settings > Search after the folders
+         to index were changed. An addition: nothing else changes. -->
+    <method name="Reload"/>
     <signal name="StatusChanged">
       <arg name="status" type="a{sv}"/>
     </signal>

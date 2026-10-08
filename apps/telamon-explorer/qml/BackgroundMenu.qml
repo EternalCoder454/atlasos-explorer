@@ -55,6 +55,8 @@ ContextMenu {
     ActionMenu {
         id: newMenu
         title: qsTr("New")
+        visible: menu.has("new")
+        enabled: menu.has("new")
         ContextMenuItem {
             text: qsTr("Folder")
             symbol: Symbols.CreateNewFolder
@@ -77,14 +79,18 @@ ContextMenu {
         text: qsTr("Paste")
         symbol: Symbols.ContentPaste
         shortcutText: "Ctrl+V"
+        visible: menu.has("paste")
         enabled: menu.on("paste")
         onTriggered: menu.later(() => menu.actions.paste(Qt.url("")))
     }
-    ContextMenuSeparator {}
+    ContextMenuSeparator {
+        visible: menu.has("new") || menu.has("paste")
+    }
     ContextMenuItem {
         text: menu.snap.undoText ?? qsTr("Undo")
         symbol: Symbols.Undo
         shortcutText: "Ctrl+Z"
+        visible: menu.has("undo")
         enabled: menu.on("undo")
         onTriggered: menu.later(() => menu.actions.undo())
     }
@@ -92,23 +98,33 @@ ContextMenu {
         text: menu.snap.redoText ?? qsTr("Redo")
         symbol: Symbols.Redo
         shortcutText: "Ctrl+Shift+Z"
+        visible: menu.has("redo")
         enabled: menu.on("redo")
         onTriggered: menu.later(() => menu.actions.redo())
     }
-    ContextMenuSeparator {}
+    ContextMenuSeparator {
+        visible: menu.has("undo") || menu.has("redo")
+    }
     SortMenu {
         title: qsTr("Sort")
         win: menu.win
+        visible: menu.has("sort")
+        enabled: menu.has("sort")
     }
     ViewMenu {
         title: qsTr("View")
         win: menu.win
+        visible: menu.has("view")
+        enabled: menu.has("view")
     }
-    ContextMenuSeparator {}
+    ContextMenuSeparator {
+        visible: menu.has("sort") || menu.has("view")
+    }
     ContextMenuItem {
         text: qsTr("Open Terminal Here")
         symbol: Symbols.Terminal
         shortcutText: "Shift+F4"
+        visible: menu.has("openTerminal")
         enabled: menu.on("openTerminal")
         onTriggered: menu.later(() => menu.actions.openTerminal(menu.snap.terminalFolder))
     }
