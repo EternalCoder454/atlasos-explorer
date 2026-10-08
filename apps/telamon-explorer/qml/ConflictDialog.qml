@@ -17,8 +17,19 @@ TelamonDialog {
     required property var queue
     readonly property var q: queue.question
     readonly property bool mine: q.type === "conflict"
-    readonly property var src: mine ? q.source : ({})
-    readonly property var dst: mine ? q.dest : ({})
+    // What a card shows while there is no question (the dialog is closing).
+    readonly property var blank: ({
+            "name": "",
+            "isDir": false,
+            "sizeText": "",
+            "dateText": "",
+            "icon": "",
+            "thumb": "",
+            "where": "",
+            "newer": false
+        })
+    readonly property var src: mine ? q.source : blank
+    readonly property var dst: mine ? q.dest : blank
     // The name Keep Both would give, and what is wrong with it.
     property string newName: ""
     readonly property string nameProblem: mine && q.keepBoth ? queue.checkName(newName, q.existingName) : ""
@@ -103,17 +114,19 @@ TelamonDialog {
                 implicitHeight: Kirigami.Units.gridUnit * 5
                 Kirigami.Icon {
                     anchors.fill: parent
-                    source: card.info.icon
-                    visible: thumb.status !== Image.Ready
+                    source: card.info.icon ? card.info.icon : ""
+                    // A file with no thumbnail comes back 1x1: the icon stays.
+                    visible: !thumb.shown
                 }
                 Image {
                     id: thumb
                     anchors.fill: parent
-                    source: card.info.thumb
+                    source: card.info.thumb ? card.info.thumb : ""
                     asynchronous: true
                     fillMode: Image.PreserveAspectFit
                     sourceSize: Qt.size(width * 2, height * 2)
-                    visible: status === Image.Ready
+                    readonly property bool shown: status === Image.Ready && implicitWidth > 1
+                    visible: shown
                 }
             }
             Text {
