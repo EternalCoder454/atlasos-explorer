@@ -132,7 +132,20 @@ public:
     // by Telamon Archive when it is installed, else by Files into a new
     // folder named after the archive.
     Q_INVOKABLE void extractViewed();
+    // Asks the window for the Properties window of `urls` (of the folder
+    // shown when empty): `propertiesRequested`.
     Q_INVOKABLE void showProperties(const QList<QUrl> &urls);
+    // Tags, through the operation queue (undoable). `on`: put the tag on every
+    // item that lacks it; else take it off every item that has it.
+    Q_INVOKABLE void toggleTag(const QList<QUrl> &urls, const QString &name, bool on);
+    Q_INVOKABLE void clearTags(const QList<QUrl> &urls);
+    // Asks for the name of a new tag (`namePromptRequested`, mode "tag"), then puts it on `urls`.
+    Q_INVOKABLE void newTag(const QList<QUrl> &urls);
+    // The star rating, 0 to 10 (two to a star; 0 takes it away).
+    Q_INVOKABLE void setRating(const QList<QUrl> &urls, int rating);
+    // Permissions: bits of 0777 to turn on and off; `recursive` also changes
+    // what is inside folders (files keep their run bits).
+    Q_INVOKABLE void setPermissions(const QList<QUrl> &urls, uint setBits, uint clearBits, bool recursive);
     // A terminal in `folder` (the folder shown when empty).
     Q_INVOKABLE void openTerminal(const QUrl &folder = {});
     Q_INVOKABLE void startDrag(const QList<QUrl> &urls);
@@ -182,6 +195,8 @@ Q_SIGNALS:
     // Restore found folders that are gone: the window asks (title, text), and
     // `confirmRestore` or `cancelRestore` answers.
     void restoreAsk(const QString &title, const QString &text);
+    // Show the Properties window for these items.
+    void propertiesRequested(const QList<QUrl> &urls);
     // A drop without a modifier key: show Move Here, Copy Here, Link Here at x, y.
     void dropMenuRequested(const QList<QUrl> &urls, const QUrl &destination, int x, int y);
 
@@ -211,6 +226,8 @@ private:
     // asynchronously on Wayland.
     void withArchiveOptions(bool showProgress, std::function<void(QVariantMap)> go);
     QString labelOf(const QList<QUrl> &urls) const;
+    // The Tags submenu of the context menu, from what is known of the items now.
+    QVariantMap tagMenu(const QList<QUrl> &urls) const;
     void loadTemplates();
     QString suggestName(const QUrl &folder, const QString &wanted) const;
 

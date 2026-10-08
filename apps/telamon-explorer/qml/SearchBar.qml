@@ -117,6 +117,14 @@ FocusScope {
             spacing: Kirigami.Units.smallSpacing
             Accessible.role: Accessible.Grouping
             Accessible.name: qsTr("Filters")
+            // Set by a tag in the sidebar: only items with this tag.
+            TelamonChip {
+                id: tagChip
+                visible: bar.search !== null && bar.search.tag.length > 0
+                text: bar.search ? qsTr("Tag: %1").arg(TagLogic.shown(bar.search.tag)) : ""
+                closable: true
+                onCloseRequested: bar.search.tag = ""
+            }
             TelamonChip {
                 id: kindChip
                 text: bar.search && bar.search.kind !== 0 ? qsTr("Kind: %1").arg(bar.kindNames[bar.search.kind]) : qsTr("Kind")

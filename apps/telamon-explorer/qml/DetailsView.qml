@@ -27,19 +27,27 @@ Item {
             "path": gu * 13,
             "size": gu * 5.5,
             "type": gu * 10,
-            "modified": gu * 10
+            "modified": gu * 10,
+            "tags": gu * 10,
+            "dimensions": gu * 8,
+            "duration": gu * 6,
+            "taken": gu * 10
         } : {
             "name": gu * 22,
             "path": gu * 16,
             "size": gu * 7,
             "type": gu * 12,
-            "modified": gu * 11
+            "modified": gu * 11,
+            "tags": gu * 11,
+            "dimensions": gu * 8,
+            "duration": gu * 6,
+            "taken": gu * 11
         };
     }
     property var widths: defaultWidths(withTrash)
     // The Trash has its own layout: a drag in another folder does not carry over.
     onWithTrashChanged: widths = defaultWidths(withTrash)
-    readonly property var columns: withTrash ? [
+    readonly property var baseColumns: withTrash ? [
         { key: "name", title: qsTr("Name"), sort: FolderModel.Name },
         { key: "path", title: qsTr("Original Location"), sort: FolderModel.OriginalLocation },
         { key: "size", title: qsTr("Size"), sort: FolderModel.Size },
@@ -57,8 +65,37 @@ Item {
         { key: "type", title: qsTr("Type"), sort: FolderModel.Type },
         { key: "modified", title: qsTr("Modified"), sort: FolderModel.Modified }
     ]
+    readonly property var columns: {
+        const list = baseColumns.slice();
+        if (withTags) {
+            list.push({ key: "tags", title: qsTr("Tags"), sort: -1 });
+        }
+        if (withDimensions) {
+            list.push({ key: "dimensions", title: qsTr("Dimensions"), sort: -1 });
+        }
+        if (withDuration) {
+            list.push({ key: "duration", title: qsTr("Duration"), sort: -1 });
+        }
+        if (withTaken) {
+            list.push({ key: "taken", title: qsTr("Date Taken"), sort: -1 });
+        }
+        return list;
+    }
     readonly property real pathWidth: withPath || withTrash ? widths.path : 0
-    readonly property real totalWidth: widths.name + pathWidth + widths.size + widths.type + widths.modified
+    // The optional columns (View menu): Tags, then the ones read from the files.
+    // None in the Trash, where an item's tags don't matter.
+    readonly property bool withTags: ColumnLogic.tags && !withTrash
+    readonly property bool withDimensions: ColumnLogic.dimensions && !withTrash
+    readonly property bool withDuration: ColumnLogic.duration && !withTrash
+    readonly property bool withTaken: ColumnLogic.taken && !withTrash
+    readonly property real extraWidth: (withTags ? widths.tags : 0) + (withDimensions ? widths.dimensions : 0) + (withDuration ? widths.duration : 0) + (withTaken ? widths.taken : 0)
+    readonly property real totalWidth: widths.name + pathWidth + widths.size + widths.type + widths.modified + extraWidth
+    // Only while a column wants them are the files read for their details.
+    Binding {
+        target: root.fv.folder
+        property: "wantMeta"
+        value: root.visible && (root.withDimensions || root.withDuration || root.withTaken)
+    }
     readonly property int pageRows: Math.max(1, Math.floor(list.height / rowHeight) - 1)
 
     function reveal(row) {
@@ -229,6 +266,11 @@ Item {
             required property string pathText
             required property string originText
             required property string deletedText
+            required property var tagColours
+            required property string tagsText
+            required property string dimensionsText
+            required property string durationText
+            required property string takenText
             required property bool groupCollapsed
             width: Math.max(list.width, root.totalWidth)
             // The rows of a collapsed group take no room.
@@ -260,11 +302,19 @@ Item {
                         height: width
                         source: row.iconName
                     }
+                    TagDots {
+                        id: dots
+                        anchors.right: parent.right
+                        anchors.rightMargin: Kirigami.Units.largeSpacing
+                        anchors.verticalCenter: parent.verticalCenter
+                        colours: row.tagColours
+                        dot: Math.round(root.iconSide * 0.5)
+                    }
                     Text {
                         anchors.left: icon.right
                         anchors.leftMargin: Kirigami.Units.largeSpacing
                         anchors.right: parent.right
-                        anchors.rightMargin: Kirigami.Units.largeSpacing
+                        anchors.rightMargin: Kirigami.Units.largeSpacing + (dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0)
                         height: parent.height
                         visible: !row.editing
                         verticalAlignment: Text.AlignVCenter
@@ -328,6 +378,28 @@ Item {
                     elide: Text.ElideRight
                     text: root.withTrash ? row.deletedText : row.modifiedText
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                }
+                Repeater {
+                    model: [
+                        { shown: root.withTags, width: root.widths.tags, text: row.tagsText },
+                        { shown: root.withDimensions, width: root.widths.dimensions, text: row.dimensionsText },
+                        { shown: root.withDuration, width: root.widths.duration, text: row.durationText },
+                        { shown: root.withTaken, width: root.widths.taken, text: row.takenText }
+                    ]
+                    Text {
+                        id: extra
+                        required property var modelData
+                        width: extra.modelData.shown ? extra.modelData.width : 0
+                        height: root.rowHeight
+                        visible: extra.modelData.shown
+                        leftPadding: Kirigami.Units.largeSpacing
+                        rightPadding: Kirigami.Units.largeSpacing
+                        verticalAlignment: Text.AlignVCenter
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        text: extra.modelData.text
+                        color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                    }
                 }
             }
             MouseArea {

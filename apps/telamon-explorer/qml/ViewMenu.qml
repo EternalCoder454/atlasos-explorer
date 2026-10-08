@@ -24,6 +24,19 @@ ContextMenu {
     ContextMenuItem { text: qsTr("Columns"); radio: true; checkable: true; checked: menu.win.view?.viewMode === "columns"; onTriggered: menu.win.view.viewMode = "columns" }
     ContextMenuItem { text: qsTr("Gallery"); radio: true; checkable: true; checked: menu.win.view?.viewMode === "gallery"; onTriggered: menu.win.view.viewMode = "gallery" }
     ContextMenuSeparator {}
+    // Which columns the Details view shows besides Name, Size, Type and Modified.
+    ContextMenu {
+        title: qsTr("Details Columns")
+        // See FileMenu: the menu's own keyboard navigation, not the list's.
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
+
+        ContextMenuItem { text: qsTr("Tags"); checkable: true; checked: ColumnLogic.tags; onTriggered: ColumnLogic.tags = !ColumnLogic.tags }
+        ContextMenuSeparator {}
+        ContextMenuItem { text: qsTr("Dimensions"); checkable: true; checked: ColumnLogic.dimensions; onTriggered: ColumnLogic.dimensions = !ColumnLogic.dimensions }
+        ContextMenuItem { text: qsTr("Duration"); checkable: true; checked: ColumnLogic.duration; onTriggered: ColumnLogic.duration = !ColumnLogic.duration }
+        ContextMenuItem { text: qsTr("Date Taken"); checkable: true; checked: ColumnLogic.taken; onTriggered: ColumnLogic.taken = !ColumnLogic.taken }
+    }
+    ContextMenuSeparator {}
     ContextMenuItem { text: qsTr("Show Hidden Files"); shortcutText: "Ctrl+H"; checkable: true; checked: menu.win.view?.folder.showHidden ?? false; onTriggered: menu.win.toggleHidden() }
     ContextMenuItem { text: qsTr("Preview Pane"); shortcutText: "Alt+P"; checkable: true; checked: PreviewLogic.paneShown; onTriggered: PreviewLogic.paneShown = !PreviewLogic.paneShown }
     // Thumbnails and previews of files on a server download them, so they are off until asked for.

@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QDBusArgument>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusError>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
@@ -241,6 +242,48 @@ void SearchService::search(const QString &query, uint limit, const QVariantMap &
     });
 }
 
+void SearchService::tags(QObject *context, bool activate, TagsDone done)
+{
+    if (!activate) {
+        const QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
+        if (!bus || !bus->isServiceRegistered(ServiceName)) {
+            done(false, {});
+            return;
+        }
+    }
+    subscribe();
+    const QDBusMessage msg = QDBusMessage::createMethodCall(ServiceName, ObjectPath, Interface, QStringLiteral("Tags"));
+    QPointer<QObject> ctx(context);
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg, CallTimeoutMs), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [ctx, done = std::move(done)](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        if (!ctx) {
+            return;
+        }
+        const QDBusMessage reply = w->reply();
+        if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+            qCInfo(lcSearch) << "Tags failed:" << reply.errorName();
+            done(false, {});
+            return;
+        }
+        QList<QPair<QString, uint>> out;
+        const QDBusArgument arg = reply.arguments().first().value<QDBusArgument>();
+        arg.beginArray();
+        while (!arg.atEnd() && out.size() < 500) {
+            QString name;
+            uint count = 0;
+            arg.beginStructure();
+            arg >> name >> count;
+            arg.endStructure();
+            if (!name.isEmpty()) {
+                out.append({name, count});
+            }
+        }
+        arg.endArray();
+        done(true, out);
+    });
+}
+
 // ---- SearchController ----
 
 // What a walk's thread knows: the controller (which may be gone by then) and
@@ -303,7 +346,7 @@ SearchController::~SearchController()
 
 bool SearchController::active() const
 {
-    return !m_text.trimmed().isEmpty() || m_kind != 0 || m_modified != 0 || m_size != 0;
+    return !m_text.trimmed().isEmpty() || m_kind != 0 || m_modified != 0 || m_size != 0 || !m_tag.isEmpty();
 }
 
 void SearchController::setFolder(FolderModel *f)
@@ -401,10 +444,54 @@ void SearchController::setSize(int s)
     changed();
 }
 
+void SearchController::setTag(const QString &t)
+{
+    const QString tag = t.trimmed();
+    if (tag == m_tag) {
+        return;
+    }
+    m_tag = tag;
+    Q_EMIT tagChanged();
+    changed();
+}
+
+void SearchController::showTag(const QString &name)
+{
+    const QString tag = name.trimmed();
+    if (tag.isEmpty()) {
+        return;
+    }
+    // One change, so one search: the words and chips go, the scope is Everywhere.
+    m_kick.stop();
+    if (!m_text.isEmpty()) {
+        m_text.clear();
+        Q_EMIT textChanged();
+    }
+    if (m_kind || m_modified || m_size) {
+        m_kind = m_modified = m_size = 0;
+        Q_EMIT kindChanged();
+        Q_EMIT modifiedChanged();
+        Q_EMIT sizeChanged();
+    }
+    if (m_scope != 1) {
+        m_scope = 1;
+        Q_EMIT scopeChanged();
+    }
+    if (m_tag != tag) {
+        m_tag = tag;
+        Q_EMIT tagChanged();
+    }
+    changed();
+}
+
 void SearchController::clear()
 {
     m_text.clear();
     m_kind = m_modified = m_size = 0;
+    if (!m_tag.isEmpty()) {
+        m_tag.clear();
+        Q_EMIT tagChanged();
+    }
     Q_EMIT textChanged();
     Q_EMIT kindChanged();
     Q_EMIT modifiedChanged();
@@ -425,6 +512,10 @@ void SearchController::resetState()
     m_text.clear();
     const bool chips = m_kind || m_modified || m_size;
     m_kind = m_modified = m_size = 0;
+    if (!m_tag.isEmpty()) {
+        m_tag.clear();
+        Q_EMIT tagChanged();
+    }
     if (hadText) {
         Q_EMIT textChanged();
     }
@@ -719,6 +810,9 @@ void SearchController::searchIndex(quint64 serial, Route route)
     if (m_folder && m_folder->showHidden()) {
         o.insert(QStringLiteral("include_hidden"), true);
     }
+    if (!m_tag.isEmpty()) {
+        o.insert(QStringLiteral("tag"), m_tag);
+    }
     if (route == IndexFolder && m_folder) {
         o.insert(QStringLiteral("root"), QString::fromLatin1(searchFolder().toEncoded()));
     }
@@ -768,11 +862,13 @@ void SearchController::startWalk(quint64 serial, const QUrl &root)
     const TelamonSearchFilter f = makeFilter(m_kind, m_modified, m_size);
     const QByteArray path = QFile::encodeName(root.toLocalFile());
     const QByteArray query = m_text.trimmed().toUtf8();
+    const QByteArray tag = m_tag.toUtf8();
     // A new walk starts from no results.
     m_folder->setSearchResults({});
     auto *ctx = new WalkContext{QPointer<SearchController>(this), serial};
     m_walk = telamon_walk_start(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), reinterpret_cast<const uint8_t *>(query.constData()),
-                                size_t(query.size()), &f, m_folder && m_folder->showHidden(), telamon_search_limit(1), &walkCallback, ctx);
+                                size_t(query.size()), &f, m_folder && m_folder->showHidden(), reinterpret_cast<const uint8_t *>(tag.constData()), size_t(tag.size()),
+                                telamon_search_limit(1), &walkCallback, ctx);
     if (!m_walk) {
         delete ctx;
         setPending(false);
@@ -836,6 +932,14 @@ void SearchController::onWalkFromThread(quint64 serial, const QByteArray &batch,
 
 void SearchController::startKio(quint64 serial, const QUrl &root)
 {
+    if (!m_tag.isEmpty()) {
+        // Tags are kept in the files' own file system, which a server's files don't have.
+        m_folder->setSearchResults({});
+        setPending(false);
+        setFailure(tr("Can't Search Here"), tr("This location can't keep tags."));
+        setStatusText(QString());
+        return;
+    }
     const TelamonSearchFilter f = makeFilter(m_kind, m_modified, m_size);
     const bool hidden = m_folder && m_folder->showHidden();
     const QByteArray query = m_text.trimmed().toUtf8();

@@ -35,9 +35,51 @@ ContextMenu {
         snap = made;
         openWith.entries = made.openWith;
         more.entries = made.services;
+        tagRow.colours = made.tags.colours;
+        tagsMenu.entries = tagEntries(made.tags);
         // After the click that asked for it is over: a popup opened while its
         // own button release is delivered closes with it.
         Qt.callLater(() => menu.popup(anchor, x, y));
+    }
+
+    // The rows under the colour dots of the Tags menu: the named tags in use
+    // (checked when every item has it), then New Tag and Clear Tags. When the
+    // items can't keep tags, one row says why.
+    function tagEntries(info) {
+        if (!info.available) {
+            return [
+                {
+                    "text": info.why,
+                    "enabled": false
+                }
+            ];
+        }
+        const list = [];
+        for (const t of info.named) {
+            list.push({
+                "text": t.state === 1 ? qsTr("%1 (some items)").arg(t.text) : t.text,
+                "checkable": true,
+                "checked": t.state === 2,
+                "kind": "toggle",
+                "name": t.name,
+                "on": t.state !== 2
+            });
+        }
+        if (list.length > 0) {
+            list.push({
+                "separator": true
+            });
+        }
+        list.push({
+            "text": qsTr("New Tag…"),
+            "kind": "new"
+        });
+        list.push({
+            "text": qsTr("Clear Tags"),
+            "kind": "clear",
+            "enabled": info.hasTags
+        });
+        return list;
     }
 
     // Runs `fn` once the menu is closed.
@@ -171,6 +213,33 @@ ContextMenu {
         // A hidden row is off too: the arrow keys would stop on it.
         enabled: menu.has("compress") && menu.on("compress")
         onTriggered: menu.later(() => menu.actions.compress(menu.snap.urls))
+    }
+    ActionMenu {
+        id: tagsMenu
+        title: qsTr("Tags")
+        visible: menu.has("tags")
+        // A hidden row is off too: the arrow keys would stop on it.
+        enabled: menu.has("tags") && menu.on("tags")
+        TagRowItem {
+            id: tagRow
+            visible: menu.snap.tags !== undefined && menu.snap.tags.available === true
+            onChosen: (name, on) => {
+                menu.later(() => menu.actions.toggleTag(menu.snap.urls, name, on));
+                menu.dismiss();
+            }
+        }
+        ContextMenuSeparator {
+            visible: tagRow.visible
+        }
+        onActivated: entry => {
+            if (entry.kind === "toggle") {
+                menu.later(() => menu.actions.toggleTag(menu.snap.urls, entry.name, entry.on));
+            } else if (entry.kind === "new") {
+                menu.later(() => menu.actions.newTag(menu.snap.urls));
+            } else if (entry.kind === "clear") {
+                menu.later(() => menu.actions.clearTags(menu.snap.urls));
+            }
+        }
     }
     ContextMenuItem {
         text: qsTr("Properties")

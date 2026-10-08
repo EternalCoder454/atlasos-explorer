@@ -71,6 +71,9 @@ class FolderModel : public QAbstractListModel
     // The folder is the top of the Trash: what is listed there was trashed
     // itself, and can be restored.
     Q_PROPERTY(bool trashTop READ trashTop NOTIFY trashChanged)
+    // The Details view shows the Dimensions, Duration or Date Taken column:
+    // only then are those read (off the GUI thread, local files only).
+    Q_PROPERTY(bool wantMeta READ wantMeta WRITE setWantMeta NOTIFY wantMetaChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
@@ -103,6 +106,14 @@ public:
         GroupCollapsedRole,
         OriginTextRole,
         DeletedTextRole,
+        // The tags (names, as `tags`), their colour dots (`tagColours`, a
+        // colour for each colour tag) and the names written for a column.
+        TagsRole,
+        TagColoursRole,
+        TagsTextRole,
+        DimensionsRole,
+        DurationRole,
+        TakenRole,
     };
 
     // A run of rows in one group (the groups are together): the group's
@@ -126,6 +137,21 @@ public:
 
     explicit FolderModel(QObject *parent = nullptr);
     ~FolderModel() override;
+
+    // What is known of one item's tags without asking the disk: `known` is
+    // false until they have been read; `status` is the read's (0 read, 1 the
+    // file system keeps no attributes, 2 a link, 3 not readable, 4 not text).
+    struct TagInfo {
+        bool known = false;
+        QStringList names;
+        int status = 0;
+    };
+    TagInfo tagInfoOf(const QUrl &url) const;
+    // The items' tags, attributes or permissions changed (a queue operation,
+    // an undo, or another program): every folder shown reads them again.
+    static void invalidateAttributes(const QList<QUrl> &urls);
+    bool wantMeta() const { return m_wantMeta; }
+    void setWantMeta(bool on);
 
     // The items waiting to be moved (Cut, not yet pasted): their rows are
     // dimmed in every folder shown. Keys are percent-encoded URLs without a
@@ -252,6 +278,7 @@ Q_SIGNALS:
     void stoppedChanged();
     void pageChanged();
     void trashChanged();
+    void wantMetaChanged();
 
 private:
     struct Entry {
@@ -277,6 +304,16 @@ private:
         QString originPath;
         QString origin;
         qint64 deleted = 0;
+        // Tags, read when a view first asks (0 not asked, 1 asked, 2 read);
+        // `tagStatus` is how the read went (see TagInfo).
+        QStringList tags;
+        quint8 tagState = 0;
+        quint8 tagStatus = 0;
+        // Dimensions, duration and date taken, read only while a column wants them.
+        QString dimensions;
+        QString duration;
+        QString taken;
+        quint8 metaState = 0;
     };
     struct SortRowIn {
         QString name;
@@ -330,6 +367,16 @@ private:
     void updateCounts();
     void recountHidden();
 
+    // Asks for the tags (or the details) of row `e` once, in a batch.
+    void wantTags(Entry &e) const;
+    void wantDetails(Entry &e) const;
+    void readTagBatch();
+    void readMetaBatch();
+    struct TagResult;
+    struct MetaResult;
+    void applyTags(const QList<TagResult> &results);
+    void applyMeta(const QList<MetaResult> &results);
+
     static QSet<QString> s_cut;
     static QList<FolderModel *> s_models;
     bool isCut(const KFileItem &item) const;
@@ -372,4 +419,10 @@ private:
     QUrl m_listedUrl;
     QTimer m_sortTimer;
     QThreadPool m_pool;
+    // Rows that asked for their tags or details since the last batch.
+    mutable QList<QUrl> m_tagWanted;
+    mutable QList<QUrl> m_metaWanted;
+    mutable QTimer m_tagTimer;
+    mutable QTimer m_metaTimer;
+    bool m_wantMeta = false;
 };

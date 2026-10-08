@@ -156,6 +156,7 @@ Item {
             required property bool isHidden
             required property bool isCut
             required property string thumbnailSource
+            required property var tagColours
             width: root.cellW
             height: strip.height
             readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
@@ -191,6 +192,12 @@ Item {
                     cache: false
                     visible: status === Image.Ready && implicitWidth > 1
                 }
+            }
+            TagDots {
+                x: iconBox.x + iconBox.width - width + Math.round(dot * 0.4)
+                y: iconBox.y + iconBox.height - height + Math.round(dot * 0.2)
+                colours: cell.tagColours
+                dot: 12
             }
             Text {
                 x: Kirigami.Units.smallSpacing

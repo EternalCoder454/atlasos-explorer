@@ -24,6 +24,8 @@ find_package(KF6Service 6.30 REQUIRED)
 find_package(KF6CoreAddons 6.30 REQUIRED)
 find_package(KF6Config 6.30 REQUIRED)
 find_package(KF6GuiAddons 6.30 REQUIRED)
+# Properties and the Details columns: dimensions, duration, date taken, camera, pages.
+find_package(KF6FileMetaData REQUIRED)
 find_package(Corrosion REQUIRED)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
@@ -117,6 +119,10 @@ qt_add_qml_module(telamon-explorer-app
         qml/ConnectDialog.qml
         qml/TrashBar.qml
         qml/TrashAutoEmpty.qml
+        qml/TagDots.qml
+        qml/TagRowItem.qml
+        qml/TagItem.qml
+        qml/PropertiesDialog.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
@@ -140,6 +146,11 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/ServerLogic.h cpp/kio/ServerLogic.cpp
         cpp/kio/NetworkModel.h cpp/kio/NetworkModel.cpp
         cpp/kio/TrashLogic.h cpp/kio/TrashLogic.cpp
+        cpp/kio/TagLogic.h cpp/kio/TagLogic.cpp
+        cpp/kio/ColumnLogic.h cpp/kio/ColumnLogic.cpp
+        cpp/kio/MetaReader.h cpp/kio/MetaReader.cpp
+        cpp/kio/PropertiesLogic.h cpp/kio/PropertiesLogic.cpp
+        cpp/kio/PropsBridge.h
         cpp/kio/RustBridge.h
 )
 
@@ -148,7 +159,7 @@ target_link_libraries(telamon-explorer-app PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets Qt6::DBus Qt6::Network
     KF6::DBusAddons KF6::WindowSystem KF6::GuiAddons
     KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::KIOFileWidgets
-    KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore)
+    KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore KF6::FileMetaData)
 
 install(TARGETS telamon-explorer-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # The file index service and its command-line client are cargo binaries that

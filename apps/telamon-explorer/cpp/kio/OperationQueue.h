@@ -59,7 +59,7 @@ class OperationQueue : public QAbstractListModel
 
 public:
     // Numbers as in the Rust core (src/ops_ffi.rs).
-    enum Kind { Copy, Move, Link, Trash, Delete, Rename, NewFolder, Restore, EmptyTrash, External };
+    enum Kind { Copy, Move, Link, Trash, Delete, Rename, NewFolder, Restore, EmptyTrash, External, Attrs };
     Q_ENUM(Kind)
 
     enum Roles {
@@ -118,6 +118,22 @@ public:
     // Lists the items (all in one folder on this computer) in that folder's
     // `.hidden` file, or takes them out of it. Not undoable.
     void setHidden(const QList<QUrl> &urls, bool hide, std::function<void(bool)> done = {});
+    // A change of tags, the star rating or permissions of items on this
+    // computer, worked out and made on a worker, and undoable.
+    struct AttrEdit {
+        enum Kind { Tags = 0, Rating = 1, Mode = 2, ModeTree = 3 };
+        Kind kind = Tags;
+        // Tags: names to put on and to take off, or all taken off.
+        QStringList add;
+        QStringList remove;
+        bool clearAll = false;
+        // Rating: 0 to 10, two to a star (0: none).
+        int rating = 0;
+        // Mode and ModeTree: the permission bits (of 0777) to turn on and off.
+        quint32 setBits = 0;
+        quint32 clearBits = 0;
+    };
+    void setAttributes(const QList<QUrl> &urls, const AttrEdit &edit, const QString &title, std::function<void(bool)> done = {});
     // Pastes text or an image from the clipboard as a file (KIO asks for the name).
     void pasteData(const QMimeData *data, const QUrl &destination);
     void emptyTrash();
@@ -186,6 +202,9 @@ Q_SIGNALS:
     void jobFinished();
     // An extraction or compression finished and made these files (to select).
     void resultsReady(const QList<QUrl> &urls);
+    // A change of tags, rating or permissions ended (also an undo or redo,
+    // also when it stopped half way): these items must be looked at again.
+    void attributesChanged(const QList<QUrl> &urls);
 
 private:
     struct Work;

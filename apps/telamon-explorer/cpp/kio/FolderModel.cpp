@@ -1,7 +1,10 @@
 #include "FolderModel.h"
 
+#include "MetaReader.h"
+#include "PropsBridge.h"
 #include "RustBridge.h"
 #include "ServerLogic.h"
+#include "TagLogic.h"
 
 #include <KIO/Global>
 #include <KIO/Job>
@@ -14,6 +17,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+#include <QPointer>
 #include <QSet>
 #include <QTimeZone>
 #include <QHostAddress>
@@ -126,6 +130,12 @@ FolderModel::FolderModel(QObject *parent)
     m_hiddenTimer.setSingleShot(true);
     m_hiddenTimer.setInterval(100);
     connect(&m_hiddenTimer, &QTimer::timeout, this, &FolderModel::recountHidden);
+    m_tagTimer.setSingleShot(true);
+    m_tagTimer.setInterval(8);
+    connect(&m_tagTimer, &QTimer::timeout, this, &FolderModel::readTagBatch);
+    m_metaTimer.setSingleShot(true);
+    m_metaTimer.setInterval(40);
+    connect(&m_metaTimer, &QTimer::timeout, this, &FolderModel::readMetaBatch);
     m_probeTimer.setSingleShot(true);
     m_probeTimer.setInterval(ProbeTimeoutMs);
     connect(&m_probeTimer, &QTimer::timeout, this, &FolderModel::onUnreachable);
@@ -206,6 +216,12 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {GroupCollapsedRole, "groupCollapsed"},
         {OriginTextRole, "originText"},
         {DeletedTextRole, "deletedText"},
+        {TagsRole, "tags"},
+        {TagColoursRole, "tagColours"},
+        {TagsTextRole, "tagsText"},
+        {DimensionsRole, "dimensionsText"},
+        {DurationRole, "durationText"},
+        {TakenRole, "takenText"},
     };
 }
 
@@ -391,6 +407,28 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         return e.origin;
     case DeletedTextRole:
         return e.deleted > 0 ? QLocale().toString(QDateTime::fromSecsSinceEpoch(e.deleted, QTimeZone::UTC), QLocale::ShortFormat) : QString();
+    case TagsRole:
+        wantTags(e);
+        return e.tags;
+    case TagColoursRole:
+        wantTags(e);
+        return TagLogic::dotsFor(e.tags);
+    case TagsTextRole: {
+        wantTags(e);
+        QStringList shown;
+        for (const QString &t : std::as_const(e.tags)) {
+            shown << rustDisplayName(t.toUtf8());
+        }
+        return shown.join(QStringLiteral(", "));
+    }
+    case DimensionsRole:
+    case DurationRole:
+    case TakenRole:
+        if (!m_wantMeta) {
+            return QString();
+        }
+        wantDetails(e);
+        return role == DimensionsRole ? e.dimensions : (role == DurationRole ? e.duration : e.taken);
     case ThumbnailSourceRole: {
         const QUrl u = e.item.url();
         // A file on a server gets a thumbnail only if the Settings switch says
@@ -403,6 +441,250 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
     }
     default:
         return {};
+    }
+}
+
+// ---- Tags and details of the items (read lazily, off the GUI thread) ----
+
+namespace
+{
+// Reading tags is one system call an item; details open the file. Two
+// workers for the first, one for the second, shared by every folder shown.
+QThreadPool &tagPool()
+{
+    static QThreadPool *p = [] {
+        auto *q = new QThreadPool;
+        q->setMaxThreadCount(2);
+        return q;
+    }();
+    return *p;
+}
+
+QThreadPool &metaPool()
+{
+    static QThreadPool *p = [] {
+        auto *q = new QThreadPool;
+        q->setMaxThreadCount(1);
+        return q;
+    }();
+    return *p;
+}
+
+// Items asked for in one batch; the rest wait for the next.
+constexpr int BatchSize = 300;
+}
+
+struct FolderModel::TagResult {
+    QUrl url;
+    QStringList names;
+    int status = 0;
+};
+
+struct FolderModel::MetaResult {
+    QUrl url;
+    QString dimensions, duration, taken;
+};
+
+void FolderModel::wantTags(Entry &e) const
+{
+    if (e.tagState != 0) {
+        return;
+    }
+    const QUrl u = e.item.url();
+    if (!u.isLocalFile()) {
+        // A server's files and the Trash keep no tags of ours.
+        e.tagState = 2;
+        e.tagStatus = 1;
+        return;
+    }
+    e.tagState = 1;
+    m_tagWanted.append(u);
+    if (!m_tagTimer.isActive()) {
+        m_tagTimer.start();
+    }
+}
+
+void FolderModel::wantDetails(Entry &e) const
+{
+    if (e.metaState != 0) {
+        return;
+    }
+    const QUrl u = e.item.url();
+    if (!u.isLocalFile() || e.isDir) {
+        e.metaState = 2;
+        return;
+    }
+    e.metaState = 1;
+    m_metaWanted.append(u);
+    if (!m_metaTimer.isActive()) {
+        m_metaTimer.start();
+    }
+}
+
+void FolderModel::readTagBatch()
+{
+    if (m_tagWanted.isEmpty()) {
+        return;
+    }
+    const QList<QUrl> urls = m_tagWanted.mid(0, BatchSize);
+    m_tagWanted.remove(0, urls.size());
+    if (!m_tagWanted.isEmpty()) {
+        m_tagTimer.start();
+    }
+    QPointer<FolderModel> self(this);
+    tagPool().start([self, urls] {
+        QList<TagResult> results;
+        results.reserve(urls.size());
+        for (const QUrl &u : urls) {
+            const PropsBridge::TagsRead r = PropsBridge::readTags(u.toLocalFile());
+            results.append({u, r.names, int(r.status)});
+        }
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, results] {
+            if (self) {
+                self->applyTags(results);
+            }
+        });
+    });
+}
+
+void FolderModel::applyTags(const QList<TagResult> &results)
+{
+    QHash<QUrl, int> at;
+    for (int i = 0; i < results.size(); ++i) {
+        at.insert(results.at(i).url, i);
+    }
+    QStringList seen;
+    for (int row = 0; row < m_rows.size(); ++row) {
+        Entry &e = m_rows[row];
+        const auto it = at.constFind(e.item.url());
+        if (it == at.cend() || e.tagState != 1) {
+            continue;
+        }
+        const TagResult &r = results.at(*it);
+        const bool changed = e.tags != r.names;
+        e.tags = r.names;
+        e.tagState = 2;
+        e.tagStatus = quint8(r.status);
+        if (changed) {
+            seen << r.names;
+            Q_EMIT dataChanged(index(row), index(row), {TagsRole, TagColoursRole, TagsTextRole});
+        }
+    }
+    TagLogic::noteSeen(seen);
+}
+
+void FolderModel::readMetaBatch()
+{
+    if (m_metaWanted.isEmpty() || !m_wantMeta) {
+        m_metaWanted.clear();
+        return;
+    }
+    // A few at a time: the row nearest the top first, as they were asked for.
+    const QList<QUrl> urls = m_metaWanted.mid(0, 24);
+    m_metaWanted.remove(0, urls.size());
+    if (!m_metaWanted.isEmpty()) {
+        m_metaTimer.start();
+    }
+    QPointer<FolderModel> self(this);
+    metaPool().start([self, urls] {
+        QList<MetaResult> results;
+        for (const QUrl &u : urls) {
+            if (!self) {
+                return;
+            }
+            const MetaReader::Info info = MetaReader::read(u.toLocalFile());
+            results.append({u, info.dimensions, info.duration, info.taken});
+        }
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, results] {
+            if (self) {
+                self->applyMeta(results);
+            }
+        });
+    });
+}
+
+void FolderModel::applyMeta(const QList<MetaResult> &results)
+{
+    QHash<QUrl, int> at;
+    for (int i = 0; i < results.size(); ++i) {
+        at.insert(results.at(i).url, i);
+    }
+    for (int row = 0; row < m_rows.size(); ++row) {
+        Entry &e = m_rows[row];
+        const auto it = at.constFind(e.item.url());
+        if (it == at.cend() || e.metaState != 1) {
+            continue;
+        }
+        const MetaResult &r = results.at(*it);
+        e.dimensions = r.dimensions;
+        e.duration = r.duration;
+        e.taken = r.taken;
+        e.metaState = 2;
+        Q_EMIT dataChanged(index(row), index(row), {DimensionsRole, DurationRole, TakenRole});
+    }
+}
+
+void FolderModel::setWantMeta(bool on)
+{
+    if (on == m_wantMeta) {
+        return;
+    }
+    m_wantMeta = on;
+    if (on) {
+        // Rows that were drawn without the columns ask now.
+        for (Entry &e : m_rows) {
+            if (e.metaState == 1) {
+                e.metaState = 0;
+            }
+        }
+        if (!m_rows.isEmpty()) {
+            Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {DimensionsRole, DurationRole, TakenRole});
+        }
+    } else {
+        m_metaWanted.clear();
+        for (Entry &e : m_rows) {
+            if (e.metaState == 1) {
+                e.metaState = 0;
+            }
+        }
+    }
+    Q_EMIT wantMetaChanged();
+}
+
+FolderModel::TagInfo FolderModel::tagInfoOf(const QUrl &url) const
+{
+    TagInfo info;
+    const int row = rowOfUrl(url);
+    if (row < 0 || m_rows.at(row).tagState != 2) {
+        return info;
+    }
+    info.known = true;
+    info.names = m_rows.at(row).tags;
+    info.status = m_rows.at(row).tagStatus;
+    return info;
+}
+
+void FolderModel::invalidateAttributes(const QList<QUrl> &urls)
+{
+    QSet<QUrl> wanted;
+    for (const QUrl &u : urls) {
+        wanted.insert(u.adjusted(QUrl::StripTrailingSlash));
+    }
+    for (FolderModel *m : std::as_const(s_models)) {
+        for (int i = 0; i < m->m_rows.size(); ++i) {
+            Entry &e = m->m_rows[i];
+            if (wanted.contains(e.item.url().adjusted(QUrl::StripTrailingSlash))) {
+                // Read again the next time a view asks.
+                e.tagState = 0;
+                Q_EMIT m->dataChanged(m->index(i), m->index(i), {TagsRole, TagColoursRole, TagsTextRole});
+            }
+        }
     }
 }
 
