@@ -16,15 +16,36 @@ Item {
     readonly property int iconSide: Math.min(rowHeight - 4, Math.max(Kirigami.Units.iconSizes.smallMedium, Math.round(rowHeight * 0.62)))
     // Search results have a Path column (the folder each one is in) after the name.
     readonly property bool withPath: fv.folder.searching
-    // Widths of the columns by key.
-    property var widths: ({
-            "name": Kirigami.Units.gridUnit * 22,
-            "path": Kirigami.Units.gridUnit * 16,
-            "size": Kirigami.Units.gridUnit * 7,
-            "type": Kirigami.Units.gridUnit * 12,
-            "modified": Kirigami.Units.gridUnit * 11
-        })
-    readonly property var columns: withPath ? [
+    // The top of the Trash: the folder each item was in, and when it was deleted.
+    readonly property bool withTrash: fv.folder.trashTop
+    // Widths of the columns by key. The Trash has an Original Location and a
+    // Date Deleted, so its columns are narrower to fit the window.
+    function defaultWidths(trash) {
+        const gu = Kirigami.Units.gridUnit;
+        return trash ? {
+            "name": gu * 15,
+            "path": gu * 13,
+            "size": gu * 5.5,
+            "type": gu * 10,
+            "modified": gu * 10
+        } : {
+            "name": gu * 22,
+            "path": gu * 16,
+            "size": gu * 7,
+            "type": gu * 12,
+            "modified": gu * 11
+        };
+    }
+    property var widths: defaultWidths(withTrash)
+    // The Trash has its own layout: a drag in another folder does not carry over.
+    onWithTrashChanged: widths = defaultWidths(withTrash)
+    readonly property var columns: withTrash ? [
+        { key: "name", title: qsTr("Name"), sort: FolderModel.Name },
+        { key: "path", title: qsTr("Original Location"), sort: FolderModel.OriginalLocation },
+        { key: "size", title: qsTr("Size"), sort: FolderModel.Size },
+        { key: "type", title: qsTr("Type"), sort: FolderModel.Type },
+        { key: "modified", title: qsTr("Date Deleted"), sort: FolderModel.DateDeleted }
+    ] : withPath ? [
         { key: "name", title: qsTr("Name"), sort: FolderModel.Name },
         { key: "path", title: qsTr("Path"), sort: -1 },
         { key: "size", title: qsTr("Size"), sort: FolderModel.Size },
@@ -36,7 +57,7 @@ Item {
         { key: "type", title: qsTr("Type"), sort: FolderModel.Type },
         { key: "modified", title: qsTr("Modified"), sort: FolderModel.Modified }
     ]
-    readonly property real pathWidth: withPath ? widths.path : 0
+    readonly property real pathWidth: withPath || withTrash ? widths.path : 0
     readonly property real totalWidth: widths.name + pathWidth + widths.size + widths.type + widths.modified
     readonly property int pageRows: Math.max(1, Math.floor(list.height / rowHeight) - 1)
 
@@ -206,6 +227,8 @@ Item {
             required property string modifiedText
             required property string typeText
             required property string pathText
+            required property string originText
+            required property string deletedText
             required property bool groupCollapsed
             width: Math.max(list.width, root.totalWidth)
             // The rows of a collapsed group take no room.
@@ -267,13 +290,13 @@ Item {
                 Text {
                     width: root.pathWidth
                     height: root.rowHeight
-                    visible: root.withPath
+                    visible: root.withPath || root.withTrash
                     leftPadding: Kirigami.Units.largeSpacing
                     rightPadding: Kirigami.Units.largeSpacing
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
-                    text: row.pathText
+                    text: root.withTrash ? row.originText : row.pathText
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
                 Text {
@@ -303,7 +326,7 @@ Item {
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
-                    text: row.modifiedText
+                    text: root.withTrash ? row.deletedText : row.modifiedText
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
             }

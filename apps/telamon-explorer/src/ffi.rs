@@ -20,6 +20,11 @@ pub struct TelamonSortRow {
     pub mtime: i64,
     pub ctime: i64,
     pub atime: i64,
+    /// The Trash: the sort key of the folder an item came from (empty elsewhere).
+    pub origin: *const u8,
+    pub origin_len: usize,
+    /// The Trash: when it was deleted (0 elsewhere).
+    pub deleted: i64,
     pub is_dir: bool,
 }
 
@@ -85,7 +90,8 @@ pub unsafe extern "C" fn telamon_name_key(
 }
 
 /// Sorts `n` rows by `column` (0 Name, 1 Size, 2 Type, 3 Modified, 4 Created,
-/// 5 Accessed) and writes the permutation to `out` (`n` u32s). False on bad input.
+/// 5 Accessed, 7 Original Location, 8 Date Deleted; the Trash's two read the
+/// rows' `origin` and `deleted`) and writes the permutation to `out` (`n` u32s). False on bad input.
 ///
 /// # Safety
 /// `rows` points to `n` valid rows whose pointers cover their lengths; `out`
@@ -113,6 +119,8 @@ pub unsafe extern "C" fn telamon_sort_permutation(
         3 => Column::Modified,
         4 => Column::Created,
         5 => Column::Accessed,
+        7 => Column::Original,
+        8 => Column::Deleted,
         _ => return false,
     };
     // SAFETY: `rows` has `n` valid rows (contract above).
@@ -125,6 +133,9 @@ pub unsafe extern "C" fn telamon_sort_permutation(
             kind: String::from_utf8_lossy(unsafe { bytes(r.kind, r.kind_len) }).into_owned(),
             // SAFETY: as for the key and the kind.
             group: unsafe { bytes(r.group, r.group_len) }.to_vec(),
+            // SAFETY: as for the key.
+            origin: unsafe { bytes(r.origin, r.origin_len) }.to_vec(),
+            deleted: r.deleted,
             is_dir: r.is_dir,
             size: r.size,
             mtime: r.mtime,
@@ -1182,6 +1193,9 @@ mod tests {
                 mtime: 0,
                 ctime: 0,
                 atime: 0,
+                origin: std::ptr::null(),
+                origin_len: 0,
+                deleted: 0,
                 is_dir: false,
             })
             .collect();
@@ -1190,9 +1204,34 @@ mod tests {
             telamon_sort_permutation(rows.as_ptr(), 2, 0, false, true, false, out.as_mut_ptr())
         });
         assert_eq!(out, [1, 0]);
-        assert!(!unsafe {
-            telamon_sort_permutation(rows.as_ptr(), 2, 9, false, true, false, out.as_mut_ptr())
-        });
+        for bad in [6, 9] {
+            assert!(!unsafe {
+                telamon_sort_permutation(
+                    rows.as_ptr(),
+                    2,
+                    bad,
+                    false,
+                    true,
+                    false,
+                    out.as_mut_ptr(),
+                )
+            });
+        }
+        // The Trash's columns are accepted (rows with nothing in them keep the name order).
+        for trash_column in [7, 8] {
+            assert!(unsafe {
+                telamon_sort_permutation(
+                    rows.as_ptr(),
+                    2,
+                    trash_column,
+                    false,
+                    true,
+                    false,
+                    out.as_mut_ptr(),
+                )
+            });
+            assert_eq!(out, [1, 0]);
+        }
     }
 
     fn places_text(which: u32, a: &str, b: &str, n: u64) -> String {

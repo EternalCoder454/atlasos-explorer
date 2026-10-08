@@ -244,9 +244,20 @@ FocusScope {
         }
     }
 
+    // The Trash's header: the auto-empty setting.
+    TrashBar {
+        id: trashBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        visible: view.folder.inTrash && page.pageKind.length === 0
+        height: visible ? implicitHeight : 0
+    }
+
     FolderView {
         id: view
         anchors.fill: parent
+        anchors.topMargin: trashBar.height
         focus: true
         actions: page.actions
         search: tabSearch

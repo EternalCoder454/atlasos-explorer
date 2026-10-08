@@ -41,12 +41,15 @@ pub const F_CAN_UNDO: u32 = 1 << 13;
 pub const F_CAN_REDO: u32 = 1 << 14;
 /// Every selected item is an archive Telamon Archive can extract.
 pub const F_ARCHIVE_ITEMS: u32 = 1 << 15;
+/// The items are at the top of the Trash (only those can be restored).
+pub const F_TRASH_TOP: u32 = 1 << 16;
 
 /// One entry of a menu. `key` names it for the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     // The menu of items.
     Open,
+    Restore,
     OpenWith,
     Cut,
     Copy,
@@ -81,6 +84,7 @@ impl Cmd {
     pub fn key(self) -> &'static str {
         match self {
             Cmd::Open => "open",
+            Cmd::Restore => "restore",
             Cmd::OpenWith => "openWith",
             Cmd::Cut => "cut",
             Cmd::Copy => "copy",
@@ -130,6 +134,11 @@ pub fn item_menu(count: usize, folders: usize, flags: u32) -> Vec<(Cmd, bool)> {
     // "Open With" is always in the menu; it is disabled when no application
     // is known for the items.
     let mut out = vec![(Cmd::Open, true), (Cmd::OpenWith, has(F_OPEN_WITH))];
+    if has(F_IN_TRASH) {
+        // Only what was trashed itself goes back; what is inside a trashed
+        // folder goes back with it.
+        out.push((Cmd::Restore, has(F_TRASH_TOP)));
+    }
     out.push((Cmd::Cut, writable));
     out.push((Cmd::Copy, true));
     let paste_target_ok = if paste_into_selected_folder(count, folders) {
@@ -649,6 +658,17 @@ mod tests {
         // Not on a server.
         let m = item_menu(1, 0, BASE & !F_LOCAL);
         assert_eq!(on(&m, Cmd::Hide), Some(false));
+    }
+
+    #[test]
+    fn restore_is_offered_in_the_trash_for_what_was_trashed() {
+        let m = item_menu(2, 0, F_IN_TRASH | F_TRASH_TOP | F_LOCAL | F_WRITABLE);
+        assert_eq!(on(&m, Cmd::Restore), Some(true));
+        // Inside a trashed folder: listed, off.
+        let m = item_menu(1, 0, F_IN_TRASH | F_LOCAL | F_WRITABLE);
+        assert_eq!(on(&m, Cmd::Restore), Some(false));
+        // Not offered anywhere else.
+        assert_eq!(on(&item_menu(1, 0, BASE), Cmd::Restore), None);
     }
 
     #[test]

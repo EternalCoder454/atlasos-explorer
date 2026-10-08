@@ -121,6 +121,22 @@ public:
     // Pastes text or an image from the clipboard as a file (KIO asks for the name).
     void pasteData(const QMimeData *data, const QUrl &destination);
     void emptyTrash();
+    // One item of the Trash to put back: where it is, where it goes, and
+    // whether something is there already (or another item of the same batch
+    // goes there): that one is moved with the conflict dialog.
+    struct RestoreItem {
+        QUrl trashUrl;
+        QUrl target;
+        bool taken = false;
+    };
+    // Puts items of the Trash back where they were, after making the folders
+    // in `makeFolders` (paths of folders that are gone). Undone by trashing
+    // them again.
+    void restore(const QList<RestoreItem> &items, const QStringList &makeFolders, std::function<void(bool)> done = {});
+    // Takes out of every trash folder what was deleted more than `days` days
+    // ago (the Trash setting). Quiet: no toast, and the row leaves the list
+    // when it is done; the count goes to the journal.
+    void emptyOldTrash(int days);
     // A job Telamon Archive runs (Archive1 `method` with `args`, then the
     // options): shown here with its progress, paused and cancelled from here;
     // what it made is announced with `resultsReady`. Not undoable.
@@ -131,6 +147,10 @@ public:
     void extractArchive(const QUrl &root, const QUrl &parentFolder, const QString &folderName, const QString &archiveName);
     // Whether Telamon Archive is installed (the window's answer; words only).
     void setArchiveProbe(std::function<bool()> probe) { m_archiveProbe = std::move(probe); }
+
+    // The name an item goes by in words: its file name; for an item of the
+    // Trash (KIO's `trash:/<id>-<name>`) the name without the id.
+    static QString plainName(const QUrl &url);
 
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
@@ -214,6 +234,8 @@ private:
     QStringList m_undoTitles;
     QStringList m_redoTitles;
     quint64 m_undoableId = 0;
+    // A look at the old items of the Trash, or the operation that removes them, is under way.
+    bool m_oldTrashBusy = false;
     // Everything that reads or changes the undo lists (writing down a
     // finished operation, an undo, a redo) runs one after the other, in the
     // order it was asked: each needs the files looked at first, and each must

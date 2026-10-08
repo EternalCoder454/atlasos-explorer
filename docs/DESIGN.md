@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 11 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer)
+0.2.0 plus waves 1 to 12 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days")
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -464,9 +464,9 @@ Explorer replaces Dolphin completely.
     installed); a camera that speaks PTP/MTP shows as a phone.
   - **Trash:** the count beside its name comes from a lister that follows
     `trash:/`, so it moves when something is trashed or restored. "Empty
-    Trash…" measures the Trash (a KIO `DirectorySizeJob`, 6 s at most) and
-    asks "Permanently delete all 12 items (4.2 MiB) in the Trash? This can't be
-    undone." with Cancel as the default button.
+    Trash…" (and the Trash page's Empty Trash button, wave 12) measures the
+    Trash (a KIO `DirectorySizeJob`, 6 s at most) and asks "Delete 12 items
+    (4.2 MiB) for good? This can't be undone." with Cancel as the default button.
   - **Open in Disks** (drives only, never a phone or folder): shown when
     Telamon Disks is installed, found by the desktop file
     `net.eterneon.telamon.disks.desktop` (or the `atlas` name) or the program
@@ -1188,6 +1188,83 @@ trash, delete, rename, new folder, new file, hide, restore from trash and empty 
   deletes. Where a trash isn't available (some remote and removable
   filesystems), Delete says so and asks the same question.
 
+- **The Trash (wave 12).** Everything here is KIO's `trash:/` (the listing,
+  trashing, restoring, `KIO::emptyTrash`); Files adds the page, the queue's
+  operations and one setting.
+  - **The page.** In `trash:/` (the top of the Trash; a folder inside a trashed
+    folder is an ordinary listing) Details has Name, **Original Location**
+    (the folder the item was in, as the Path column writes it: `~/Documents`),
+    Size, Type and **Date Deleted**, instead of Modified; both are sortable
+    (header click, Sort menu; the core's sort columns 7 and 8, remembered per
+    folder like the others, and shown as Name where the folder has no such
+    column). Items go by the name they had (the Trash worker's display name),
+    never `0-name`. Both come from the worker's entry
+    (`UDS_EXTRA` is the original path, `UDS_EXTRA+1` the `DeletionDate`). A
+    header strip above the list holds the auto-empty switch (below). The toolbar
+    shows **Restore**, a red **Empty Trash**, and Delete (for good, with the
+    question); New Folder, Paste, Rename and Move to Trash are hidden there, and
+    the Delete key deletes for good (after the question). The context menu of an
+    item has Restore (items at the top of the Trash only).
+  - **Restore** (`FileActions.restore`, `OperationQueue.restore`) puts each item
+    back where its `.trashinfo` says (a path that is not absolute is refused in
+    words). What is at each place, and which folders are gone, is looked at on a
+    worker. Items whose place is free go through `KIO::restoreFromTrash` (a
+    rename where the disk allows it); an item whose place is taken (or that
+    shares it with another item of the same batch) is moved with
+    `KIO::moveAs`, so W6's conflict dialog answers (Replace, Keep Both, Skip). A
+    folder that is gone is made again (`KIO::mkpath`) **only after a dialog
+    asks** ("The folder "~/Documents/Old" doesn't exist any more. Create it and
+    put 2 items back there?", Cancel the default). The operation is a normal
+    queue entry (kind Restore, title "Restore 3 Items from Trash"), recorded
+    like a copy: **Undo trashes the items again**, Redo restores them (an
+    operation where Replace was chosen is not recorded, as for any other). Items
+    of a batch that stopped half way are still one step to undo.
+  - **Empty Trash** is the queue's `EmptyTrash` operation (`KIO::emptyTrash`,
+    which does every trash folder KIO knows). KIO's job reports no amounts, so
+    its row shows a moving bar, not a percentage. When it ends the queue tells
+    the Trash's listers (`KDirNotify::FilesAdded(trash:/)`), so the sidebar's
+    count and an open Trash page follow: KIO itself only tells when the Trash is
+    left completely empty.
+  - **Empty items older than N days** (`[Trash] AutoEmpty`, `AutoEmptyDays` in
+    `telamon-explorerrc`; off, 30; 1 to 3650) is the switch and the number in
+    the Trash page's header, and the same two controls in a dialog opened from
+    the View menu ("Empty Old Trash Items…"), until the Settings window of wave
+    16 has them. **Turning it on asks first** (Cancel the default) and says how
+    many items are older than that right now (a read-only count by the core);
+    lowering the days while it is on asks the same when something would go;
+    raising them, or changing them while it is off, is kept at once. What
+    asked is carried out when it is confirmed (it removes at once), a No leaves
+    everything as it was. `TrashLogic` runs it a few seconds after Files starts
+    and every 24 hours while Files is open (a timer exists only while the switch
+    is on; `TELAMON_EXPLORER_TEST_TRASH_TICK_MS` shortens the 24 hours for tests).
+    A run first *looks* on a worker (nothing changed): when nothing is old
+    enough it only writes the line to the journal; otherwise it is an operation
+    of the queue ("Emptying old items from the Trash", kind EmptyTrash, quiet: no
+    toast, no failure message, the row leaves the list when it ends), and its
+    steps run on a worker thread through the core.
+  - **What the core removes** (`atlas_explorer_core::trash`; `now` and the dates are
+    local wall-clock seconds, a `.trashinfo` writes no zone, so tests use a fake
+    clock): the trash folders KIO knows: the home Trash, and for each mounted
+    volume `<mount>/.Trash/<uid>` (the administrator's `.Trash` a real folder
+    with the sticky bit) or `<mount>/.Trash-<uid>`, each a real folder (not a
+    link) owned by the user with mode 0700; not on the home Trash's own file
+    system (KIO uses the home Trash there) and not on what KIO calls pseudo file
+    systems (`KMountPoint::isPseudoFs`: proc, sysfs, **tmpfs**, FUSE other than
+    encrypted ones, ...) or on a network file system. An item goes when its
+    `.trashinfo` can be read (a regular file, 64 KiB at most, opened without
+    following a link), has the `[Trash Info]` group, a `Path` and a `DeletionDate`
+    of the exact form `YYYY-MM-DDThh:mm:ss`, and the date is more than N days before now. A
+    `.trashinfo` that does not parse, an item with no `.trashinfo`, a
+    `.trashinfo` with no item and an item from the future are left alone (the
+    first three are counted as "left alone" in the journal). A link in the
+    Trash is removed as a link; a folder with `remove_dir_all` (which never
+    follows links); a trash folder whose `files` or `info` is a link is not
+    entered. The folder's line in `directorysizes` goes with it. The item is
+    removed first, then its `.trashinfo`, so a failed removal leaves the item
+    listed (and it is tried again at the next run). The journal gets one line
+    per run, counts only, never names: "trash auto-empty: removed 6 items older
+    than 30 days (2 trash folders looked at, 7 newer kept, 4 left alone)".
+
 ### No data loss
 
 What KIO 6.30 already does (read in `src/kioworkers/file/file_unix.cpp`):
@@ -1315,6 +1392,9 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Archive busy, not running, or a job it runs fails | The popover row says why in Archive's words (or "Archive is busy, try again when a job finishes."); nothing is retried |
 | An archive KIO can't read, or a zip that needs a password | "This archive couldn't be read…" or "\"a.zip\" needs a password, which Files can't enter."; nothing is extracted |
 | An archive with an entry that would leave the folder | The whole extraction is refused, in a dialog, before anything is written |
+| An item of the Trash has no (absolute) original place | Restore leaves it and says so; it can be dragged out |
+| A folder the Trash item came from is gone | Restore asks whether to create it; Cancel changes nothing |
+| An old Trash item can't be removed (a folder with files of another user) | Counted, left listed, tried again at the next run; the journal line says how many |
 
 Logging: `telamon-framework-ui` logging to the journal as `telamon-explorer` and
 `telamon-explorer-indexd`: every operation's start, end, error and recovery;

@@ -66,6 +66,9 @@ TelamonWindow {
     readonly property var selected: view ? view.selectedUrls : []
     readonly property bool hasSelection: selected.length > 0
     readonly property bool canWrite: view ? view.folder.canWrite : false
+    // The folder shown is the Trash (or a folder in it), and whether it is the top of the Trash.
+    readonly property bool inTrash: view ? view.folder.inTrash : false
+    readonly property bool inTrashTop: view ? view.folder.trashTop : false
     // {files, folders, bytes} of the selection, for the status line.
     readonly property var selectionStats: {
         if (!view) {
@@ -514,6 +517,97 @@ TelamonWindow {
         defaultButton: "reject"
         focusReject: true
         onAccepted: fileActions.emptyTrash()
+    }
+
+    // Restore found folders that are gone: they are made again only if the user says so.
+    ConfirmDialog {
+        id: restoreDialog
+        property bool answered: false
+        acceptText: qsTr("Create and Restore")
+        rejectText: qsTr("Cancel")
+        defaultButton: "reject"
+        focusReject: true
+        onAccepted: {
+            answered = true;
+            fileActions.confirmRestore();
+        }
+        onClosed: {
+            if (!answered) {
+                fileActions.cancelRestore();
+            }
+            answered = false;
+        }
+    }
+    Connections {
+        target: fileActions
+        function onRestoreAsk(title, text) {
+            restoreDialog.title = title;
+            restoreDialog.text = text;
+            restoreDialog.answered = false;
+            restoreDialog.open();
+        }
+    }
+
+    // "Empty items older than N days": turning it on (or lowering the days so
+    // that something goes now) asks first. Cancel is the default.
+    ConfirmDialog {
+        id: autoEmptyDialog
+        property bool answered: false
+        title: qsTr("Empty Old Trash Items Automatically?")
+        acceptText: qsTr("Turn On")
+        rejectText: qsTr("Cancel")
+        destructive: true
+        defaultButton: "reject"
+        focusReject: true
+        onAccepted: {
+            answered = true;
+            TrashLogic.confirm();
+        }
+        onClosed: {
+            if (!answered) {
+                TrashLogic.cancel();
+            }
+            answered = false;
+        }
+    }
+    Connections {
+        target: TrashLogic
+        function onConfirmRequested(text) {
+            autoEmptyDialog.text = text;
+            autoEmptyDialog.answered = false;
+            autoEmptyDialog.open();
+        }
+        function onEmptyOldRequested(days) {
+            fileActions.emptyOldTrash(days);
+        }
+    }
+
+    // The Trash setting, for now (the Settings window comes in a later wave).
+    function openTrashSettings() {
+        trashSettingsDialog.open();
+    }
+    TelamonDialog {
+        id: trashSettingsDialog
+        title: qsTr("Trash")
+        preferredWidth: Kirigami.Units.gridUnit * 30
+        footerContent: [
+            SecondaryButton {
+                text: qsTr("Close")
+                onClicked: trashSettingsDialog.close()
+            }
+        ]
+        TrashAutoEmpty {
+            Layout.fillWidth: true
+        }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            text: qsTr("Files deletes what has been in the Trash for longer than that, for good, when it starts and once a day while it is open. Newer items are never touched.")
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeBody
+            color: TelamonStyle.textMuted
+        }
     }
 
     // ---- Address ----
@@ -1000,6 +1094,7 @@ TelamonWindow {
         } else {
             addTab(StandardPlaces.place("homepage"), {});
         }
+        TrashLogic.begin();
     }
 
     // The keys. Those that mean something to a text field are off while the
@@ -1010,8 +1105,9 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+V"; enabled: !root.typing && root.canWrite && !root.searching; onActivated: fileActions.paste() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !root.typing; onActivated: fileActions.redo() }
-    Shortcut { sequence: "Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.trash(root.selected) }
-    Shortcut { sequence: "Shift+Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.deleteForGood(root.selected) }
+    // In the Trash there is nothing to trash: Delete deletes (after asking).
+    Shortcut { sequence: "Delete"; enabled: !root.typing && root.hasSelection && (root.canWrite || root.inTrash); onActivated: root.inTrash ? fileActions.deleteForGood(root.selected) : fileActions.trash(root.selected) }
+    Shortcut { sequence: "Shift+Delete"; enabled: !root.typing && root.hasSelection && (root.canWrite || root.inTrash); onActivated: fileActions.deleteForGood(root.selected) }
     Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching && !quickLook.opened; onActivated: fileActions.newFolder() }
     Shortcut { sequence: "Ctrl+H"; enabled: !root.typing; onActivated: root.toggleHidden() }
     Shortcut { sequence: "Shift+F4"; enabled: !quickLook.opened; onActivated: fileActions.openTerminal() }
@@ -1436,7 +1532,38 @@ TelamonWindow {
                     focusable: true
                     onClicked: fileActions.extractViewed()
                 }
+                // In the Trash: put the items back, delete them for good, or empty it.
                 ToolbarButton {
+                    visible: root.inTrash
+                    symbol: Symbols.RestoreFromTrash
+                    text: qsTr("Restore")
+                    toolTipText: qsTr("Restore to Where It Was")
+                    display: T.AbstractButton.TextBesideIcon
+                    enabled: root.hasSelection && root.inTrashTop
+                    focusable: true
+                    onClicked: fileActions.restore(root.selected)
+                }
+                TelamonButton {
+                    visible: root.inTrash
+                    variant: TelamonButton.Destructive
+                    symbol: Symbols.DeleteForever
+                    text: qsTr("Empty Trash")
+                    enabled: PlacesLogic.trashCount > 0
+                    focusPolicy: Qt.StrongFocus
+                    onClicked: PlacesLogic.requestEmptyTrash()
+                }
+                ToolbarButton {
+                    visible: root.inTrash
+                    symbol: Symbols.Delete
+                    text: qsTr("Delete")
+                    toolTipText: qsTr("Delete for Good")
+                    shortcutText: "Delete"
+                    enabled: root.hasSelection
+                    focusable: true
+                    onClicked: fileActions.deleteForGood(root.selected)
+                }
+                ToolbarButton {
+                    visible: !root.inTrash
                     symbol: Symbols.CreateNewFolder
                     text: qsTr("New Folder")
                     shortcutText: "Ctrl+Shift+N"
@@ -1461,6 +1588,7 @@ TelamonWindow {
                     onClicked: fileActions.copy(root.selected, false)
                 }
                 ToolbarButton {
+                    visible: !root.inTrash
                     symbol: Symbols.ContentPaste
                     text: qsTr("Paste")
                     shortcutText: "Ctrl+V"
@@ -1469,6 +1597,7 @@ TelamonWindow {
                     onClicked: fileActions.paste()
                 }
                 ToolbarButton {
+                    visible: !root.inTrash
                     symbol: Symbols.DriveFileRenameOutline
                     text: qsTr("Rename")
                     shortcutText: "F2"
@@ -1477,6 +1606,7 @@ TelamonWindow {
                     onClicked: fileActions.rename(root.selected)
                 }
                 ToolbarButton {
+                    visible: !root.inTrash
                     symbol: Symbols.Delete
                     text: qsTr("Move to Trash")
                     shortcutText: "Delete"

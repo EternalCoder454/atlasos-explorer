@@ -265,19 +265,17 @@ pub fn trash_tip(count: usize) -> String {
 }
 
 /// The question Empty Trash asks: it names how many items and how big they
-/// are (`size` is already written as people read it, "4.2 MiB"; empty when
+/// are (`size` is already written as people read it, "4.3 GiB"; empty when
 /// it could not be worked out).
 pub fn empty_trash_text(count: usize, size: &str) -> String {
     let what = if count == 0 {
-        String::from("everything")
+        String::from("everything in the Trash")
     } else if size.is_empty() {
-        format!("all {}", items(count))
-    } else if count == 1 {
-        format!("the item ({size})")
+        items(count)
     } else {
-        format!("all {count} items ({size})")
+        format!("{} ({size})", items(count))
     };
-    format!("Permanently delete {what} in the Trash? This can't be undone.")
+    format!("Delete {what} for good? This can't be undone.")
 }
 
 /// What is said when a drive has been unmounted: a drive that can be taken
@@ -496,13 +494,18 @@ mod tests {
 
     #[test]
     fn empty_trash_names_the_size() {
-        let t = empty_trash_text(12, "4.2 MiB");
-        assert!(t.contains("12 items") && t.contains("4.2 MiB") && t.contains("can't be undone"));
-        assert!(empty_trash_text(1, "3 B").contains("the item (3 B)"));
+        assert_eq!(
+            empty_trash_text(120, "4.3 GiB"),
+            "Delete 120 items (4.3 GiB) for good? This can't be undone."
+        );
+        assert_eq!(
+            empty_trash_text(1, "3 B"),
+            "Delete 1 item (3 B) for good? This can't be undone."
+        );
         // Without a size the count still says how much.
         let t = empty_trash_text(5, "");
-        assert!(t.contains("all 5 items") && !t.contains("()"));
-        assert!(empty_trash_text(0, "").contains("everything"));
+        assert!(t.starts_with("Delete 5 items for good?") && !t.contains("()"));
+        assert!(empty_trash_text(0, "").contains("everything in the Trash"));
     }
 
     #[test]

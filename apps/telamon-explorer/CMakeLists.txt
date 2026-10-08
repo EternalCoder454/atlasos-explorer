@@ -115,6 +115,8 @@ qt_add_qml_module(telamon-explorer-app
         qml/HomeTile.qml
         qml/NetworkPage.qml
         qml/ConnectDialog.qml
+        qml/TrashBar.qml
+        qml/TrashAutoEmpty.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
@@ -137,6 +139,7 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/HomeLogic.h cpp/kio/HomeLogic.cpp
         cpp/kio/ServerLogic.h cpp/kio/ServerLogic.cpp
         cpp/kio/NetworkModel.h cpp/kio/NetworkModel.cpp
+        cpp/kio/TrashLogic.h cpp/kio/TrashLogic.cpp
         cpp/kio/RustBridge.h
 )
 

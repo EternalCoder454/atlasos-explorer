@@ -29,6 +29,9 @@ ContextMenu {
     // Thumbnails and previews of files on a server download them, so they are off until asked for.
     ContextMenuItem { text: qsTr("Preview Files on Servers"); checkable: true; checked: ServerLogic.previewRemote; onTriggered: menu.win.setPreviewRemote(!ServerLogic.previewRemote) }
     ContextMenuSeparator {}
+    // Until the Settings window: "Empty items older than N days" is here and in the Trash's header.
+    ContextMenuItem { text: qsTr("Empty Old Trash Items…"); onTriggered: menu.win.openTrashSettings() }
+    ContextMenuSeparator {}
     ContextMenuItem { text: qsTr("Zoom In"); shortcutText: "Ctrl++"; onTriggered: menu.win.zoom(1) }
     ContextMenuItem { text: qsTr("Zoom Out"); shortcutText: "Ctrl+-"; onTriggered: menu.win.zoom(-1) }
     ContextMenuItem { text: qsTr("Reset Zoom"); shortcutText: "Ctrl+0"; onTriggered: menu.win.zoom(0) }

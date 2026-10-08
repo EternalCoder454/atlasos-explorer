@@ -23,6 +23,10 @@ struct TelamonSortRow {
     int64_t mtime;
     int64_t ctime;
     int64_t atime;
+    // The Trash's columns: the sort key of the folder an item came from, and when it was deleted.
+    const uint8_t *origin;
+    size_t origin_len;
+    int64_t deleted;
     bool is_dir;
 };
 size_t telamon_display_name(const uint8_t *name, size_t len, uint8_t *out, size_t cap);
@@ -88,6 +92,21 @@ size_t telamon_archive_parent(const uint8_t *url, size_t len, uint8_t *out, size
 size_t telamon_menu_free_name(const uint8_t *wanted, size_t wantedLen, bool (*exists)(void *, const uint8_t *, size_t), void *ctx, uint8_t *out, size_t cap);
 int32_t telamon_menu_hidden(bool add, const uint8_t *content, size_t contentLen, const uint8_t *names, size_t namesLen, uint8_t *out, size_t cap,
                           size_t *textLen);
+
+// ---- The Trash (src/trash_ffi.rs) ----
+struct TelamonTrashReport {
+    size_t folders;
+    size_t removed;
+    size_t kept;
+    size_t skipped;
+    size_t failed;
+};
+bool telamon_trash_purge(uint32_t days, int64_t nowLocal, uint32_t mode, const uint8_t *dataHome, size_t len, TelamonTrashReport *out);
+size_t telamon_trash_log_line(const TelamonTrashReport *report, uint32_t days, bool applied, uint8_t *out, size_t cap);
+uint32_t telamon_trash_clamp_days(int64_t days);
+uint32_t telamon_trash_limit(uint32_t which);
+int64_t telamon_trash_parse_date(const uint8_t *text, size_t len);
+size_t telamon_trash_text(uint32_t which, const uint8_t *a, size_t aLen, uint64_t n, uint8_t *out, size_t cap);
 
 // ---- Batch Rename (src/batch_ffi.rs) ----
 struct TelamonBatchSpec {
@@ -543,6 +562,7 @@ constexpr uint32_t Terminal = 1u << 12;
 constexpr uint32_t CanUndo = 1u << 13;
 constexpr uint32_t CanRedo = 1u << 14;
 constexpr uint32_t ArchiveItems = 1u << 15;
+constexpr uint32_t TrashTop = 1u << 16;
 }
 
 // The entries a menu has and whether each is enabled: key -> enabled. `items`: the menu of items; else the background's.
@@ -561,6 +581,25 @@ inline QList<QPair<QString, bool>> rustMenuState(bool items, size_t count, size_
         out.append({line.chopped(1), line.endsWith(QLatin1Char('+'))});
     }
     return out;
+}
+
+// ---- The Trash ----
+
+// A text (see telamon_trash_text for `which`).
+inline QString rustTrashText(uint32_t which, const QString &a = QString(), quint64 n = 0)
+{
+    const QByteArray ab = a.toUtf8();
+    QByteArray buf(512, 0);
+    auto call = [&] {
+        return telamon_trash_text(which, reinterpret_cast<const uint8_t *>(ab.constData()), size_t(ab.size()), n, reinterpret_cast<uint8_t *>(buf.data()),
+                                  size_t(buf.size()));
+    };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
 }
 
 // A text of "New" (see telamon_menu_text for `which`).

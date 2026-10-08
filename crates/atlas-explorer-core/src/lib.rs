@@ -24,6 +24,7 @@ pub mod search;
 pub mod servers;
 pub mod sort;
 pub mod tabs;
+pub mod trash;
 pub mod undo;
 pub mod views;
 pub mod zoom;

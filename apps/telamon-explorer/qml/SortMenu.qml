@@ -45,6 +45,25 @@ ContextMenu {
             onTriggered: menu.win.view.folder.sortColumn = modelData.column
         }
     }
+    // The Trash's own columns.
+    ContextMenuItem {
+        text: qsTr("Original Location")
+        visible: menu.win.view?.folder.trashTop ?? false
+        enabled: menu.win.view?.folder.trashTop ?? false
+        radio: true
+        checkable: true
+        checked: menu.win.view?.folder.sortColumn === FolderModel.OriginalLocation
+        onTriggered: menu.win.view.folder.sortColumn = FolderModel.OriginalLocation
+    }
+    ContextMenuItem {
+        text: qsTr("Date Deleted")
+        visible: menu.win.view?.folder.trashTop ?? false
+        enabled: menu.win.view?.folder.trashTop ?? false
+        radio: true
+        checkable: true
+        checked: menu.win.view?.folder.sortColumn === FolderModel.DateDeleted
+        onTriggered: menu.win.view.folder.sortColumn = FolderModel.DateDeleted
+    }
     ContextMenuSeparator {}
     ContextMenuItem { text: qsTr("Ascending"); enabled: !menu.win.searching || menu.win.view?.folder.sortColumn !== FolderModel.Relevance; radio: true; checkable: true; checked: !menu.win.view?.folder.sortDescending; onTriggered: menu.win.view.folder.sortDescending = false }
     ContextMenuItem { text: qsTr("Descending"); enabled: !menu.win.searching || menu.win.view?.folder.sortColumn !== FolderModel.Relevance; radio: true; checkable: true; checked: menu.win.view?.folder.sortDescending ?? false; onTriggered: menu.win.view.folder.sortDescending = true }

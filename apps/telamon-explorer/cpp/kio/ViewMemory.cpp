@@ -53,7 +53,8 @@ ViewMemory::ViewMemory(QObject *parent)
     m_same = v.readEntry("SameViewForAll", false);
     m_mode = modeName(uint32_t(qMax(0, modeCode(v.readEntry("Mode", QStringLiteral("details"))))));
     m_sort = v.readEntry("SortColumn", 0);
-    if (m_sort < 0 || m_sort > 5) {
+    // The core's columns 0 to 5, and the Trash's 7 and 8 (6 is search relevance, never kept).
+    if (m_sort < 0 || m_sort > 8 || m_sort == 6) {
         m_sort = 0;
     }
     m_desc = v.readEntry("SortDescending", false);
@@ -140,6 +141,10 @@ void ViewMemory::remember(const QUrl &folder, const QString &mode, int sort, boo
     const int code = modeCode(mode);
     TelamonViewPrefs p{uint32_t(qMax(0, code)), uint32_t(qMax(0, sort)), descending, int32_t(icon), uint32_t(qMax(0, group))};
     if (m_same) {
+        // The Trash's own columns (7 and 8) are no other folder's: the shared view keeps its sort.
+        if (p.sort >= 7) {
+            return;
+        }
         // The core's limits for what is kept, the same as for a folder's.
         m_mode = modeName(p.mode);
         m_sort = p.sort > 5 ? 0 : int(p.sort);
