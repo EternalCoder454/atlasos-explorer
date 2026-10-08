@@ -746,7 +746,7 @@ TelamonWindow {
     function openSettings(page) {
         // Made the first time it is asked for: its pages hold a hundred controls.
         settingsLoader.active = true;
-        settingsLoader.item.showPage(page);
+        (settingsLoader.item as SettingsDialog).showPage(page);
     }
     Loader {
         id: settingsLoader
