@@ -60,7 +60,7 @@ pub fn measure(
             continue;
         };
         tick += 1;
-        if tick % 500 == 0 {
+        if tick.is_multiple_of(500) {
             progress(&t);
         }
         if md.is_dir() {

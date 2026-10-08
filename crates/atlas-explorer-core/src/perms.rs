@@ -202,7 +202,7 @@ mod tests {
     fn differences_and_edits() {
         assert_eq!(difference(0o644, 0o664), (0o020, 0));
         assert_eq!(difference(0o755, 0o700), (0, 0o055));
-        assert_eq!(difference(0o644, 0o755), (0o111, 0o000 | 0o000));
+        assert_eq!(difference(0o644, 0o755), (0o111, 0));
         assert_eq!(edited(0o644, 0o020, 0), 0o664);
         assert_eq!(edited(0o755, 0, 0o055), 0o700);
         // setuid is neither turned on nor off by an edit

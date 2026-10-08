@@ -294,7 +294,7 @@ fn md5_block(s: &mut [u32; 4], block: &[u8]) {
         ]);
     }
     let [mut a, mut b, mut c, mut d] = *s;
-    for i in 0..64 {
+    for (i, &shift) in MD5_S.iter().enumerate() {
         let (f, g) = match i / 16 {
             0 => ((b & c) | (!b & d), i),
             1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
@@ -305,7 +305,7 @@ fn md5_block(s: &mut [u32; 4], block: &[u8]) {
         a = d;
         d = c;
         c = b;
-        b = b.wrapping_add(f2.rotate_left(MD5_S[i]));
+        b = b.wrapping_add(f2.rotate_left(shift));
     }
     s[0] = s[0].wrapping_add(a);
     s[1] = s[1].wrapping_add(b);
@@ -537,10 +537,10 @@ pub fn parse_expected(text: &str) -> Option<(Alg, String)> {
         .filter(|c| !c.is_whitespace() && *c != ':')
         .collect();
     for cand in [first.replace(':', ""), compact] {
-        if is_hex(&cand) {
-            if let Some(alg) = Alg::of_hex_len(cand.len()) {
-                return Some((alg, cand.to_ascii_lowercase()));
-            }
+        if is_hex(&cand)
+            && let Some(alg) = Alg::of_hex_len(cand.len())
+        {
+            return Some((alg, cand.to_ascii_lowercase()));
         }
     }
     None

@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(read(&a, Key::Tags).unwrap(), "Red");
         assert_eq!(read(&b, Key::Tags).unwrap(), "Work,Red");
         // Already as asked: no change is written down.
-        let again = run_edit(&[a.clone()], &tag_edit(&["red"], &[]), &no());
+        let again = run_edit(std::slice::from_ref(&a), &tag_edit(&["red"], &[]), &no());
         assert!(again.changes.is_empty());
         // Undo, then redo.
         let back = run_revert(&out.changes, true, &no());
@@ -513,7 +513,7 @@ mod tests {
         }
         let a = dir.join("a");
         fs::write(&a, b"1").unwrap();
-        let out = run_edit(&[a.clone()], &tag_edit(&["Red"], &[]), &no());
+        let out = run_edit(std::slice::from_ref(&a), &tag_edit(&["Red"], &[]), &no());
         xattr::set(&a, xattr::TAGS, b"Red,Blue").unwrap();
         let back = run_revert(&out.changes, true, &no());
         assert_eq!(back.problem, Some(Problem::Changed));
@@ -530,7 +530,7 @@ mod tests {
         let a = dir.join("a");
         fs::write(&a, b"1").unwrap();
         xattr::set(&a, xattr::TAGS, b"Re\xffd").unwrap();
-        let out = run_edit(&[a.clone()], &tag_edit(&["Blue"], &[]), &no());
+        let out = run_edit(std::slice::from_ref(&a), &tag_edit(&["Blue"], &[]), &no());
         assert_eq!(out.problem, Some(Problem::Foreign));
         assert_eq!(xattr::get(&a, xattr::TAGS).unwrap().unwrap(), b"Re\xffd");
         fs::remove_dir_all(&dir).unwrap();
@@ -544,11 +544,11 @@ mod tests {
         }
         let a = dir.join("a");
         fs::write(&a, b"1").unwrap();
-        let out = run_edit(&[a.clone()], &Edit::Rating(8), &no());
+        let out = run_edit(std::slice::from_ref(&a), &Edit::Rating(8), &no());
         assert_eq!(read(&a, Key::Rating).unwrap(), "8");
         // The attribute is the text Baloo writes.
         assert_eq!(xattr::get(&a, xattr::RATING).unwrap().unwrap(), b"8");
-        let clear = run_edit(&[a.clone()], &Edit::Rating(0), &no());
+        let clear = run_edit(std::slice::from_ref(&a), &Edit::Rating(0), &no());
         assert_eq!(clear.changes.len(), 1);
         assert!(xattr::get(&a, xattr::RATING).unwrap().is_none());
         run_revert(&clear.changes, true, &no());
@@ -564,7 +564,7 @@ mod tests {
         fs::write(&a, b"1").unwrap();
         write_mode(&a, 0o644).unwrap();
         let out = run_edit(
-            &[a.clone()],
+            std::slice::from_ref(&a),
             &Edit::Mode {
                 set: 0o020,
                 clear: 0o004,
@@ -580,7 +580,7 @@ mod tests {
         let l = dir.join("l");
         std::os::unix::fs::symlink(&a, &l).unwrap();
         let out = run_edit(
-            &[l],
+            std::slice::from_ref(&l),
             &Edit::Mode {
                 set: 0o001,
                 clear: 0,
