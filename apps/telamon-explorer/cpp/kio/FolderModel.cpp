@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QLocale>
 #include <QSet>
+#include <QHostAddress>
 #include <QTcpSocket>
 
 #include <sys/stat.h>
@@ -52,6 +53,9 @@ bool unreachableCode(int code)
 QString pageOf(const QUrl &url)
 {
     const QString s = url.scheme().toLower();
+    if (url.path().size() > 1) {
+        return QString();
+    }
     return s == QLatin1String("home") || s == QLatin1String("network") ? s : QString();
 }
 
@@ -460,6 +464,12 @@ void FolderModel::startProbe(const QUrl &url)
     stopProbe();
     const int port = url.port(ServerLogic::defaultPort(url.scheme()));
     if (url.host().isEmpty() || !ServerLogic::isServerScheme(url.scheme()) || port <= 0) {
+        return;
+    }
+    // SFTP and fish go through ssh's own configuration (aliases, another
+    // port, a jump host), which a direct connection knows nothing of: they are
+    // tested only when the URL names a port and an address, which ssh takes as given.
+    if ((url.scheme() == QLatin1String("sftp") || url.scheme() == QLatin1String("fish")) && (url.port() <= 0 || QHostAddress(url.host()).isNull())) {
         return;
     }
     // With a proxy set up, KIO reaches the server another way than a direct

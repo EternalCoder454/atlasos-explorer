@@ -1365,8 +1365,8 @@ TelamonWindow {
                             if (root.search) {
                                 root.search.clear();
                             }
-                            if (root.view) {
-                                root.view.forceActiveFocus();
+                            if (root.page) {
+                                root.page.focusContent();
                             }
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {

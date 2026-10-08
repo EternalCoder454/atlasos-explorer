@@ -47,11 +47,12 @@ TelamonDialog {
         if (p.server === undefined) {
             return;
         }
-        for (let i = 0; i < protocols.length; ++i) {
-            if (protocols[i].code === p.protocol) {
-                protocolBox.currentIndex = i;
-            }
+        // A server whose protocol KIO has no worker for can't be filled in.
+        const at = protocols.findIndex(x => x.code === p.protocol);
+        if (at < 0) {
+            return;
         }
+        protocolBox.currentIndex = at;
         serverField.text = p.server;
         folderField.text = p.folder;
         userField.text = p.user;

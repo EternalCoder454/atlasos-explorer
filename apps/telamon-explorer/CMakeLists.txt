@@ -9,7 +9,7 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX /usr CACHE PATH "" FORCE)
 endif()
 include(GNUInstallDirs)
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets DBus)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets DBus Network)
 qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
 # telamon-framework-ui's startup code (single instance, window activation)
@@ -142,7 +142,7 @@ qt_add_qml_module(telamon-explorer-app
 
 target_link_libraries(telamon-explorer-app PRIVATE
     telamon_explorer
-    Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets Qt6::DBus
+    Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets Qt6::DBus Qt6::Network
     KF6::DBusAddons KF6::WindowSystem KF6::GuiAddons
     KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::KIOFileWidgets
     KF6::Solid KF6::Service KF6::CoreAddons KF6::ConfigCore)

@@ -556,7 +556,7 @@ Explorer replaces Dolphin completely.
     reach the server. Check the address and that it is on.") with **Retry**.
     Once the server accepts the connection the test is over and only KIO's
     job is waited for, so a password prompt or a slow listing is never cut off
-    (Stop ends it). The test is skipped when a proxy is set in KIO's settings
+    (Stop ends it). The test is skipped when a proxy is set in KIO's settings, and for SFTP and fish unless the URL names a port and an address (ssh's own configuration may rename or redirect a host name)
     (`kioslaverc`), and for SMB only the 10 s limit is a verdict (the server may
     answer on another port or be named only through NetBIOS, which the SMB worker
     knows; what the worker itself reports shows the same page). KIO's own errors for the same causes

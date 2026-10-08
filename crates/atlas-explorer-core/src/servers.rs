@@ -319,8 +319,9 @@ pub fn build(
         url.push_str(&p.to_string());
     }
     if parts.is_empty() {
-        // SFTP with no folder opens the user's home folder; the others the top.
-        if protocol != Protocol::Sftp {
+        // SFTP with no folder at all opens the user's home folder; a folder
+        // that is only a slash is the server's top, as for the others.
+        if protocol != Protocol::Sftp || !folder.trim().is_empty() {
             url.push('/');
         }
     } else {
@@ -374,6 +375,10 @@ pub fn parse_url(url: &str) -> Option<Parts> {
     for seg in path.split('/').filter(|s| !s.is_empty()) {
         folder.push('/');
         folder.push_str(&decode(seg)?);
+    }
+    // A lone slash is the server's top, which for SFTP differs from no folder.
+    if folder.is_empty() && path.starts_with('/') {
+        folder.push('/');
     }
     let server = match host.port {
         Some(p) => format!("{}:{p}", host.host),
@@ -463,7 +468,9 @@ pub fn recent_label(url: &str) -> String {
                 s.push('@');
             }
             s.push_str(&p.server);
-            s.push_str(&p.folder);
+            if p.folder != "/" {
+                s.push_str(&p.folder);
+            }
             s
         }
         None => String::new(),
@@ -515,6 +522,16 @@ mod tests {
             b(Protocol::Nfs, "nas", "/export/home", "").unwrap(),
             "nfs://nas/export/home"
         );
+    }
+
+    #[test]
+    fn sftp_slash_is_the_top_and_nothing_is_the_home_folder() {
+        assert_eq!(b(Protocol::Sftp, "h", "/", "").unwrap(), "sftp://h/");
+        assert_eq!(b(Protocol::Sftp, "h", "a/..", "").unwrap(), "sftp://h/");
+        assert_eq!(b(Protocol::Sftp, "h", "  ", "").unwrap(), "sftp://h");
+        assert_eq!(clean_recent("sftp://h/").as_deref(), Some("sftp://h/"));
+        assert_eq!(clean_recent("sftp://h").as_deref(), Some("sftp://h"));
+        assert_eq!(b(Protocol::Sftp, "h", "", "").unwrap(), "sftp://h");
     }
 
     #[test]
@@ -760,7 +777,7 @@ mod tests {
         // an address that climbs is kept as the folder it comes to
         assert_eq!(
             clean_recent("sftp://h/..%2f..").as_deref(),
-            Some("sftp://h")
+            Some("sftp://h/")
         );
         assert!(parse_url("sftp://h/x\n").is_none());
         assert!(parse_url("sftp://h/x\ty").is_none());
@@ -778,7 +795,7 @@ mod tests {
             assert!(r.push(&format!("sftp://h{i}/")));
         }
         assert_eq!(r.urls().len(), MAX_RECENT);
-        assert_eq!(r.urls()[0], format!("sftp://h{}", MAX_RECENT + 4));
+        assert_eq!(r.urls()[0], format!("sftp://h{}/", MAX_RECENT + 4));
         // the same server again moves to the front, once
         assert!(r.push("sftp://h7"));
         assert_eq!(r.urls()[0], "sftp://h7");

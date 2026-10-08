@@ -211,6 +211,13 @@ FocusScope {
         }
     }
 
+    // Leaving a page for a folder: the folder has the keyboard.
+    onPageKindChanged: {
+        if (pageKind.length === 0 && visible && page.activeFocus === false && view.visible) {
+            Qt.callLater(() => view.forceActiveFocus());
+        }
+    }
+
     Loader {
         id: pageLoader
         anchors.fill: parent

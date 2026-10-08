@@ -67,7 +67,8 @@ HomeLogic::HomeLogic(QObject *parent)
     : QObject(parent)
 {
     // A settings file can hold anything: the core brings it into its limits.
-    m_counts = homeGroup().readEntry("Frequent", QStringList()).join(QLatin1Char('\n')).toUtf8();
+    // Read through the core, which brings it into its limits and its form.
+    m_counts = rustBytes2(telamon_home_forget, homeGroup().readEntry("Frequent", QStringList()).join(QLatin1Char('\n')).toUtf8(), QByteArray());
     m_timer.setSingleShot(true);
     m_timer.setInterval(800);
     connect(&m_timer, &QTimer::timeout, this, &HomeLogic::flush);
