@@ -81,4 +81,5 @@ private:
     QElapsedTimer m_cacheAge;
     // Rows of one remote listing in flight, to stop a stale one.
     QPointer<QObject> m_remote;
+    std::function<void(const QString &)> m_remoteStop;
 };

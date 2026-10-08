@@ -126,7 +126,8 @@ FocusScope {
         }
         function takeCompletion(i) {
             const t = priv.completions[i];
-            if (t === undefined) {
+            // A list made for text that has since changed is not taken.
+            if (t === undefined || priv.completionFor !== field.text) {
                 return false;
             }
             field.text = t;
@@ -428,7 +429,8 @@ FocusScope {
             delegate: ContextMenuItem {
                 required property var modelData
                 readonly property bool info: modelData.info !== undefined
-                text: info ? modelData.info : modelData.label
+                // A menu row reads "&" as a mnemonic marker: names say "&&".
+                text: (info ? modelData.info : modelData.label).replace(/&/g, "&&")
                 enabled: !info
                 onTriggered: if (!info) priv.open(modelData.url)
             }
@@ -444,7 +446,7 @@ FocusScope {
             model: priv.firstShown
             delegate: ContextMenuItem {
                 required property int index
-                text: bar.segments[priv.firstShown - 1 - index]?.label ?? ""
+                text: (bar.segments[priv.firstShown - 1 - index]?.label ?? "").replace(/&/g, "&&")
                 onTriggered: priv.open(bar.segments[priv.firstShown - 1 - index].url)
             }
             onObjectAdded: (index, object) => hiddenMenu.insertItem(index, object)
@@ -462,7 +464,7 @@ FocusScope {
         Keys.onEscapePressed: bar.endEdit()
         onAccepted: {
             // An arrow-chosen completion is what Enter goes to.
-            if (priv.chosen >= 0 && priv.completions[priv.chosen] !== undefined) {
+            if (priv.chosen >= 0 && priv.completions[priv.chosen] !== undefined && priv.completionFor === field.text) {
                 field.text = priv.completions[priv.chosen];
             }
             priv.completions = [];

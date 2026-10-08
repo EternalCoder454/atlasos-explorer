@@ -333,8 +333,8 @@ pub unsafe extern "C" fn telamon_rank_names(
     chosen.len()
 }
 
-/// The address bar's text after a completion is taken (see
-/// `address::completion_text`). Returns the length of the output; more than
+/// The address bar's text after a completion is taken, `dir` being the folder
+/// listed (see `address::completion_text`). Returns the length of the output; more than
 /// `cap` means it did not fit.
 ///
 /// # Safety
@@ -346,17 +346,20 @@ pub unsafe extern "C" fn telamon_completion_text(
     len: usize,
     name: *const u8,
     name_len: usize,
+    dir: *const u8,
+    dir_len: usize,
     out: *mut u8,
     cap: usize,
 ) -> usize {
     // SAFETY: forwarded from this function's contract.
-    let (typed, name) = unsafe {
+    let (typed, name, dir) = unsafe {
         (
             String::from_utf8_lossy(bytes(typed, len)).into_owned(),
             String::from_utf8_lossy(bytes(name, name_len)).into_owned(),
+            String::from_utf8_lossy(bytes(dir, dir_len)).into_owned(),
         )
     };
-    let text = address::completion_text(&typed, &name);
+    let text = address::completion_text(&typed, &name, &dir);
     // SAFETY: `out` as promised above.
     unsafe { put(text.as_bytes(), out, cap) }
 }
@@ -592,7 +595,7 @@ mod tests {
         assert_eq!(r, 1);
 
         // Records: flag byte, name, NUL.
-        let entries = b"\x01Docs\0\x00docs.txt\0\x01Downloads\0\x03.hid\0\x01a\nb\0";
+        let entries = b"\x01Docs\0\x04docs.txt\0\x01Downloads\0\x03.hid\0\x01a\nb\0";
         let mut idx = [0u32; 8];
         let k = unsafe {
             telamon_rank_names(
@@ -660,6 +663,22 @@ mod tests {
                 t.len(),
                 name.as_ptr(),
                 name.len(),
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+        assert_eq!(&buf[..n], b"smb://nas/a%20b/");
+        // A bare name in a server's folder starts from the folder.
+        let n = unsafe {
+            telamon_completion_text(
+                b"s".as_ptr(),
+                1,
+                name.as_ptr(),
+                name.len(),
+                b"smb://nas/".as_ptr(),
+                10,
                 buf.as_mut_ptr(),
                 buf.len(),
             )

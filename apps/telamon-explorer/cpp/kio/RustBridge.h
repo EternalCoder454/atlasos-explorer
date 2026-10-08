@@ -33,7 +33,8 @@ int telamon_split_for_completion(const uint8_t *text, size_t len, const uint8_t 
                                uint8_t *out, size_t cap, size_t *textLen);
 size_t telamon_rank_names(uint32_t mode, const uint8_t *prefix, size_t prefixLen, const uint8_t *entries, size_t entriesLen, bool showHidden, uint32_t *out,
                         size_t cap);
-size_t telamon_completion_text(const uint8_t *typed, size_t len, const uint8_t *name, size_t nameLen, uint8_t *out, size_t cap);
+size_t telamon_completion_text(const uint8_t *typed, size_t len, const uint8_t *name, size_t nameLen, const uint8_t *dir, size_t dirLen, uint8_t *out,
+                             size_t cap);
 size_t telamon_location_limit(uint32_t which);
 int64_t telamon_tabs_after_close(size_t len, size_t current, size_t closed);
 size_t telamon_tabs_after_move(size_t len, size_t current, size_t from, size_t to);
@@ -174,8 +175,8 @@ inline RustSplit rustSplitForCompletion(const QString &text, const QString &curr
 }
 
 // Which of a folder's names to offer and in what order (mode 0: completion of
-// `prefix`; mode 1: the subfolder menu). `records` is one flag byte (1 folder,
-// 2 hidden), the name, a 0 byte per name; the result is positions in it.
+// `prefix`; mode 1: the subfolder menu). `records` is one flag byte (never 0:
+// 1 folder, 2 hidden), the name, a 0 byte per name; the result is positions in it.
 inline QList<quint32> rustRankNames(uint32_t mode, const QString &prefix, const QByteArray &records, bool showHidden)
 {
     const QByteArray p = prefix.toUtf8();
@@ -193,13 +194,14 @@ inline QList<quint32> rustRankNames(uint32_t mode, const QString &prefix, const 
     return out;
 }
 
-inline QString rustCompletionText(const QString &typed, const QString &name)
+inline QString rustCompletionText(const QString &typed, const QString &name, const QString &dir)
 {
-    const QByteArray t = typed.toUtf8(), nm = name.toUtf8();
+    const QByteArray t = typed.toUtf8(), nm = name.toUtf8(), d = dir.toUtf8();
     QByteArray buf(512, 0);
     auto call = [&] {
         return telamon_completion_text(reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), reinterpret_cast<const uint8_t *>(nm.constData()),
-                                     size_t(nm.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+                                     size_t(nm.size()), reinterpret_cast<const uint8_t *>(d.constData()), size_t(d.size()),
+                                     reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
     };
     size_t n = call();
     if (n > size_t(buf.size())) {

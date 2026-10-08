@@ -173,19 +173,27 @@ pub fn rank_completions(prefix: &str, candidates: &[Candidate]) -> Vec<usize> {
 /// The address bar's text after a completion is taken: what was typed up to
 /// its last `/` (`~` and `trash:` count as ending in one), then `name` and a
 /// closing `/`. In a URL the name is percent-encoded, so a `%` or a space in
-/// it can't change the address.
-pub fn completion_text(typed: &str, name: &str) -> String {
+/// it can't change the address. `dir` is the folder being listed (as
+/// `split_for_completion` gave it): a name typed with no folder part inside a
+/// folder that isn't on this computer starts from it, since `parse` refuses
+/// relative names there.
+pub fn completion_text(typed: &str, name: &str, dir: &str) -> String {
     let scheme = url_scheme(typed);
+    let mut url_form = scheme.is_some();
     let base = match typed.rfind('/') {
         Some(i) => typed[..=i].to_string(),
         None if typed == "~" => "~/".to_string(),
         None => match scheme {
             Some(s) => format!("{s}:/"),
+            None if !dir.is_empty() && !dir.starts_with("file:") => {
+                url_form = true;
+                format!("{}/", dir.trim_end_matches('/'))
+            }
             None => String::new(),
         },
     };
     let mut out = base;
-    if scheme.is_some() {
+    if url_form {
         for &b in name.as_bytes() {
             if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
                 out.push(b as char);
@@ -330,25 +338,44 @@ mod tests {
 
     #[test]
     fn completion_replaces_the_last_part() {
-        assert_eq!(completion_text("ba", "bar"), "bar/");
-        assert_eq!(completion_text("", "bar"), "bar/");
-        assert_eq!(completion_text("~", "Documents"), "~/Documents/");
-        assert_eq!(completion_text("~/Do", "Documents"), "~/Documents/");
-        assert_eq!(completion_text("/usr/li", "lib"), "/usr/lib/");
-        assert_eq!(completion_text("../x", "xy z"), "../xy z/");
-        assert_eq!(completion_text("trash:", "a"), "trash:/a/");
-        assert_eq!(completion_text("trash:/", "a"), "trash:/a/");
+        assert_eq!(completion_text("ba", "bar", "file:///x"), "bar/");
+        assert_eq!(completion_text("", "bar", "file:///x"), "bar/");
+        assert_eq!(
+            completion_text("~", "Documents", "file:///x"),
+            "~/Documents/"
+        );
+        assert_eq!(
+            completion_text("~/Do", "Documents", "file:///x"),
+            "~/Documents/"
+        );
+        assert_eq!(completion_text("/usr/li", "lib", "file:///x"), "/usr/lib/");
+        assert_eq!(completion_text("../x", "xy z", "file:///x"), "../xy z/");
+        assert_eq!(completion_text("trash:", "a", "file:///x"), "trash:/a/");
+        assert_eq!(completion_text("trash:/", "a", "file:///x"), "trash:/a/");
+    }
+
+    #[test]
+    fn a_bare_name_in_a_remote_folder_starts_from_it() {
+        assert_eq!(
+            completion_text("sh", "my share", "smb://nas/"),
+            "smb://nas/my%20share/"
+        );
+        assert_eq!(completion_text("t", "a", "trash:/"), "trash:/a/");
+        assert_eq!(completion_text("t", "a", "file:///x"), "a/");
     }
 
     #[test]
     fn completion_in_a_url_is_encoded() {
         assert_eq!(
-            completion_text("smb://nas/sh", "my share"),
+            completion_text("smb://nas/sh", "my share", "file:///x"),
             "smb://nas/my%20share/"
         );
-        assert_eq!(completion_text("smb://nas/", "50%"), "smb://nas/50%25/");
         assert_eq!(
-            completion_text("file:///tmp/a", "\u{e9}t\u{e9}"),
+            completion_text("smb://nas/", "50%", "file:///x"),
+            "smb://nas/50%25/"
+        );
+        assert_eq!(
+            completion_text("file:///tmp/a", "\u{e9}t\u{e9}", "file:///x"),
             "file:///tmp/%C3%A9t%C3%A9/"
         );
     }

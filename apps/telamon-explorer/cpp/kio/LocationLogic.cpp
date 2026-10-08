@@ -36,6 +36,14 @@ QUrl childUrl(const QUrl &dir, const QString &name)
     return u;
 }
 
+// A name the core's records and a URL can't carry: a NUL ends a record, and a
+// replacement character is what a name that isn't valid UTF-8 became, so a URL
+// made from it would point nowhere.
+bool unusableName(const QString &name)
+{
+    return name.isEmpty() || name.contains(QChar(0)) || name.contains(QChar(0xFFFD));
+}
+
 bool hasHiddenChars(const QString &text)
 {
     for (const QChar c : text) {
@@ -118,6 +126,9 @@ void LocationLogic::list(const QUrl &folder, std::function<void(const Listing &)
                     break;
                 }
                 const QString name = e.fileName();
+                if (unusableName(name)) {
+                    continue;
+                }
                 char flags = IsDir;
                 if (e.isHidden() || name.startsWith(QLatin1Char('.'))) {
                     flags |= IsHidden;
@@ -141,6 +152,10 @@ void LocationLogic::listRemote(const QUrl &folder, std::function<void(const List
     // One server listing at a time: a newer request replaces the older.
     if (auto *old = qobject_cast<KJob *>(m_remote)) {
         old->kill(KJob::Quietly);
+        // Whoever asked for it is told, so a menu doesn't wait for ever.
+        if (m_remoteStop) {
+            m_remoteStop(tr("The list was interrupted by another request."));
+        }
     }
     KIO::ListJob *job = KIO::listDir(folder, KIO::HideProgressInfo, KIO::ListJob::ListFlag::IncludeHidden);
     m_remote = job;
@@ -155,10 +170,11 @@ void LocationLogic::listRemote(const QUrl &folder, std::function<void(const List
         listing->ok = error.isEmpty();
         done(*listing);
     };
+    m_remoteStop = finish;
     connect(job, &KIO::ListJob::entries, this, [listing, job, finish](KIO::Job *, const KIO::UDSEntryList &entries) {
         for (const KIO::UDSEntry &e : entries) {
             const QString name = e.stringValue(KIO::UDSEntry::UDS_NAME);
-            if (!e.isDir() || name == QLatin1String(".") || name == QLatin1String("..") || name.isEmpty()) {
+            if (!e.isDir() || name == QLatin1String(".") || name == QLatin1String("..") || unusableName(name)) {
                 continue;
             }
             if (listing->names.size() >= MaxRemoteNames) {
@@ -215,11 +231,11 @@ int LocationLogic::complete(const QString &text, const QUrl &current)
         return serial;
     }
     const QUrl dir = QUrl::fromEncoded(split.dir.toUtf8());
-    auto offer = [this, serial, text, prefix = split.prefix](const Listing &l) {
+    auto offer = [this, serial, text, prefix = split.prefix, dirText = split.dir](const Listing &l) {
         QStringList texts;
         if (l.ok) {
             for (quint32 i : rustRankNames(0, prefix, l.records, false)) {
-                texts.append(rustCompletionText(text, l.names.at(int(i))));
+                texts.append(rustCompletionText(text, l.names.at(int(i)), dirText));
             }
         }
         Q_EMIT completionsReady(serial, texts, l.error);

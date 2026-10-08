@@ -56,7 +56,7 @@ FocusScope {
     // Goes to `target`, remembering where it was.
     function navigate(target) {
         load();
-        if (!target || target.toString() === view.url.toString()) {
+        if (!target || target.toString().replace(/\/+$/, "") === view.url.toString().replace(/\/+$/, "")) {
             return;
         }
         backStack = backStack.concat([view.url]);

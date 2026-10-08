@@ -598,7 +598,7 @@ TelamonWindow {
             model: historyMenu.places
             delegate: ContextMenuItem {
                 required property var modelData
-                text: StandardPlaces.displayLocation(modelData.url)
+                text: StandardPlaces.displayLocation(modelData.url).replace(/&/g, "&&")
                 onTriggered: {
                     if (historyMenu.forward) {
                         root.page.goForwardBy(modelData.steps);
