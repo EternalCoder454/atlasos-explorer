@@ -722,7 +722,7 @@ FocusScope {
                 }
                 return folderModel.loading ? qsTr("Searching…") : qsTr("No Results");
             }
-            return folderModel.errorText.length > 0 ? qsTr("Can't Open This Folder") : (folderModel.loading ? qsTr("Loading…") : qsTr("This Folder Is Empty"));
+            return folderModel.errorText.length > 0 ? (folderModel.inArchive ? qsTr("Can't Open This Archive") : qsTr("Can't Open This Folder")) : (folderModel.loading ? qsTr("Loading…") : qsTr("This Folder Is Empty"));
         }
         text: {
             if (folderModel.searching) {

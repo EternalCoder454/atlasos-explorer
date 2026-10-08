@@ -5,6 +5,7 @@
 //! docs/DESIGN.md, "Window".
 
 use crate::address::Candidate;
+use crate::archive;
 use crate::display::display_name;
 use crate::launch::scheme_of;
 use crate::sort::name_key;
@@ -62,6 +63,26 @@ pub fn segments(url: &str, home: &str) -> Vec<Segment> {
         return Vec::new();
     };
     let scheme_lc = scheme.to_ascii_lowercase();
+    // Inside an archive the bar shows where the archive is, then the archive
+    // as a folder, then the folders in it.
+    if archive::is_scheme(&scheme_lc)
+        && let Some(loc) = archive::locate(url)
+    {
+        let mut out = segments(&loc.file_url, home);
+        if let Some(last) = out.last_mut() {
+            last.url = loc.root_url.clone();
+        }
+        let mut prefix = loc.root_url;
+        for p in loc.inner.split('/').filter(|p| !p.is_empty()) {
+            prefix.push('/');
+            prefix.push_str(p);
+            out.push(Segment {
+                label: display_name(&decode(p)),
+                url: prefix.clone(),
+            });
+        }
+        return out;
+    }
     let rest = &url[scheme.len() + 1..];
     let rest = rest.split(['?', '#']).next().unwrap_or("");
     let (authority, path) = match rest.strip_prefix("//") {
@@ -249,6 +270,31 @@ mod tests {
             crumbs("mtp:/Phone/DCIM")[2],
             pair("DCIM", "mtp:/Phone/DCIM")
         );
+    }
+
+    #[test]
+    fn an_archive_is_a_folder_below_the_folder_it_is_in() {
+        assert_eq!(
+            crumbs("zip:/home/u/Docs/a%20b.zip/sub/x"),
+            [
+                pair("Home", "file:///home/u"),
+                pair("Docs", "file:///home/u/Docs"),
+                pair("a b.zip", "zip:/home/u/Docs/a%20b.zip"),
+                pair("sub", "zip:/home/u/Docs/a%20b.zip/sub"),
+                pair("x", "zip:/home/u/Docs/a%20b.zip/sub/x"),
+            ]
+        );
+        // The archive's own segment is where the archive opens, not the file.
+        let s = segments("tar:///srv/data.tar.gz", HOME);
+        assert_eq!(
+            s[0],
+            Segment {
+                label: "Root".into(),
+                url: "file:///".into()
+            }
+        );
+        assert_eq!(s.last().unwrap().url, "tar:///srv/data.tar.gz");
+        assert_eq!(s.last().unwrap().label, "data.tar.gz");
     }
 
     #[test]

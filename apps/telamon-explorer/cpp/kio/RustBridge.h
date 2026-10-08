@@ -78,6 +78,13 @@ size_t telamon_tabs_restore(const uint8_t *saved, size_t len, size_t current, ui
 size_t telamon_menu_state(uint32_t kind, size_t count, size_t folders, uint32_t flags, uint8_t *out, size_t cap);
 bool telamon_menu_paste_into_folder(size_t count, size_t folders);
 size_t telamon_menu_text(uint32_t which, const uint8_t *a, size_t aLen, uint8_t *out, size_t cap);
+int telamon_zip_end(const uint8_t *tail, size_t len, uint64_t fileLen, uint64_t *out);
+bool telamon_zip64_directory(const uint8_t *record, size_t len, uint64_t endAt, uint64_t *out);
+bool telamon_zip_encrypted(const uint8_t *directory, size_t len);
+bool telamon_archive_is_scheme(const uint8_t *scheme, size_t len);
+int telamon_archive_check(const uint8_t *records, size_t recordsLen, bool archiveInstalled, uint8_t *out, size_t cap, size_t *textLen);
+size_t telamon_archive_locate(const uint8_t *url, size_t len, uint8_t *out, size_t cap);
+size_t telamon_archive_parent(const uint8_t *url, size_t len, uint8_t *out, size_t cap);
 size_t telamon_menu_free_name(const uint8_t *wanted, size_t wantedLen, bool (*exists)(void *, const uint8_t *, size_t), void *ctx, uint8_t *out, size_t cap);
 int32_t telamon_menu_hidden(bool add, const uint8_t *content, size_t contentLen, const uint8_t *names, size_t namesLen, uint8_t *out, size_t cap,
                           size_t *textLen);
@@ -358,6 +365,87 @@ inline QString rustSearchPathText(const QString &parentUrl, const QString &home)
 }
 
 
+// ---- Archives opened as folders (core `archive` module) ----
+
+inline bool rustArchiveScheme(const QString &scheme)
+{
+    const QByteArray b = scheme.toUtf8();
+    return telamon_archive_is_scheme(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.size()));
+}
+
+// Whether what an archive lists can be taken out below a folder: ok, or the
+// reason in plain words. `records` as the core's `archive::parse_records`.
+struct RustArchiveCheck {
+    bool ok;
+    QString text;
+};
+inline RustArchiveCheck rustArchiveCheck(const QByteArray &records, bool archiveInstalled)
+{
+    QByteArray buf(512, 0);
+    size_t len = 0;
+    auto call = [&] {
+        return telamon_archive_check(reinterpret_cast<const uint8_t *>(records.constData()), size_t(records.size()), archiveInstalled,
+                                     reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()), &len);
+    };
+    int rc = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        rc = call();
+    }
+    return {rc == 0, QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))))};
+}
+
+// Where a location in an archive is: the archive file, the archive's top and
+// the path inside; all empty when it isn't one.
+struct RustArchiveLocation {
+    QUrl file;
+    QUrl root;
+    QString inner;
+    // The archive file's name, and the folder name to extract it to.
+    QString name;
+    QString folderName;
+    bool valid = false;
+};
+inline RustArchiveLocation rustArchiveLocate(const QUrl &url)
+{
+    const QByteArray u = url.toString(QUrl::FullyEncoded).toUtf8();
+    QByteArray buf(512, 0);
+    auto call = [&] { return telamon_archive_locate(reinterpret_cast<const uint8_t *>(u.constData()), size_t(u.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size())); };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    RustArchiveLocation out;
+    if (len == 0) {
+        return out;
+    }
+    const QStringList lines = QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size())))).split(QLatin1Char('\n'));
+    if (lines.size() == 5) {
+        out.file = QUrl::fromEncoded(lines[0].toUtf8());
+        out.root = QUrl::fromEncoded(lines[1].toUtf8());
+        out.inner = lines[2];
+        out.name = lines[3];
+        out.folderName = lines[4];
+        out.valid = true;
+    }
+    return out;
+}
+
+// Where Up goes from a location in an archive (invalid: it isn't one).
+inline QUrl rustArchiveParent(const QUrl &url)
+{
+    const QByteArray u = url.toString(QUrl::FullyEncoded).toUtf8();
+    QByteArray buf(512, 0);
+    auto call = [&] { return telamon_archive_parent(reinterpret_cast<const uint8_t *>(u.constData()), size_t(u.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size())); };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    return len == 0 ? QUrl() : QUrl::fromEncoded(QByteArray(buf.constData(), qsizetype(qMin(len, size_t(buf.size())))));
+}
+
 // ---- Quick Look and the preview pane ----
 
 // The category (PreviewLoader::Category) of a MIME type name.
@@ -396,6 +484,7 @@ constexpr uint32_t Unhideable = 1u << 11;
 constexpr uint32_t Terminal = 1u << 12;
 constexpr uint32_t CanUndo = 1u << 13;
 constexpr uint32_t CanRedo = 1u << 14;
+constexpr uint32_t ArchiveItems = 1u << 15;
 }
 
 // The entries a menu has and whether each is enabled: key -> enabled. `items`: the menu of items; else the background's.

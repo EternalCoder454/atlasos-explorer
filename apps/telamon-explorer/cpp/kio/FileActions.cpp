@@ -1,20 +1,26 @@
 #include "FileActions.h"
 
+#include "ArchiveClient.h"
+#include "ArchiveGuard.h"
 #include "OpsBridge.h"
 #include "PlacesLogic.h"
 #include "RustBridge.h"
 
 #include <KConfigGroup>
+#include <KDesktopFile>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/OpenUrlJob>
 #include <KIO/Paste>
 #include <KJobWindows>
+#include <KProtocolManager>
 #include <KPropertiesDialog>
 #include <KSharedConfig>
 #include <KTerminalLauncherJob>
 #include <KUrlMimeData>
+#include <KWaylandExtras>
+#include <KWindowSystem>
 
 #include <QApplication>
 #include <QDBusConnection>
@@ -23,6 +29,8 @@
 #include <QDir>
 #include <QDrag>
 #include <QDropEvent>
+#include <QFuture>
+#include <QFutureWatcher>
 #include <QMenu>
 #include <QMimeData>
 #include <QMimeDatabase>
@@ -30,6 +38,7 @@
 #include <QThreadPool>
 #include <QTimer>
 
+#include <algorithm>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -69,6 +78,8 @@ FileActions::FileActions(QObject *parent)
     connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &FileActions::canPasteChanged);
     connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &FileActions::clipboardChanged);
     connect(m_ops, &OperationQueue::jobFinished, this, &FileActions::jobFinished);
+    connect(m_ops, &OperationQueue::resultsReady, this, &FileActions::resultsReady);
+    m_ops->setArchiveProbe([this] { return archiveInstalled(); });
     connect(&m_templateWatch, &QFileSystemWatcher::directoryChanged, this, &FileActions::loadTemplates);
     clipboardChanged();
     loadTemplates();
@@ -121,6 +132,29 @@ bool FileActions::canPaste() const
 
 void FileActions::openUrls(const QList<QUrl> &urls)
 {
+    // An archive on this computer opens as a folder (read-only); "Open With"
+    // still gives Telamon Archive's window.
+    if (urls.size() == 1) {
+        const KFileItem item = itemsOf(urls).value(0);
+        const QUrl inside = !item.isNull() && !item.isDir() ? browseUrl(urls.first()) : QUrl();
+        if (inside.isValid()) {
+            // An encrypted zip lists but can't be read through KIO: say so
+            // instead of showing files that are not what they seem.
+            const QUrl file = urls.first();
+            QPointer<FileActions> self(this);
+            ArchiveCheck::findEncryptedZip({file}, this, [self, inside](const QString &name, bool unknown) {
+                if (!self) {
+                    return;
+                }
+                if (name.isEmpty()) {
+                    Q_EMIT self->navigateRequested(inside);
+                } else {
+                    Q_EMIT self->failed(unknown ? ArchiveCheck::undecidedText(name, self->archiveInstalled()) : ArchiveCheck::needsPasswordText(name, self->archiveInstalled()));
+                }
+            });
+            return;
+        }
+    }
     for (const QUrl &url : urls.mid(0, 64)) {
         auto *job = new KIO::OpenUrlJob(url);
         job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
@@ -176,6 +210,10 @@ void FileActions::paste(const QUrl &destination)
 
 void FileActions::trash(const QList<QUrl> &urls)
 {
+    if (std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); })) {
+        Q_EMIT failed(tr("Files in an archive can't be moved to the Trash. Extract them first."));
+        return;
+    }
     m_ops->trash(urls);
 }
 
@@ -529,9 +567,25 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
     set(scheme == QLatin1String("trash"), MenuFlag::InTrash);
     set(local, MenuFlag::Local);
     set(canPaste(), MenuFlag::CanPaste);
-    set(archiveInstalled(), MenuFlag::Archive);
+    const bool haveArchive = archiveInstalled();
+    set(haveArchive, MenuFlag::Archive);
+    // Every item an archive Telamon Archive opens (judged by name, as the rest of Files does).
+    if (haveArchive) {
+        const QStringList mimes = archiveMimeTypes();
+        const QMimeDatabase mimeDb;
+        bool all = !items.isEmpty() && !mimes.isEmpty();
+        for (const KFileItem &it : items) {
+            const QMimeType t = mimeDb.mimeTypeForFile(it.name(), QMimeDatabase::MatchExtension);
+            bool is = !it.isDir();
+            if (is) {
+                is = std::any_of(mimes.cbegin(), mimes.cend(), [&t](const QString &m) { return t.inherits(m); });
+            }
+            all = all && is;
+        }
+        set(all, MenuFlag::ArchiveItems);
+    }
     set(single && folders == 1 && rustPlacesPinnable(items.first().url().scheme()), MenuFlag::Pinnable);
-    set(single && folders == 1 && items.first().isWritable(), MenuFlag::FolderWritable);
+    set(single && folders == 1 && items.first().isWritable() && !(m_folder && m_folder->inArchive()), MenuFlag::FolderWritable);
     set(!openWith.isEmpty(), MenuFlag::OpenWith);
     set(hideable, MenuFlag::Hideable);
     set(!hideable && unhideable, MenuFlag::Unhideable);
@@ -690,9 +744,114 @@ void FileActions::setHidden(const QList<QUrl> &urls, bool hide)
     });
 }
 
-// Telamon Archive's Compress… dialog, over D-Bus (its Archive1 interface takes
-// file:// URIs). The new name of the service first, then the old one, which
-// Archive keeps for one release.
+// ---- Telamon Archive ----
+//
+// Archive's Archive1 over D-Bus (cpp/kio/ArchiveClient.h). Extract Here and
+// Compress to ZIP are jobs: Archive returns the job and Files shows it in its
+// own queue (progress, pause, cancel) and selects the result. Extract To… and
+// Compress… are Archive's dialogs: the call returns when the dialog is up.
+
+QStringList FileActions::archiveMimeTypes() const
+{
+    QStringList out;
+    for (const QString &id : rustMenuText(5).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        const QString path = QStandardPaths::locate(QStandardPaths::ApplicationsLocation, id);
+        if (path.isEmpty()) {
+            continue;
+        }
+        const KDesktopFile desktop(path);
+        out += desktop.desktopGroup().readXdgListEntry(QStringLiteral("MimeType"));
+    }
+    out.removeDuplicates();
+    return out;
+}
+
+// The options every call carries. Archive's own progress window stays off when
+// Files shows the job (`showProgress` false); a call that makes no job to
+// follow leaves it on, or nothing would show. On Wayland the activation token
+// is asked for first (it lets Archive's windows take the focus), and the call
+// goes ahead without one after half a second.
+void FileActions::withArchiveOptions(bool showProgress, std::function<void(QVariantMap)> go)
+{
+    QVariantMap options;
+    if (!showProgress) {
+        options.insert(QStringLiteral("show_progress"), false);
+    }
+    if (m_window && QGuiApplication::platformName() == QLatin1String("xcb")) {
+        options.insert(QStringLiteral("parent_window"), QStringLiteral("x11:") + QString::number(m_window->winId(), 16));
+    }
+    if (!m_window || !KWindowSystem::isPlatformWayland()) {
+        go(options);
+        return;
+    }
+    auto *watcher = new QFutureWatcher<QString>(this);
+    auto fired = std::make_shared<bool>(false);
+    auto finish = [watcher, fired, options, go](const QString &token) mutable {
+        if (*fired) {
+            return;
+        }
+        *fired = true;
+        QVariantMap o = options;
+        if (!token.isEmpty()) {
+            o.insert(QStringLiteral("activation_token"), token);
+        }
+        watcher->deleteLater();
+        go(o);
+    };
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [watcher, finish]() mutable { finish(watcher->result()); });
+    watcher->setFuture(KWaylandExtras::xdgActivationToken(m_window, QGuiApplication::desktopFileName()));
+    QTimer::singleShot(500, this, [finish]() mutable { finish(QString()); });
+}
+
+QString FileActions::labelOf(const QList<QUrl> &urls) const
+{
+    if (urls.size() == 1) {
+        return tr("\"%1\"").arg(rustDisplayName(urls.first().adjusted(QUrl::StripTrailingSlash).fileName().toUtf8()));
+    }
+    return tr("%n items", "", int(urls.size()));
+}
+
+void FileActions::runArchive(const QString &method, const QList<QUrl> &urls, const QVariantList &extra, const QString &title, const QString &running)
+{
+    if (urls.size() > 1000) {
+        Q_EMIT failed(tr("Telamon Archive takes at most 1,000 items at a time."));
+        return;
+    }
+    QStringList files;
+    for (const QUrl &u : urls) {
+        if (u.isLocalFile()) {
+            files << u.toString(QUrl::FullyEncoded);
+        }
+    }
+    if (files.isEmpty()) {
+        Q_EMIT failed(tr("Telamon Archive works on files on this computer only."));
+        return;
+    }
+    QVariantList args;
+    args << files;
+    args << extra;
+    QPointer<FileActions> self(this);
+    withArchiveOptions(false, [self, method, args, title, running](const QVariantMap &options) {
+        if (self) {
+            self->m_ops->archive(method, args, options, title, running);
+        }
+    });
+}
+
+void FileActions::extractHere(const QList<QUrl> &urls)
+{
+    const QString what = labelOf(urls);
+    runArchive(QStringLiteral("ExtractHere"), urls, {}, tr("Extract %1").arg(what), tr("Extracting %1").arg(what));
+}
+
+void FileActions::compressToZip(const QList<QUrl> &urls)
+{
+    const QString what = labelOf(urls);
+    // An empty destination: Archive names it next to the first item.
+    runArchive(QStringLiteral("Compress"), urls, {QStringLiteral("zip"), QString()}, tr("Compress %1").arg(what), tr("Compressing %1").arg(what));
+}
+
+// A call that opens one of Archive's dialogs.
 void FileActions::compress(const QList<QUrl> &urls)
 {
     QStringList files;
@@ -704,56 +863,78 @@ void FileActions::compress(const QList<QUrl> &urls)
     if (files.isEmpty()) {
         return;
     }
-    QVariantMap options{{QStringLiteral("show_progress"), false}};
-    if (m_window && QGuiApplication::platformName() == QLatin1String("xcb")) {
-        options.insert(QStringLiteral("parent_window"), QStringLiteral("x11:") + QString::number(m_window->winId(), 16));
-    }
-    struct Target {
-        const char *service;
-        const char *path;
-        const char *iface;
-    };
-    static const Target targets[] = {
-        {"net.eterneon.telamon.archive", "/net/eterneon/telamon/archive", "net.eterneon.telamon.Archive1"},
-        {"net.eterneon.atlas.archive", "/net/eterneon/atlas/archive", "net.eterneon.atlas.Archive1"},
-    };
-    // Tries the service names in turn, the next only when the one asked has no
-    // owner (Archive is not running and can't be started under that name); any
-    // other answer is the answer.
-    auto attempt = std::make_shared<std::function<void(int)>>();
-    std::weak_ptr<std::function<void(int)>> again = attempt;
     QPointer<FileActions> self(this);
-    *attempt = [self, files, options, again](int i) {
+    withArchiveOptions(true, [self, files](const QVariantMap &options) {
         if (!self) {
             return;
         }
-        if (i >= int(std::size(targets))) {
-            Q_EMIT self->failed(tr("Telamon Archive could not be started."));
-            return;
-        }
-        QDBusMessage call = QDBusMessage::createMethodCall(QString::fromLatin1(targets[i].service), QString::fromLatin1(targets[i].path),
-                                                           QString::fromLatin1(targets[i].iface), QStringLiteral("CompressDialog"));
-        call << files << options;
-        auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call, 10000), self);
-        // The watcher holds the function while the call is out.
-        auto keep = again.lock();
-        QObject::connect(w, &QDBusPendingCallWatcher::finished, self.data(), [self, keep, i, w] {
-            const QDBusError error = w->error();
-            const bool failed = w->isError();
-            w->deleteLater();
-            if (!failed || !self) {
-                return;
-            }
-            if (error.type() == QDBusError::ServiceUnknown || error.type() == QDBusError::NoServer) {
-                (*keep)(i + 1);
-            } else if (error.name().endsWith(QLatin1String(".TooManyJobs"))) {
-                Q_EMIT self->failed(tr("Archive is busy, try again when a job finishes."));
-            } else {
-                Q_EMIT self->failed(tr("Telamon Archive could not compress these: %1").arg(rustDisplayName(error.message().toUtf8())));
+        ArchiveBus::call(self, QStringLiteral("CompressDialog"), {files, options}, [self](const QDBusMessage &, const ArchiveBus::Target &, const ArchiveBus::Failure &failure) {
+            if (self && !failure.text.isEmpty()) {
+                Q_EMIT self->failed(failure.text);
             }
         });
-    };
-    (*attempt)(0);
+    });
+}
+
+void FileActions::extractTo(const QList<QUrl> &urls)
+{
+    QStringList files;
+    for (const QUrl &u : urls.mid(0, 1000)) {
+        if (u.isLocalFile()) {
+            files << u.toString(QUrl::FullyEncoded);
+        }
+    }
+    if (files.isEmpty()) {
+        Q_EMIT failed(tr("Telamon Archive works on files on this computer only."));
+        return;
+    }
+    QPointer<FileActions> self(this);
+    withArchiveOptions(true, [self, files](const QVariantMap &options) {
+        if (!self) {
+            return;
+        }
+        ArchiveBus::call(self, QStringLiteral("ExtractAll"), {files, options}, [self](const QDBusMessage &, const ArchiveBus::Target &, const ArchiveBus::Failure &failure) {
+            if (self && !failure.text.isEmpty()) {
+                Q_EMIT self->failed(failure.text);
+            }
+        });
+    });
+}
+
+void FileActions::extractViewed()
+{
+    if (!m_folder) {
+        return;
+    }
+    const RustArchiveLocation where = rustArchiveLocate(m_folder->url());
+    if (!where.valid) {
+        return;
+    }
+    if (archiveInstalled()) {
+        extractTo({where.file});
+        return;
+    }
+    // Without Archive: Files takes everything out itself, into a new folder
+    // beside the archive, after looking at what the archive lists.
+    m_ops->extractArchive(where.root, where.file.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash), where.folderName, where.name);
+}
+
+QUrl FileActions::browseUrl(const QUrl &url) const
+{
+    if (!url.isLocalFile()) {
+        return {};
+    }
+    const QMimeType type = QMimeDatabase().mimeTypeForFile(url.fileName(), QMimeDatabase::MatchExtension);
+    // KIO's own table of what its archive worker opens (kio-extras).
+    // Only the types the worker names itself: a .docx or .epub is a zip too
+    // (it inherits application/zip), but it is a document, and opens as one.
+    const QString protocol = KProtocolManager::protocolForArchiveMimetype(type.name());
+    if (protocol.isEmpty() || !rustArchiveScheme(protocol)) {
+        return {};
+    }
+    QUrl browse = url.adjusted(QUrl::StripTrailingSlash);
+    browse.setScheme(protocol);
+    return browse;
 }
 
 void FileActions::startDrag(const QList<QUrl> &urls)
@@ -768,7 +949,9 @@ void FileActions::startDrag(const QList<QUrl> &urls)
         auto *drag = new QDrag(m_window);
         drag->setMimeData(md);
         drag->setPixmap(QIcon::fromTheme(QStringLiteral("text-x-generic")).pixmap(32));
-        drag->exec(Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, Qt::CopyAction);
+        // What is in an archive can only be copied out of it.
+        const bool inArchive = std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); });
+        drag->exec(inArchive ? Qt::CopyAction : (Qt::CopyAction | Qt::MoveAction | Qt::LinkAction), Qt::CopyAction);
     });
 }
 
@@ -778,6 +961,11 @@ void FileActions::drop(const QList<QUrl> &urls, const QUrl &destination)
         return;
     }
     if (dropIsPointless(urls, destination)) {
+        return;
+    }
+    // Out of an archive a drop extracts: there is nothing to choose between.
+    if (std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); })) {
+        dropWith(urls, destination, QStringLiteral("copy"));
         return;
     }
     // A key held decides; otherwise the user chooses (Move Here, Copy Here, Link Here).
@@ -800,8 +988,13 @@ void FileActions::dropWith(const QList<QUrl> &urls, const QUrl &destination, con
         return;
     }
     const auto kind = action == QLatin1String("copy") ? OperationQueue::Copy : (action == QLatin1String("link") ? OperationQueue::Link : OperationQueue::Move);
-    // Files dropped on the Trash are trashed, whatever the key.
+    // Files dropped on the Trash are trashed, whatever the key; those in an
+    // archive are not Files' to trash.
     if (destination.scheme() == QLatin1String("trash")) {
+        if (std::any_of(urls.cbegin(), urls.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); })) {
+            Q_EMIT failed(tr("Files in an archive can't be moved to the Trash. Drop them on a folder to extract them."));
+            return;
+        }
         m_ops->trash(urls);
         return;
     }

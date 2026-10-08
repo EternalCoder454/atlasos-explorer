@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Templates as T
 import org.kde.kirigami as Kirigami
 import Telamon.Ui
 
@@ -120,6 +121,7 @@ TelamonWindow {
         }
         onOpenLocationRequested: files => root.openFileLocation(files)
         onNamePromptRequested: request => namePrompt.ask(request)
+        onResultsReady: urls => root.selectResults(urls)
         onDeleteRequested: (urls, text) => {
             deleteDialog.urls = urls;
             deleteDialog.text = text;
@@ -141,6 +143,19 @@ TelamonWindow {
                     f.pruneSearchResults();
                     searchAgain.restart();
                 }
+            }
+        }
+    }
+    // What an extraction or compression made is selected, where it is shown.
+    function selectResults(urls) {
+        if (!urls || urls.length === 0) {
+            return;
+        }
+        const folder = StandardPlaces.parentUrl(urls[0]).toString().replace(/\/+$/, "");
+        for (const id in root.pages) {
+            const p = root.pages[id];
+            if (p.loaded && p.location.toString().replace(/\/+$/, "") === folder) {
+                p.showItems(urls);
             }
         }
     }
@@ -1341,6 +1356,16 @@ TelamonWindow {
                 Layout.rightMargin: Kirigami.Units.smallSpacing
                 spacing: Kirigami.Units.smallSpacing
 
+                // An archive opened as a folder is read-only: this takes everything out.
+                ToolbarButton {
+                    visible: root.view ? root.view.folder.inArchive : false
+                    symbol: Symbols.Unarchive
+                    text: qsTr("Extract")
+                    toolTipText: qsTr("Extract Everything in This Archive")
+                    display: T.AbstractButton.TextBesideIcon
+                    focusable: true
+                    onClicked: fileActions.extractViewed()
+                }
                 ToolbarButton {
                     symbol: Symbols.CreateNewFolder
                     text: qsTr("New Folder")

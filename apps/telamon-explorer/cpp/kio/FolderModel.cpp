@@ -22,9 +22,12 @@
 
 namespace
 {
-QString errorMessage(KIO::Job *job)
+QString errorMessage(KIO::Job *job, bool archive)
 {
     // Plain words, never the job's own text: it can hold file names.
+    if (archive && job->error() != KIO::ERR_DOES_NOT_EXIST && job->error() != KIO::ERR_ACCESS_DENIED) {
+        return FolderModel::tr("This archive couldn't be read. It may be damaged, or it may need a password, which Files can't enter.");
+    }
     switch (job->error()) {
     case KIO::ERR_ACCESS_DENIED:
     case KIO::ERR_CANNOT_ENTER_DIRECTORY:
@@ -53,6 +56,8 @@ FolderModel::FolderModel(QObject *parent)
     , m_lister(new KCoreDirLister(this))
 {
     s_models.append(this);
+    connect(this, &FolderModel::urlChanged, this, &FolderModel::archiveChanged);
+    connect(this, &FolderModel::searchingChanged, this, &FolderModel::archiveChanged);
     m_pool.setMaxThreadCount(1);
     m_lister->setDelayedMimeTypes(true);
     m_lister->setAutoErrorHandlingEnabled(false);
@@ -138,6 +143,11 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {GroupRole, "groupKey"},
         {GroupCollapsedRole, "groupCollapsed"},
     };
+}
+
+bool FolderModel::inArchive() const
+{
+    return !m_searching && rustArchiveScheme(m_url.scheme());
 }
 
 bool FolderModel::isCut(const KFileItem &item) const
@@ -461,7 +471,9 @@ void FolderModel::onCompleted()
     m_hiddenTimer.start();
     m_listedUrl = m_url;
     const KFileItem root = m_lister->rootItem();
-    const bool w = !root.isNull() && root.isWritable();
+    // An archive is opened for reading only (kio-extras' worker reports its
+    // folders as writable).
+    const bool w = !root.isNull() && root.isWritable() && !inArchive();
     if (w != m_canWrite) {
         m_canWrite = w;
         Q_EMIT canWriteChanged();
@@ -483,7 +495,7 @@ void FolderModel::onJobError(KIO::Job *job)
         folderGone(QString());
         return;
     }
-    setError(errorMessage(job));
+    setError(errorMessage(job, inArchive()));
 }
 
 // The folder is gone: the nearest parent that exists is shown instead.

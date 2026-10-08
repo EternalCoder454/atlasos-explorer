@@ -898,6 +898,43 @@ pub unsafe extern "C" fn telamon_preflight(
     code
 }
 
+/// Room for `needed` bytes taken out of an archive into the folder `dest`
+/// (which may not exist yet). `what` names what is taken out. Returns 0 when
+/// there is room (or the disk doesn't say), 1 when not, with the refusal in
+/// plain words in `out`. Reads the disk: for workers.
+///
+/// # Safety
+/// Each pointer pair covers its length (or is null with length 0); `out`
+/// points to `cap` writable bytes (or is null); `len` is writable or null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_room_check(
+    needed: u64,
+    dest: *const u8,
+    dest_len: usize,
+    what: *const u8,
+    what_len: usize,
+    free_override: i64,
+    out: *mut u8,
+    cap: usize,
+    len: *mut usize,
+) -> i32 {
+    // SAFETY: forwarded from this function's contract.
+    let (dest, what) = unsafe { (bytes(dest, dest_len), bytes(what, what_len)) };
+    let dest = Path::new(std::ffi::OsStr::from_bytes(dest));
+    let what = String::from_utf8_lossy(what).into_owned();
+    let free = u64::try_from(free_override).ok();
+    let (code, text) = match preflight::check_room_for(dest, needed, &what, free) {
+        Ok(()) => (0, String::new()),
+        Err(why) => (1, why),
+    };
+    if !len.is_null() {
+        // SAFETY: `out` and `len` as promised.
+        unsafe { *len = put(text.as_bytes(), out, cap) };
+    }
+    code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1095,5 +1132,40 @@ mod tests {
             "There isn't enough space in \"dest\". Copying \"big.bin\" needs 8 KiB, and only 1000 B is free."
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn room_for_an_extraction_reports_through_the_abi() {
+        let dest = b"/nonexistent-telamon-test/new-folder";
+        let what = b"\"a.zip\"";
+        let mut out = [0u8; 256];
+        let mut len = 0usize;
+        let mut ask = |needed: u64, free: i64| {
+            let rc = unsafe {
+                telamon_room_check(
+                    needed,
+                    dest.as_ptr(),
+                    dest.len(),
+                    what.as_ptr(),
+                    what.len(),
+                    free,
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut len,
+                )
+            };
+            (
+                rc,
+                String::from_utf8_lossy(&out[..len.min(out.len())]).into_owned(),
+            )
+        };
+        // The nearest folder that exists is "/", and it has room for a little.
+        assert_eq!(ask(10, 100), (0, String::new()));
+        let (rc, text) = ask(1000, 100);
+        assert_eq!(rc, 1);
+        assert!(
+            text.contains("new-folder") && text.contains("out of the archive"),
+            "{text}"
+        );
     }
 }

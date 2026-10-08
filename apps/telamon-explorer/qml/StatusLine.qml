@@ -36,6 +36,9 @@ StatusBar {
         } else {
             parts.push(folder.loading && n === 0 ? qsTr("Loading…") : (n === 1 ? qsTr("1 item") : qsTr("%1 items").arg(n)));
         }
+        if (folder.inArchive) {
+            parts.push(qsTr("archive, read-only"));
+        }
         if (folder.hiddenCount > 0) {
             parts.push(qsTr("%1 hidden").arg(folder.hiddenCount));
         }
@@ -43,7 +46,7 @@ StatusBar {
             // Folders add no size: only files are summed.
             parts.push(selection.files > 0 ? qsTr("%1 selected (%2)").arg(selectedCount).arg(LocationLogic.sizeText(selection.bytes)) : qsTr("%1 selected").arg(selectedCount));
         }
-        if (freeBytes >= 0 && !folder.searching) {
+        if (freeBytes >= 0 && !folder.searching && !folder.inArchive) {
             parts.push(qsTr("%1 free").arg(LocationLogic.sizeText(freeBytes)));
         }
         return parts.join(", ");

@@ -6,6 +6,7 @@ members = [
     "apps/telamon-explorer",
     "apps/telamon-explorer-indexd",
     "apps/telamon-explorer-search",
+    "tests/archive-standin",
 ]
 
 [workspace.package]

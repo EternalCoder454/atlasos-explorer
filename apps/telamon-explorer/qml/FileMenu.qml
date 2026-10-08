@@ -3,7 +3,7 @@ import QtQuick
 import Telamon.Ui
 
 // The context menu of one or more items: Open, Open With, an icon row (Cut,
-// Copy, Paste, Rename, Trash), Compress when Telamon Archive is installed,
+// Copy, Paste, Rename, Trash), Extract and Compress when Telamon Archive is installed,
 // Properties, and "More Actions". It is made whole before it appears
 // (`openFor` asks FileActions for the snapshot, fills the lists, and only then
 // shows it) and nothing in it changes while it is open: the rows read the
@@ -132,6 +132,29 @@ ContextMenu {
         }
     }
     ContextMenuSeparator {}
+    // Telamon Archive's: items only appear when it is installed (and Extract
+    // only for archives); they work on files on this computer.
+    ContextMenuItem {
+        text: qsTr("Extract Here")
+        symbol: Symbols.Unarchive
+        visible: menu.has("extractHere")
+        enabled: menu.has("extractHere") && menu.on("extractHere")
+        onTriggered: menu.later(() => menu.actions.extractHere(menu.snap.urls))
+    }
+    ContextMenuItem {
+        text: qsTr("Extract To…")
+        symbol: Symbols.Unarchive
+        visible: menu.has("extractTo")
+        enabled: menu.has("extractTo") && menu.on("extractTo")
+        onTriggered: menu.later(() => menu.actions.extractTo(menu.snap.urls))
+    }
+    ContextMenuItem {
+        text: qsTr("Compress to ZIP")
+        symbol: Symbols.FolderZip
+        visible: menu.has("compressZip")
+        enabled: menu.has("compressZip") && menu.on("compressZip")
+        onTriggered: menu.later(() => menu.actions.compressToZip(menu.snap.urls))
+    }
     ContextMenuItem {
         text: qsTr("Compress…")
         symbol: Symbols.FolderZip
