@@ -24,6 +24,9 @@
           "size_min"        t
           "size_max"        t
           "match"           s   "name" (default) | "path"
+          "tag"             s   only files and folders tagged so (user.xdg.tags),
+                                ignoring case; a tag alone is a search, like a
+                                filter, and lists the tagged entries newest first
       hit = (uri, name, kind, mime, icon, mtime, size, score)
         uri    file:// URI, percent-encoded
         name   display name
@@ -39,6 +42,17 @@
       <arg name="limit" type="u" direction="in"/>
       <arg name="options" type="a{sv}" direction="in"/>
       <arg name="hits" type="a(sssssxtd)" direction="out"/>
+    </method>
+    <!--
+      Tags() -> tags
+        The tags in use: (name, count), count = files and folders that carry it.
+        Names that differ only in case are one tag, named by its most common
+        spelling (ties: alphabetical). Most used first, then by name; at most 500.
+        Hidden entries and the indexed roots themselves are not counted (a Search
+        does not list them either). Call it again after StatusChanged.
+    -->
+    <method name="Tags">
+      <arg name="tags" type="a(su)" direction="out"/>
     </method>
     <!--
       Status() -> {"state": s ("ready" | "scanning" | "stale" | "disabled" | "error"),

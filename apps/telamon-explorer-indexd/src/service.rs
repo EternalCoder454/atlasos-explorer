@@ -120,6 +120,22 @@ fn on_own_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> W
 }
 
 impl Search1 {
+    /// The tags in use: `(name, entries)`, most used first, at most 500.
+    async fn do_tags(&self) -> fdo::Result<Vec<(String, u32)>> {
+        let Some(place) = self.take_place() else {
+            return Err(fdo::Error::LimitsExceeded(
+                "too many searches are running, try again in a moment".into(),
+            ));
+        };
+        let engine = self.engine.clone();
+        on_own_thread(move || {
+            let _place = place;
+            engine.tags()
+        })
+        .await
+        .map_err(|()| fdo::Error::Failed("the service failed inside; see its log".into()))
+    }
+
     /// Search the index. At most `limit` hits (cap 500), best first.
     async fn do_search(
         &self,
@@ -175,6 +191,13 @@ impl Search1 {
         self.do_search(query, limit, options).await
     }
 
+    /// The tags in use (`user.xdg.tags`): name and how many files and folders
+    /// carry it, most used first, at most 500. Names that differ only in case
+    /// are one tag.
+    async fn tags(&self) -> fdo::Result<Vec<(String, u32)>> {
+        self.do_tags().await
+    }
+
     /// State of the index.
     async fn status(&self) -> HashMap<String, OwnedValue> {
         status_map(&self.engine.status())
@@ -213,6 +236,10 @@ impl LegacySearch1 {
         options: HashMap<String, OwnedValue>,
     ) -> fdo::Result<Vec<HitTuple>> {
         self.0.do_search(query, limit, options).await
+    }
+
+    async fn tags(&self) -> fdo::Result<Vec<(String, u32)>> {
+        self.0.do_tags().await
     }
 
     async fn status(&self) -> HashMap<String, OwnedValue> {

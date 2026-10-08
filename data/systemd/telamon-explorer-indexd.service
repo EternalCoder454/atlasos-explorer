@@ -49,6 +49,8 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+# lgetxattr (the tags) is in @file-system, which @system-service includes, and
+# in none of the @privileged groups.
 # Not ~@resources: setpriority and ioprio_set (the scanner's low priority)
 # are in it. A refused call fails with EPERM instead of killing the service.
 SystemCallFilter=@system-service
