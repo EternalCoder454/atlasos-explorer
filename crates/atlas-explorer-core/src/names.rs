@@ -92,7 +92,7 @@ pub fn validate(name: &str) -> Result<Vec<Warning>, Invalid> {
 /// Splits `name` into stem and extension (with its dot). A leading dot
 /// belongs to the stem (`.bashrc` has no extension); `.tar.gz` and its kin
 /// count as one extension.
-fn split_ext(name: &str) -> (&str, &str) {
+pub(crate) fn split_ext(name: &str) -> (&str, &str) {
     let Some(dot) = name.rfind('.') else {
         return (name, "");
     };

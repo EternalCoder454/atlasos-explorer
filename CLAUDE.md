@@ -49,8 +49,9 @@ there.
   batches; stat, statfs, MIME sniffing, image decoding, sorting, search,
   checksums and the journal's fsync run on workers, with results back through
   `qt_thread().queue` or queued signals.
-- **One operation queue** runs every copy, move, link, trash, delete, rename
-  and new folder; nothing changes files outside it.
+- **One operation queue** runs every copy, move, link, trash, delete, rename,
+  new folder, new file and hide (the `.hidden` file); nothing changes files
+  outside it.
 - **Telamon.Ui is the installed `telamon-ui` package** from atlas-framework
   (`~/Documents/Atlas Framework`, read-only from here). Never fork Telamon.Ui
   components into this repo: ask the "Telamon OS Framework" session. Pieces it

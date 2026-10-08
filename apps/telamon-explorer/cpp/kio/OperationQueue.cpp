@@ -15,14 +15,17 @@
 #include <KIO/RestoreJob>
 #include <KIO/SimpleJob>
 #include <KIO/StatJob>
+#include <KIO/StoredTransferJob>
 #include <KJobUiDelegate>
 
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLocale>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QSaveFile>
 #include <QSet>
 #include <QThreadPool>
 
@@ -197,6 +200,94 @@ QString stateName(uint32_t s)
     return QLatin1String(names[qMin<uint32_t>(s, 6)]);
 }
 
+}
+
+namespace
+{
+// Adds names to a folder's `.hidden` file (one name a line, which the file
+// managers and the index read) or takes them out, on a worker thread. It
+// starts itself, as KIO's jobs do.
+class HiddenFileJob : public KJob
+{
+public:
+    HiddenFileJob(const QString &dir, const QStringList &names, bool hide)
+        : m_dir(dir)
+        , m_names(names)
+        , m_hide(hide)
+    {
+        QMetaObject::invokeMethod(this, &HiddenFileJob::start, Qt::QueuedConnection);
+    }
+
+    void start() override
+    {
+        QPointer<HiddenFileJob> self(this);
+        const QString dir = m_dir;
+        const QStringList names = m_names;
+        const bool hide = m_hide;
+        QThreadPool::globalInstance()->start([self, dir, names, hide] {
+            const QString why = change(dir, names, hide);
+            if (!self) {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, why] {
+                if (!self) {
+                    return;
+                }
+                if (!why.isEmpty()) {
+                    self->setError(KJob::UserDefinedError);
+                    self->setErrorText(why);
+                }
+                self->emitResult();
+            });
+        });
+    }
+
+protected:
+    bool doKill() override { return true; }
+
+private:
+    // "" when done, else why not.
+    static QString change(const QString &dir, const QStringList &names, bool hide)
+    {
+        const QString path = dir + QStringLiteral("/.hidden");
+        const QFileInfo info(path);
+        // A link could lead anywhere; a file managed by hand is left alone.
+        if (info.isSymLink()) {
+            return tr("The .hidden file in this folder is a link, so it was not changed.");
+        }
+        QByteArray content;
+        if (info.exists()) {
+            if (!info.isFile()) {
+                return tr("The .hidden file in this folder is not a plain file.");
+            }
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) {
+                return tr("The .hidden file in this folder can't be read.");
+            }
+            content = f.read(qint64(1 << 20) + 2);
+        }
+        // Rewriting a file that is not text would change it.
+        if (QString::fromUtf8(content).toUtf8() != content) {
+            return tr("The .hidden file in this folder is not text, so it was not changed.");
+        }
+        const RustHidden r = rustMenuHidden(hide, content, names);
+        if (r.rc == 1) {
+            return {};
+        }
+        if (r.rc != 0) {
+            return QString::fromUtf8(r.text);
+        }
+        QSaveFile out(path);
+        if (!out.open(QIODevice::WriteOnly) || out.write(r.text) != r.text.size() || !out.commit()) {
+            return tr("The .hidden file in this folder can't be written.");
+        }
+        return {};
+    }
+
+    QString m_dir;
+    QStringList m_names;
+    bool m_hide;
+};
 }
 
 struct OperationQueue::Work {
@@ -1181,6 +1272,58 @@ void OperationQueue::makeFolder(const QUrl &folder, const QString &name)
     w.title = tr("Create Folder %1").arg(rustDisplayName(name.toUtf8()));
     w.steps << [target]() -> KJob * { return KIO::mkdir(target); };
     enqueue(std::move(w), tr("Creating folder %1").arg(rustDisplayName(name.toUtf8())));
+}
+
+void OperationQueue::makeFile(const QUrl &folder, const QString &name, const QUrl &templateFile)
+{
+    QUrl target = folder.adjusted(QUrl::StripTrailingSlash);
+    target.setPath(QDir::cleanPath(target.path() + QLatin1Char('/') + name));
+    Work w;
+    w.kind = Copy;
+    w.dest = target;
+    // Recorded as a copy, so Undo moves the new file to the Trash and Redo
+    // brings it back; an empty file has no source, so it stands for itself.
+    const QUrl from = templateFile.isValid() ? templateFile : target;
+    w.sources = {from};
+    w.top.insert(key(from));
+    w.pairs.insert(key(from), target);
+    w.title = tr("Create File %1").arg(rustDisplayName(name.toUtf8()));
+    if (templateFile.isValid()) {
+        w.steps << [templateFile, target]() -> KJob * { return KIO::copyAs(templateFile, target, KIO::HideProgressInfo); };
+    } else {
+        w.steps << [target]() -> KJob * { return KIO::storedPut(QByteArray(), target, -1, KIO::HideProgressInfo); };
+    }
+    enqueue(std::move(w), tr("Creating file %1").arg(rustDisplayName(name.toUtf8())));
+}
+
+void OperationQueue::setHidden(const QList<QUrl> &urls, bool hide, std::function<void(bool)> done)
+{
+    QStringList names;
+    QString dir;
+    for (const QUrl &u : urls) {
+        if (!u.isLocalFile()) {
+            continue;
+        }
+        const QFileInfo info(u.adjusted(QUrl::StripTrailingSlash).toLocalFile());
+        if (dir.isEmpty()) {
+            dir = info.absolutePath();
+        }
+        // One folder's file: items from elsewhere are not touched.
+        if (info.absolutePath() == dir && !names.contains(info.fileName())) {
+            names << info.fileName();
+        }
+    }
+    if (names.isEmpty()) {
+        return;
+    }
+    Work w;
+    w.kind = Rename;
+    w.record = false;
+    w.done = std::move(done);
+    const QString what = names.size() == 1 ? rustDisplayName(names.first().toUtf8()) : tr("%1 items").arg(names.size());
+    w.title = hide ? tr("Hide %1").arg(what) : tr("Show %1").arg(what);
+    w.steps << [dir, names, hide]() -> KJob * { return new HiddenFileJob(dir, names, hide); };
+    enqueue(std::move(w), hide ? tr("Hiding %1").arg(what) : tr("Showing %1").arg(what));
 }
 
 void OperationQueue::pasteData(const QMimeData *data, const QUrl &destination)

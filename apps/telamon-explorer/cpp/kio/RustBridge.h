@@ -6,6 +6,7 @@
 #include <QList>
 #include <QPair>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +53,12 @@ int32_t telamon_places_usage_percent(int64_t total, int64_t free);
 size_t telamon_places_text(uint32_t which, const uint8_t *a, size_t aLen, const uint8_t *b, size_t bLen, uint64_t n, uint8_t *out, size_t cap);
 int32_t telamon_places_nearly_full();
 size_t telamon_tabs_restore(const uint8_t *saved, size_t len, size_t current, uint8_t *out, size_t cap, size_t *currentOut);
+size_t telamon_menu_state(uint32_t kind, size_t count, size_t folders, uint32_t flags, uint8_t *out, size_t cap);
+bool telamon_menu_paste_into_folder(size_t count, size_t folders);
+size_t telamon_menu_text(uint32_t which, const uint8_t *a, size_t aLen, uint8_t *out, size_t cap);
+size_t telamon_menu_free_name(const uint8_t *wanted, size_t wantedLen, bool (*exists)(void *, const uint8_t *, size_t), void *ctx, uint8_t *out, size_t cap);
+int32_t telamon_menu_hidden(bool add, const uint8_t *content, size_t contentLen, const uint8_t *names, size_t namesLen, uint8_t *out, size_t cap,
+                          size_t *textLen);
 
 // ---- Search (src/search_ffi.rs) ----
 struct TelamonSearchFilter {
@@ -343,5 +350,108 @@ inline QString rustPreviewText(uint32_t which, quint64 n)
 {
     QByteArray buf(64, 0);
     const size_t len = telamon_preview_text(which, n, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+}
+
+
+// ---- Context menus (core `menu` module) ----
+
+// The facts a menu is decided from (the core's menu::F_*).
+namespace MenuFlag
+{
+constexpr uint32_t Writable = 1;
+constexpr uint32_t Searching = 1u << 1;
+constexpr uint32_t Recent = 1u << 2;
+constexpr uint32_t InTrash = 1u << 3;
+constexpr uint32_t Local = 1u << 4;
+constexpr uint32_t CanPaste = 1u << 5;
+constexpr uint32_t Archive = 1u << 6;
+constexpr uint32_t Pinnable = 1u << 7;
+constexpr uint32_t FolderWritable = 1u << 8;
+constexpr uint32_t OpenWith = 1u << 9;
+constexpr uint32_t Hideable = 1u << 10;
+constexpr uint32_t Unhideable = 1u << 11;
+constexpr uint32_t Terminal = 1u << 12;
+constexpr uint32_t CanUndo = 1u << 13;
+constexpr uint32_t CanRedo = 1u << 14;
+}
+
+// The entries a menu has and whether each is enabled: key -> enabled. `items`: the menu of items; else the background's.
+inline QList<QPair<QString, bool>> rustMenuState(bool items, size_t count, size_t folders, uint32_t flags)
+{
+    QByteArray buf(512, 0);
+    auto call = [&] { return telamon_menu_state(items ? 0 : 1, count, folders, flags, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size())); };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    QList<QPair<QString, bool>> out;
+    const QString text = QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+    for (const QString &line : text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        out.append({line.chopped(1), line.endsWith(QLatin1Char('+'))});
+    }
+    return out;
+}
+
+// A text of "New" (see telamon_menu_text for `which`).
+inline QString rustMenuText(uint32_t which, const QString &a = QString())
+{
+    const QByteArray ab = a.toUtf8();
+    QByteArray buf(256, 0);
+    auto call = [&] { return telamon_menu_text(which, reinterpret_cast<const uint8_t *>(ab.constData()), size_t(ab.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size())); };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+}
+
+// The `.hidden` text with `names` added or removed. rc 0: `text` is the new
+// content; 1: nothing to change; 2: refused, `text` says why.
+struct RustHidden {
+    int rc;
+    QByteArray text;
+};
+inline RustHidden rustMenuHidden(bool add, const QByteArray &content, const QStringList &names)
+{
+    QByteArray n;
+    for (const QString &s : names) {
+        n += s.toUtf8();
+        n.append('\0');
+    }
+    QByteArray buf(qMax<qsizetype>(512, content.size() + n.size() + 16), 0);
+    size_t len = 0;
+    auto call = [&] {
+        return telamon_menu_hidden(add, reinterpret_cast<const uint8_t *>(content.constData()), size_t(content.size()), reinterpret_cast<const uint8_t *>(n.constData()),
+                                 size_t(n.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()), &len);
+    };
+    int rc = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        rc = call();
+    }
+    return {rc, buf.left(qsizetype(qMin(len, size_t(buf.size()))))};
+}
+
+// The first name that `exists` (called with a name) says is free: `wanted`, "wanted (2)" and so on.
+template<typename F>
+inline QString rustFreeName(const QString &wanted, F exists)
+{
+    const QByteArray w = wanted.toUtf8();
+    struct Ctx {
+        F *fn;
+    } ctx{&exists};
+    auto trampoline = [](void *c, const uint8_t *name, size_t len) -> bool {
+        return (*static_cast<Ctx *>(c)->fn)(QString::fromUtf8(reinterpret_cast<const char *>(name), qsizetype(len)));
+    };
+    QByteArray buf(256, 0);
+    auto call = [&] { return telamon_menu_free_name(reinterpret_cast<const uint8_t *>(w.constData()), size_t(w.size()), trampoline, &ctx, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size())); };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
     return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
 }

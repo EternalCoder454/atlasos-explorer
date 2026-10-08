@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 6 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo)
+0.2.0 plus waves 1 to 7 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -65,8 +65,8 @@ Explorer replaces Dolphin completely.
     `FolderModel` (KCoreDirLister into a list model), `ThumbnailProvider`
     (KIO::PreviewJob), `JobRunner` (KIO jobs for the queue), `UiDelegate`
     (KIO's AskUserAction, OpenOrExecute and UntrustedProgram interfaces,
-    answered by QML dialogs), `ItemActions` (KFileItemActions to a QML menu
-    model), `Places` (KFilePlacesModel and Solid), `Opener`
+    answered by QML dialogs), `FileActions` (what the context menus hold, from KFileItemActions,
+    as plain data for the QML menus), `Places` (KFilePlacesModel and Solid), `Opener`
     (KIO::OpenUrlJob, KTerminalLauncherJob), `DragHelper` (QDrag).
     Heavy or pure logic is called from these through a `cxx` bridge into the
     core crate, never written twice. `SearchController` is the search of one
@@ -292,6 +292,70 @@ Explorer replaces Dolphin completely.
   (select all, invert selection, hidden files, file extensions, Properties,
   Open Terminal Here). Disabled states follow the selection and the folder's
   write access.
+- **Context menus** (Telamon.Ui `ContextMenu`; no `QMenu` is ever shown).
+
+  **Built (wave 7):** right click, the Menu key and Shift+F10 (at the row the
+  keyboard is on, or the top left of an empty folder) show one of two menus.
+  Each is *decided once, before it is shown*: `FileActions::itemMenu` and
+  `backgroundMenu` return a snapshot (plain data), the window fills the menu
+  from it and only then pops it up, and nothing in it reads the clipboard, the
+  folder or the plugins again while it is open (F124). The rules (which entries
+  exist, which are enabled) are in the core, `atlas_explorer_core::menu`, from
+  facts the C++ side collects (`MenuFlag`: folder writable, searching, in the
+  Trash, items local, something to paste, Telamon Archive installed...).
+  - **Items:** Open; Open With; an icon row (Cut, Copy, Paste, Rename, Move to
+    Trash; Left and Right pick a button, a button that is off is skipped);
+    Compress… (only when Telamon Archive is installed and the items are on
+    this computer); Properties; and **More Actions**: Open in New Tab(s) for
+    folders, Open File Location (search results and Recent), Open Terminal
+    Here, Pin to Sidebar (one folder), Copy Path (Ctrl+Shift+C: the full path
+    as plain text, one a line; a server's file gives its address), Hide or
+    Unhide (below), Delete for Good… (asks, as Shift+Delete does), then the
+    installed service menus. Paste goes into the one folder selected when there
+    is one, else into the folder shown.
+  - **Open With and the service menus** are KFileItemActions' own
+    (`insertOpenWithActionsTo`, `addActionsTo`), made while the snapshot is,
+    in a `QMenu` that is never shown; the window gets their actions as data
+    (two levels: a service menu's group is a submenu) and runs one by its id
+    through `runMenuAction`. KIO starts a service's command from its `Exec=`
+    line by program and argument list, never through a shell, and a user's own
+    service menu must be executable to load (KIO's rule). Ark's Compress and
+    Extract plugins are left out (Archive replaces them), and so is the
+    Activities plugin, which fills its submenu later ("Loading…").
+  - **Background:** New (Folder, Text File and the files of `~/Templates`,
+    read on a worker and kept up to date by a watcher), Paste, Undo and Redo
+    by name, Sort and View (the same menus as the toolbar's buttons), Open
+    Terminal Here, Pin This Folder to Sidebar, Properties. Show Hidden Files
+    is in View.
+  - **Names:** Rename, New Folder and New Text File (or from a template) ask
+    in a Telamon.Ui dialog (`qml/NamePrompt.qml`): the name is checked as it is
+    typed (the core's rules, and a listed item that has the name), a refusal
+    shows under the field and keeps the button off, a warning (a hidden
+    character, a leading space) shows and the button then says "Use This
+    Name". A file's name opens with its extension left out of the selection.
+    The answer is queued like any other change (`makeFolder`, `makeFile`,
+    `rename`). A new file is recorded as a copy, so Undo trashes it and Redo
+    brings it back; a template is copied with `KIO::copyAs`, an empty file
+    is written with `KIO::storedPut` (which refuses a name that exists).
+  - **Hide** writes the item's name to the folder's `.hidden` file (one name a
+    line, which KIO, Dolphin and the file index read), through the queue as a
+    job on a worker: a folder on this computer only, never through a link, a
+    file that isn't text or is over 1 MiB is left alone, the write is atomic.
+    Unhide takes the name out. Neither is undoable. Show Hidden Files (Ctrl+H)
+    shows the item dimmed.
+  - **Compress…** calls Archive's `CompressDialog(as files, a{sv})` on
+    `net.eterneon.telamon.Archive1` (then the old `atlas` name) with file://
+    URIs, `show_progress` false and, on X11, `parent_window`; an answer that
+    is an error says "Telamon Archive could not be started."
+  - **Open Terminal Here** is `KTerminalLauncherJob`, which starts the
+    terminal of kdeglobals (`TerminalApplication`, `TerminalService`) in the
+    folder: the folder itself for a folder, the file's folder for a file, the
+    folder shown otherwise; only on this computer.
+  - **Not built:** "Open in New Window" (there is one window; the launch
+    parser reads `--new-window` and opens tabs), the Settings list that hides
+    entries (wave 16; the entries simply exist), and a Telamon.Ui menu row that
+    holds icon buttons: `qml/IconRowItem.qml` has the shape such a row would
+    ask for, and moves upstream when the framework has one.
 - **Sidebar** (TelamonSidebar): Home (a Windows-style home: pinned folders,
   recent files, frequent folders), Recent (`recentlyused:/`), pinned
   favourites (`user-places.xbel`, drag to pin and reorder), Desktop,
@@ -704,7 +768,7 @@ The GUI thread never blocks.
 ## Operations
 
 One queue per process, `OperationQueue`, holds every copy, move, link,
-trash, delete, rename, new folder, restore from trash and empty trash.
+trash, delete, rename, new folder, new file, hide, restore from trash and empty trash.
 
 - Runs one transfer at a time by default (two disks thrashing helps nobody);
   quick operations (rename, new folder, trash on the same filesystem) run at

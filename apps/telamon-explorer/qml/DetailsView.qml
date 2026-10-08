@@ -49,6 +49,16 @@ Item {
         return list.indexAt(x + list.contentX, y + list.contentY);
     }
 
+    // Where a row is, in this item's coordinates (the row may be off screen).
+    function rowRect(row) {
+        const item = list.itemAtIndex(row);
+        if (item) {
+            const at = item.mapToItem(root, 0, 0);
+            return Qt.rect(0, at.y, list.width, rowHeight);
+        }
+        return Qt.rect(0, row * rowHeight - list.contentY, list.width, rowHeight);
+    }
+
     function neighbor(row, dir) {
         switch (dir) {
         case "up":
@@ -252,7 +262,8 @@ Item {
                 property bool dragged: false
                 onPressed: mouseEvent => {
                     if (mouseEvent.button === Qt.RightButton) {
-                        root.fv.rowMenu(row.index);
+                        const at = mouse.mapToItem(root.fv, mouseEvent.x, mouseEvent.y);
+                        root.fv.rowMenu(row.index, at.x, at.y);
                         return;
                     }
                     if (mouseEvent.button === Qt.MiddleButton) {
