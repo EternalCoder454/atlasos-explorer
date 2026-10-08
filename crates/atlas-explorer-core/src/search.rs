@@ -219,6 +219,17 @@ pub fn route(scope: Scope, local: bool, indexed: bool, index_on: bool) -> Route 
     }
 }
 
+/// Where a search runs when the index cannot do it: a name pattern (the index
+/// matches words, not patterns) and words inside files (the index holds no
+/// content) are always a walk of the folders.
+pub fn route_live(scope: Scope, local: bool) -> Route {
+    match scope {
+        Scope::Everywhere => Route::LiveHome,
+        Scope::ThisFolder if local => Route::LiveFolder,
+        Scope::ThisFolder => Route::LiveRemote,
+    }
+}
+
 /// How the index's `Status` state reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndexState {
@@ -456,6 +467,16 @@ mod tests {
         assert_eq!(route(Everywhere, true, false, true), IndexEverywhere);
         assert_eq!(route(Everywhere, false, false, true), IndexEverywhere);
         assert_eq!(route(Everywhere, true, true, false), LiveHome);
+    }
+
+    #[test]
+    fn patterns_and_content_always_walk() {
+        use Route::*;
+        use Scope::*;
+        assert_eq!(route_live(ThisFolder, true), LiveFolder);
+        assert_eq!(route_live(ThisFolder, false), LiveRemote);
+        assert_eq!(route_live(Everywhere, true), LiveHome);
+        assert_eq!(route_live(Everywhere, false), LiveHome);
     }
 
     #[test]

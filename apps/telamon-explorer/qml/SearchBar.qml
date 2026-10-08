@@ -6,9 +6,11 @@ import Telamon.Ui
 
 // The row under the toolbar while a search is open: where to look (This
 // Folder, Everywhere), the filter chips (Kind, Modified, Size; each one that
-// is set can be cleared with its x), and on the right how the search is going:
-// the state of the index, or for a folder the index doesn't hold the live
-// walk with its Stop button. It belongs to the tab shown (`search` is that
+// is set can be cleared with its x), Inside Files (look in the content of text
+// files and PDFs instead of the names) and Filters (Use pattern), and on the
+// right how the search is going: the state of the index, or for a search that
+// walks the folders (a folder the index doesn't hold, a pattern, Inside Files)
+// the live walk with its Stop button, and Save Search. It belongs to the tab shown (`search` is that
 // tab's SearchController) and is open while there are words or chips, or the
 // field in the toolbar or something in this row has the keyboard.
 FocusScope {
@@ -19,7 +21,7 @@ FocusScope {
     // The search field in the toolbar.
     property Item field: null
 
-    readonly property bool menuOpen: kindMenu.visible || modifiedMenu.visible || sizeMenu.visible
+    readonly property bool menuOpen: kindMenu.visible || modifiedMenu.visible || sizeMenu.visible || filtersPopover.visible
     readonly property bool open: search !== null && (search.active || (field !== null && field.activeFocus) || bar.activeFocus || menuOpen)
 
     readonly property var kindNames: [qsTr("Any"), qsTr("Document"), qsTr("Image"), qsTr("Audio"), qsTr("Video"), qsTr("Archive"), qsTr("Code"), qsTr("Folder")]
@@ -28,6 +30,8 @@ FocusScope {
 
     // Escape in this row: end the search.
     signal closeRequested
+    // Save Search was chosen.
+    signal saveRequested
 
     Keys.onEscapePressed: bar.closeRequested()
 
@@ -78,12 +82,26 @@ FocusScope {
         onChosen: value => bar.search.size = value
     }
 
-    RowLayout {
+    FiltersPopover {
+        id: filtersPopover
+        target: filtersChip
+        search: bar.search
+        error: bar.search ? bar.search.patternError : ""
+    }
+
+    // The controls wrap onto a second line in a narrow window (the Inside Files
+    // and Filters chips and Save Search made one line too long for the default
+    // window); the status at the right takes the room that is left of its line.
+    TelamonFlowLayout {
         id: row
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: Kirigami.Units.smallSpacing
         anchors.leftMargin: Kirigami.Units.smallSpacing
         anchors.rightMargin: Kirigami.Units.smallSpacing
         spacing: Kirigami.Units.smallSpacing * 2
+        rowSpacing: Kirigami.Units.smallSpacing
 
         Row {
             id: scopeChips
@@ -103,6 +121,44 @@ FocusScope {
                 autoExclusive: true
                 checked: bar.search ? bar.search.scope === 1 : false
                 onClicked: bar.search.scope = 1
+            }
+        }
+
+        Rectangle {
+            implicitWidth: 1
+            implicitHeight: Kirigami.Units.gridUnit
+            color: Qt.alpha(Kirigami.Theme.textColor, 0.2)
+        }
+
+        Row {
+            id: modeChips
+            spacing: Kirigami.Units.smallSpacing
+            Accessible.role: Accessible.Grouping
+            Accessible.name: qsTr("What to Look In")
+            // Look in the content of text files and PDFs for the words, not in the names.
+            TelamonChip {
+                id: contentsChip
+                text: qsTr("Inside Files")
+                checkable: true
+                checked: bar.search ? bar.search.contents : false
+                Accessible.description: bar.search ? bar.search.contentNote : ""
+                onToggled: {
+                    bar.search.contents = checked;
+                    checked = Qt.binding(() => bar.search ? bar.search.contents : false);
+                }
+                TelamonToolTip {
+                    text: bar.search ? bar.search.contentNote : ""
+                    shown: contentsChip.hovered
+                }
+            }
+            // Filters: Use pattern (regular expression).
+            TelamonChip {
+                id: filtersChip
+                text: bar.search && bar.search.usePattern ? qsTr("Filters: Pattern") : qsTr("Filters")
+                symbol: Symbols.Tune
+                closable: bar.search !== null && bar.search.usePattern
+                onClicked: filtersPopover.open()
+                onCloseRequested: bar.search.usePattern = false
             }
         }
 
@@ -148,8 +204,36 @@ FocusScope {
             }
         }
 
+        // The pattern is wrong: nothing is run, and it says why.
+        Text {
+            visible: bar.search !== null && bar.search.patternError.length > 0
+            Layout.maximumWidth: Kirigami.Units.gridUnit * 30
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: bar.search ? bar.search.patternError : ""
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeCaption
+            color: Kirigami.Theme.negativeTextColor
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+
         Item {
             Layout.fillWidth: true
+        }
+
+        // Inside Files with nothing typed yet: what it does.
+        Text {
+            visible: bar.search !== null && bar.search.contents && bar.search.text.trim().length === 0
+            Layout.maximumWidth: Kirigami.Units.gridUnit * 30
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: bar.search ? bar.search.contentNote : ""
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeCaption
+            color: TelamonStyle.textMuted
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
         }
 
         // A live search: the walk's progress, and Stop.
@@ -160,7 +244,8 @@ FocusScope {
             Layout.preferredHeight: Kirigami.Units.iconSizes.small
         }
         Text {
-            visible: bar.search !== null && bar.search.live
+            // A finished search inside files has a long line ("Left out: ..."): that one is the status line's.
+            visible: bar.search !== null && bar.search.live && (bar.search.walking || !bar.search.contents)
             textFormat: Text.PlainText
             text: bar.search ? bar.search.statusText : ""
             elide: Text.ElideRight
@@ -182,7 +267,7 @@ FocusScope {
         // The state of the index, for a search that asks it.
         Rectangle {
             id: chip
-            visible: bar.search !== null && !bar.search.live && bar.search.chipText.length > 0
+            visible: bar.search !== null && !bar.search.live && bar.search.patternError.length === 0 && bar.search.chipText.length > 0
             readonly property int level: bar.search ? bar.search.chipLevel : 0
             readonly property color tint: level === 3 ? Kirigami.Theme.negativeTextColor : (level === 2 ? Kirigami.Theme.neutralTextColor : (level === 1 ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor))
             Layout.maximumWidth: Kirigami.Units.gridUnit * 30
@@ -217,6 +302,15 @@ FocusScope {
                     Accessible.ignored: true
                 }
             }
+        }
+
+        SecondaryButton {
+            id: saveButton
+            text: qsTr("Save Search")
+            symbol: Symbols.BookmarkAdd
+            enabled: bar.search !== null && bar.search.canSave
+            Accessible.name: qsTr("Save Search")
+            onClicked: bar.saveRequested()
         }
     }
 }

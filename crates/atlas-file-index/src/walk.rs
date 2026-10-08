@@ -14,10 +14,16 @@ use crate::config::{BUILTIN_EXCLUDES, CACHEDIR_SIGNATURE, is_cachedir_tag, marke
 use crate::index::MAX_DEPTH;
 use crate::query::{KindFilter, NameMatcher, Options};
 use crate::tags;
+use atlas_explorer_core::content::{
+    self, ContentQuery, Found, MAX_PDF_BYTES, MAX_SECONDS, MAX_TEXT_BYTES, MAX_TOTAL_BYTES, Pdf,
+    Scan, Stats,
+};
+use atlas_explorer_core::pattern::Pattern;
 use std::collections::VecDeque;
 use std::fs;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +39,8 @@ const STOP_EVERY: u32 = 64;
 /// A name and the filters, ready to judge entries.
 pub struct LiveMatcher {
     names: NameMatcher,
+    /// Names judged by a regular expression instead of words.
+    pattern: Option<Pattern>,
     opts: Options,
     /// The wanted tag in its [`tags::folded`] form.
     tag: Option<String>,
@@ -42,6 +50,17 @@ impl LiveMatcher {
     pub fn new(query: &str, opts: Options) -> LiveMatcher {
         LiveMatcher {
             names: NameMatcher::new(query),
+            pattern: None,
+            tag: opts.tag.as_deref().map(tags::folded),
+            opts,
+        }
+    }
+
+    /// Names judged by `pattern` (a regular expression) in place of words.
+    pub fn with_pattern(pattern: Pattern, opts: Options) -> LiveMatcher {
+        LiveMatcher {
+            names: NameMatcher::new(""),
+            pattern: Some(pattern),
             tag: opts.tag.as_deref().map(tags::folded),
             opts,
         }
@@ -52,6 +71,7 @@ impl LiveMatcher {
     pub fn is_empty(&self) -> bool {
         let o = &self.opts;
         self.names.is_empty()
+            && self.pattern.is_none()
             && o.kind.is_none()
             && o.kinds.is_none()
             && o.modified_after.is_none()
@@ -68,6 +88,10 @@ impl LiveMatcher {
 
     /// The first look, from the name alone: the match class, or `None`.
     pub fn name_class(&self, name: &[u8]) -> Option<u8> {
+        if let Some(p) = &self.pattern {
+            // A pattern has no better or worse match: every hit is a substring one.
+            return p.is_match(name).then_some(1);
+        }
         self.names.class(name)
     }
 
@@ -143,6 +167,8 @@ pub enum WalkEnd {
     Capped,
     /// The folder to search could not be read.
     Unreadable,
+    /// A search inside files read as much as it may, or ran as long as it may.
+    Limit,
 }
 
 /// Walk `root`, handing out batches of hits to `flush` as they are found
@@ -253,6 +279,215 @@ pub fn walk(
 fn send(batch: &mut Vec<WalkHit>, flush: &mut dyn FnMut(Vec<WalkHit>)) {
     if !batch.is_empty() {
         flush(std::mem::take(batch));
+    }
+}
+
+/// One file whose content holds the words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContentHit {
+    /// Absolute path bytes.
+    pub path: Vec<u8>,
+    pub size: u64,
+    pub mtime: i64,
+    /// The first matching line.
+    pub found: Found,
+}
+
+fn send_content(batch: &mut Vec<ContentHit>, flush: &mut dyn FnMut(Vec<ContentHit>)) {
+    if !batch.is_empty() {
+        flush(std::mem::take(batch));
+    }
+}
+
+/// Search inside files: walk `root` the way [`walk`] does (breadth first, no
+/// symlinks followed, no other filesystem entered, hidden names only when the
+/// matcher includes them) and look for the words in the content of the files
+/// that pass the matcher's filters (kind, date, size, tag; its words are not
+/// used). Text files up to 4 MiB and PDFs up to 50 MiB are read; the folders
+/// `node_modules` and `__pycache__` are not entered; images, audio, video,
+/// archives, fonts and disk images are left alone by name, and anything with
+/// a NUL in its first 8 KiB by content. Hits are handed out as [`walk`]'s
+/// are. Returns how it ended and what it left out.
+pub fn walk_content(
+    root: &Path,
+    m: &LiveMatcher,
+    q: &ContentQuery,
+    stop: &AtomicBool,
+    max_hits: usize,
+    flush: &mut dyn FnMut(Vec<ContentHit>),
+) -> (WalkEnd, Stats) {
+    let mut stats = Stats::default();
+    let Ok(root_meta) = fs::metadata(root) else {
+        return (WalkEnd::Unreadable, stats);
+    };
+    if !root_meta.is_dir() {
+        return (WalkEnd::Unreadable, stats);
+    }
+    let root_dev = root_meta.dev();
+    let started = Instant::now();
+    let mut read_bytes: u64 = 0;
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    queue.push_back((root.to_path_buf(), 0));
+    let mut batch: Vec<ContentHit> = Vec::new();
+    let mut total = 0usize;
+    let mut last = Instant::now();
+    let mut first_sent = false;
+    let mut first_dir = true;
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        let rd = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) if first_dir => return (WalkEnd::Unreadable, stats),
+            Err(_) => continue,
+        };
+        first_dir = false;
+        for entry in rd {
+            if stop.load(Ordering::Relaxed) {
+                send_content(&mut batch, flush);
+                return (WalkEnd::Stopped, stats);
+            }
+            if read_bytes >= MAX_TOTAL_BYTES || started.elapsed().as_secs() >= MAX_SECONDS {
+                send_content(&mut batch, flush);
+                return (WalkEnd::Limit, stats);
+            }
+            let Ok(entry) = entry else { continue };
+            let name_os = entry.file_name();
+            let name = name_os.as_bytes();
+            if m.hides(name) {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else { continue };
+            let Ok(md) = entry.metadata() else { continue };
+            if ft.is_dir() {
+                let skipped = BUILTIN_EXCLUDES.iter().any(|e| e.as_bytes() == name);
+                if depth < MAX_DEPTH && md.dev() == root_dev && !skipped {
+                    queue.push_back((entry.path(), depth + 1));
+                }
+                continue;
+            }
+            // Regular files only: a link, a pipe or a device is not read.
+            if !ft.is_file() {
+                continue;
+            }
+            let exec = md.mode() & 0o111 != 0;
+            let (size, mtime) = (md.len(), md.mtime());
+            if !m.accepts(name, false, exec, size, mtime) {
+                continue;
+            }
+            let full = entry.path();
+            if m.wants_tag() && !m.tag_accepts(&full) {
+                continue;
+            }
+            let found = match category_of(name, false, exec) {
+                Category::Image
+                | Category::Audio
+                | Category::Video
+                | Category::Archive
+                | Category::Font
+                | Category::DiskImage => {
+                    stats.binary += 1;
+                    continue;
+                }
+                Category::Pdf => {
+                    if size > MAX_PDF_BYTES {
+                        stats.too_large += 1;
+                        continue;
+                    }
+                    match content::scan_pdf(&full, q, stop) {
+                        Pdf::Scanned(Scan::Match(f)) => Some(f),
+                        Pdf::Scanned(Scan::Stopped) => {
+                            send_content(&mut batch, flush);
+                            return (WalkEnd::Stopped, stats);
+                        }
+                        Pdf::Scanned(_) => {
+                            stats.searched += 1;
+                            None
+                        }
+                        Pdf::Failed => {
+                            stats.unreadable += 1;
+                            None
+                        }
+                        Pdf::TimedOut => {
+                            stats.pdf_timeout += 1;
+                            None
+                        }
+                        Pdf::NoTool => {
+                            stats.pdf_no_tool += 1;
+                            None
+                        }
+                    }
+                }
+                _ => {
+                    if size == 0 {
+                        stats.searched += 1;
+                        continue;
+                    }
+                    if size > MAX_TEXT_BYTES {
+                        stats.too_large += 1;
+                        continue;
+                    }
+                    read_bytes += size;
+                    match open_regular(&full).and_then(|f| content::scan(f, q, stop, true)) {
+                        Ok(Scan::Match(f)) => Some(f),
+                        Ok(Scan::Stopped) => {
+                            send_content(&mut batch, flush);
+                            return (WalkEnd::Stopped, stats);
+                        }
+                        Ok(Scan::NoMatch) => {
+                            stats.searched += 1;
+                            None
+                        }
+                        Ok(Scan::Binary) => {
+                            stats.binary += 1;
+                            None
+                        }
+                        Err(_) => {
+                            stats.unreadable += 1;
+                            None
+                        }
+                    }
+                }
+            };
+            let Some(found) = found else { continue };
+            stats.searched += 1;
+            batch.push(ContentHit {
+                path: full.as_os_str().as_bytes().to_vec(),
+                size,
+                mtime,
+                found,
+            });
+            total += 1;
+            if total >= max_hits {
+                send_content(&mut batch, flush);
+                return (WalkEnd::Capped, stats);
+            }
+            if batch.len() >= BATCH || !first_sent || last.elapsed() >= FLUSH {
+                first_sent = true;
+                last = Instant::now();
+                send_content(&mut batch, flush);
+            }
+        }
+        if !batch.is_empty() && last.elapsed() >= FLUSH {
+            last = Instant::now();
+            send_content(&mut batch, flush);
+        }
+    }
+    send_content(&mut batch, flush);
+    (WalkEnd::Done, stats)
+}
+
+/// Opens a file for reading without following a link (one that appeared since
+/// the folder was listed) and without waiting on a pipe; refuses anything that
+/// is not a regular file.
+fn open_regular(path: &Path) -> std::io::Result<fs::File> {
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    if f.metadata()?.is_file() {
+        Ok(f)
+    } else {
+        Err(std::io::Error::other("not a regular file"))
     }
 }
 
@@ -675,5 +910,210 @@ mod tests {
             Path::new(&format!("{}-other", r.display())),
             &roots
         ));
+    }
+
+    // ---- Search inside files ----
+
+    fn content_run(
+        root: &Path,
+        query: &str,
+        pattern: bool,
+        opts: Options,
+    ) -> (Vec<ContentHit>, WalkEnd, Stats) {
+        content_run_with(root, query, pattern, opts, 1000, &AtomicBool::new(false))
+    }
+
+    fn content_run_with(
+        root: &Path,
+        query: &str,
+        pattern: bool,
+        opts: Options,
+        max: usize,
+        stop: &AtomicBool,
+    ) -> (Vec<ContentHit>, WalkEnd, Stats) {
+        let m = LiveMatcher::new("", opts);
+        let q = ContentQuery::new(query, pattern).unwrap();
+        let mut out = Vec::new();
+        let (end, stats) = walk_content(root, &m, &q, stop, max, &mut |b| out.extend(b));
+        (out, end, stats)
+    }
+
+    fn put(p: &Path, data: &[u8]) {
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, data).unwrap();
+    }
+
+    fn content_tree() -> Scratch {
+        let s = Scratch::new("content");
+        let r = &s.0;
+        put(
+            &r.join("notes.txt"),
+            b"first line\nthe magic word is here\nlast\n",
+        );
+        put(
+            &r.join("src/main.rs"),
+            b"fn main() {\n    // MAGIC WORD\n}\n",
+        );
+        put(&r.join("src/deep/more.md"), b"# Title\nnothing\n");
+        put(
+            &r.join("src/deep/also.md"),
+            b"see the Magic Word twice: magic word\n",
+        );
+        // A binary file with the words inside, a picture and a big text file.
+        let mut bin = vec![0u8; 100];
+        bin.extend_from_slice(b"magic word");
+        put(&r.join("blob.dat"), &bin);
+        put(&r.join("photo.png"), b"magic word");
+        let mut big = b"magic word\n".to_vec();
+        big.extend(std::iter::repeat_n(b'x', (MAX_TEXT_BYTES + 1) as usize));
+        put(&r.join("huge.log"), &big);
+        put(&r.join("node_modules/pkg/index.js"), b"magic word\n");
+        put(&r.join(".hidden/secret.txt"), b"magic word\n");
+        put(&r.join(".dotfile"), b"magic word\n");
+        symlink(r.join("notes.txt"), r.join("link-to-notes")).unwrap();
+        put(&r.join("empty.txt"), b"");
+        s
+    }
+
+    fn paths(root: &Path, hits: &[ContentHit]) -> Vec<String> {
+        let mut v: Vec<String> = hits
+            .iter()
+            .map(|h| {
+                String::from_utf8_lossy(&h.path)
+                    .strip_prefix(&format!("{}/", root.display()))
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn content_search_finds_text_and_skips_the_rest() {
+        let s = content_tree();
+        let r = &s.0;
+        let (hits, end, stats) = content_run(r, "magic word", false, Options::default());
+        assert_eq!(end, WalkEnd::Done);
+        // Text and source: found. The binary, the picture, the over-large file,
+        // node_modules, hidden names and the symlink: not.
+        assert_eq!(
+            paths(r, &hits),
+            ["notes.txt", "src/deep/also.md", "src/main.rs"]
+        );
+        assert_eq!(stats.too_large, 1, "{stats:?}");
+        assert_eq!(
+            stats.binary, 2,
+            "blob.dat by content, photo.png by name: {stats:?}"
+        );
+        let notes = hits
+            .iter()
+            .find(|h| h.path.ends_with(b"notes.txt"))
+            .unwrap();
+        assert_eq!((notes.found.line, notes.found.more), (2, 0));
+        assert_eq!(notes.found.snippet, "the magic word is here");
+        assert_eq!(notes.size, 39);
+        assert!(notes.mtime > 1_500_000_000);
+        let also = hits.iter().find(|h| h.path.ends_with(b"also.md")).unwrap();
+        assert_eq!(
+            (also.found.line, also.found.more),
+            (1, 0),
+            "one line, counted once"
+        );
+        let main = hits.iter().find(|h| h.path.ends_with(b"main.rs")).unwrap();
+        assert_eq!(main.found.line, 2);
+    }
+
+    #[test]
+    fn hidden_names_only_when_asked_and_filters_narrow() {
+        let s = content_tree();
+        let r = &s.0;
+        let o = Options {
+            include_hidden: true,
+            ..Options::default()
+        };
+        let (hits, _, _) = content_run(r, "magic word", false, o);
+        let p = paths(r, &hits);
+        assert!(
+            p.contains(&".hidden/secret.txt".to_string()) && p.contains(&".dotfile".to_string()),
+            "{p:?}"
+        );
+        assert!(!p.iter().any(|x| x.contains("node_modules")), "{p:?}");
+        // A kind filter: only Code.
+        let o = Options {
+            kinds: Some(Category::Code.bit()),
+            ..Options::default()
+        };
+        let (hits, _, _) = content_run(r, "magic word", false, o);
+        assert_eq!(paths(r, &hits), ["src/main.rs"]);
+        // A size filter: files up to 35 bytes.
+        let o = Options {
+            size_max: Some(35),
+            ..Options::default()
+        };
+        let (hits, _, _) = content_run(r, "magic word", false, o);
+        assert_eq!(paths(r, &hits), ["src/main.rs"]);
+    }
+
+    #[test]
+    fn content_patterns_and_the_cap_and_stop() {
+        let s = content_tree();
+        let r = &s.0;
+        let (hits, _, _) = content_run(r, r"magic\s+WORD\b", true, Options::default());
+        assert_eq!(
+            paths(r, &hits),
+            ["notes.txt", "src/deep/also.md", "src/main.rs"]
+        );
+        let (hits, end, _) = content_run_with(
+            r,
+            "magic",
+            false,
+            Options::default(),
+            2,
+            &AtomicBool::new(false),
+        );
+        assert_eq!((hits.len(), end), (2, WalkEnd::Capped));
+        let stop = AtomicBool::new(true);
+        let (hits, end, _) = content_run_with(r, "magic", false, Options::default(), 100, &stop);
+        assert_eq!((hits.len(), end), (0, WalkEnd::Stopped));
+        // A folder that is not there, and a file where a folder is expected.
+        let (_, end, _) = content_run(&r.join("missing"), "x", false, Options::default());
+        assert_eq!(end, WalkEnd::Unreadable);
+        let (_, end, _) = content_run(&r.join("notes.txt"), "x", false, Options::default());
+        assert_eq!(end, WalkEnd::Unreadable);
+    }
+
+    #[test]
+    fn a_name_pattern_walk_matches_names() {
+        let s = tree();
+        let r = &s.0;
+        let m = LiveMatcher::with_pattern(
+            Pattern::new(r"^report-\d+\.pdf$").unwrap(),
+            Options::default(),
+        );
+        assert!(!m.is_empty());
+        let mut out = Vec::new();
+        let end = walk(r, &m, &AtomicBool::new(false), 100, &mut |b| out.extend(b));
+        assert_eq!(end, WalkEnd::Done);
+        assert_eq!(rel(r, &out), ["a/report-2024.pdf"]);
+        // The pattern is against the name, not the path.
+        let m = LiveMatcher::with_pattern(Pattern::new("^a/").unwrap(), Options::default());
+        let mut out = Vec::new();
+        walk(r, &m, &AtomicBool::new(false), 100, &mut |b| out.extend(b));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn pdf_content_goes_through_pdftotext_or_is_counted() {
+        let s = Scratch::new("contentpdf");
+        let r = &s.0;
+        put(&r.join("a.pdf"), b"%PDF-1.4 broken");
+        let (hits, end, stats) = content_run(r, "x", false, Options::default());
+        assert_eq!((hits.len(), end), (0, WalkEnd::Done));
+        if content::pdftotext().is_some() {
+            assert_eq!(stats.unreadable, 1, "{stats:?}");
+        } else {
+            assert_eq!(stats.pdf_no_tool, 1, "{stats:?}");
+        }
     }
 }

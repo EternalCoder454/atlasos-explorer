@@ -340,6 +340,38 @@ void walkCallback(void *user, const uint8_t *batch, size_t len, uint32_t end)
 }
 }
 
+struct SearchController::ContentContext {
+    QPointer<SearchController> controller;
+    quint64 serial;
+};
+
+namespace
+{
+void contentCallback(void *user, const uint8_t *batch, size_t len, uint32_t end, const TelamonContentStats *stats)
+{
+    auto *ctx = static_cast<SearchController::ContentContext *>(user);
+    if (!QCoreApplication::instance()) {
+        if (end != 0) {
+            delete ctx;
+        }
+        return;
+    }
+    QByteArray data = batch ? QByteArray(reinterpret_cast<const char *>(batch), qsizetype(len)) : QByteArray();
+    QByteArray st = stats ? QByteArray(reinterpret_cast<const char *>(stats), qsizetype(sizeof(TelamonContentStats))) : QByteArray();
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(),
+        [ctl = ctx->controller, serial = ctx->serial, data = std::move(data), end, st = std::move(st)] {
+            if (ctl) {
+                ctl->onContentFromThread(serial, data, end, st);
+            }
+        },
+        Qt::QueuedConnection);
+    if (end != 0) {
+        delete ctx;
+    }
+}
+}
+
 SearchController::SearchController(QObject *parent)
     : QObject(parent)
 {
@@ -405,6 +437,7 @@ void SearchController::changed()
         m_wasActive = a;
         Q_EMIT activeChanged();
     }
+    Q_EMIT saveChanged();
     m_kick.start();
 }
 
@@ -415,6 +448,7 @@ void SearchController::setText(const QString &t)
     }
     m_text = t;
     Q_EMIT textChanged();
+    refreshPatternError();
     changed();
 }
 
@@ -475,6 +509,107 @@ void SearchController::setTag(const QString &t)
     changed();
 }
 
+void SearchController::setUsePattern(bool on)
+{
+    if (on == m_pattern) {
+        return;
+    }
+    m_pattern = on;
+    Q_EMIT patternChanged();
+    refreshPatternError();
+    if (active()) {
+        changed();
+    }
+}
+
+void SearchController::setContents(bool on)
+{
+    if (on == m_contents) {
+        return;
+    }
+    m_contents = on;
+    Q_EMIT contentsChanged();
+    refreshPatternError();
+    if (active()) {
+        changed();
+    }
+}
+
+QString SearchController::contentNote() const
+{
+    QByteArray buf(256, 0);
+    size_t n = telamon_content_note(reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    if (n > size_t(buf.size())) {
+        buf.resize(qsizetype(n));
+        n = telamon_content_note(reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(n, size_t(buf.size()))));
+}
+
+bool SearchController::canSave() const
+{
+    return active() && m_patternError.isEmpty();
+}
+
+// Whether the words can run as they are: a pattern must be a valid one, and
+// words looked for inside files must be short enough.
+void SearchController::refreshPatternError()
+{
+    const QByteArray t = m_text.trimmed().toUtf8();
+    QByteArray buf(256, 0);
+    size_t n = telamon_pattern_check(reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), m_pattern, m_contents, reinterpret_cast<uint8_t *>(buf.data()),
+                                     size_t(buf.size()));
+    if (n > size_t(buf.size())) {
+        buf.resize(qsizetype(n));
+        n = telamon_pattern_check(reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), m_pattern, m_contents, reinterpret_cast<uint8_t *>(buf.data()),
+                                  size_t(buf.size()));
+    }
+    const QString err = QString::fromUtf8(buf.constData(), qsizetype(qMin(n, size_t(buf.size()))));
+    if (err != m_patternError) {
+        m_patternError = err;
+        Q_EMIT patternErrorChanged();
+    }
+    Q_EMIT saveChanged();
+}
+
+QVariantMap SearchController::snapshot() const
+{
+    QVariantMap m;
+    m.insert(QStringLiteral("query"), m_text.trimmed());
+    m.insert(QStringLiteral("scope"), m_scope);
+    m.insert(QStringLiteral("folder"), m_scope == 0 && m_folder ? QString::fromLatin1(searchFolder().adjusted(QUrl::RemovePassword).toEncoded()) : QString());
+    m.insert(QStringLiteral("kind"), m_kind);
+    m.insert(QStringLiteral("modified"), m_modified);
+    m.insert(QStringLiteral("size"), m_size);
+    m.insert(QStringLiteral("tag"), m_tag);
+    m.insert(QStringLiteral("pattern"), m_pattern);
+    m.insert(QStringLiteral("contents"), m_contents);
+    return m;
+}
+
+void SearchController::applySaved(const QVariantMap &s)
+{
+    m_kick.stop();
+    m_text = s.value(QStringLiteral("query")).toString();
+    m_scope = s.value(QStringLiteral("scope")).toInt() == 1 ? 1 : 0;
+    m_kind = qBound(0, s.value(QStringLiteral("kind")).toInt(), 7);
+    m_modified = qBound(0, s.value(QStringLiteral("modified")).toInt(), 4);
+    m_size = qBound(0, s.value(QStringLiteral("size")).toInt(), 3);
+    m_tag = s.value(QStringLiteral("tag")).toString().trimmed();
+    m_pattern = s.value(QStringLiteral("pattern")).toBool();
+    m_contents = s.value(QStringLiteral("contents")).toBool();
+    Q_EMIT textChanged();
+    Q_EMIT scopeChanged();
+    Q_EMIT kindChanged();
+    Q_EMIT modifiedChanged();
+    Q_EMIT sizeChanged();
+    Q_EMIT tagChanged();
+    Q_EMIT patternChanged();
+    Q_EMIT contentsChanged();
+    refreshPatternError();
+    changed();
+}
+
 void SearchController::showTag(const QString &name)
 {
     const QString tag = name.trimmed();
@@ -486,6 +621,7 @@ void SearchController::showTag(const QString &name)
     if (!m_text.isEmpty()) {
         m_text.clear();
         Q_EMIT textChanged();
+        refreshPatternError();
     }
     if (m_kind || m_modified || m_size) {
         m_kind = m_modified = m_size = 0;
@@ -516,6 +652,7 @@ void SearchController::clear()
     Q_EMIT kindChanged();
     Q_EMIT modifiedChanged();
     Q_EMIT sizeChanged();
+    refreshPatternError();
     const bool a = active();
     if (a != m_wasActive) {
         m_wasActive = a;
@@ -544,6 +681,7 @@ void SearchController::resetState()
         Q_EMIT modifiedChanged();
         Q_EMIT sizeChanged();
     }
+    refreshPatternError();
     if (m_wasActive) {
         m_wasActive = false;
         Q_EMIT activeChanged();
@@ -591,6 +729,7 @@ void SearchController::stop()
     stopLive();
     ++m_serial;
     m_stopped = true;
+    // "Stopped, 3 found" (the same words for a walk of names and of contents).
     showLive(false, true, false);
 }
 
@@ -724,7 +863,17 @@ void SearchController::run()
         return;
     }
     m_folder->beginSearch();
+    m_folder->setSnippets(contentMode());
     setFailure(QString(), QString());
+    if (!m_patternError.isEmpty() && (m_pattern || contentMode())) {
+        // Words that can't run are not run: nothing is searched, and it says why.
+        m_folder->setSearchResults({});
+        setRoute(NoRoute);
+        setPending(false);
+        setFailure(tr("Not a Valid Pattern"), m_patternError);
+        setStatusText(m_patternError);
+        return;
+    }
     setPending(true);
     startRoute(serial);
 }
@@ -749,7 +898,7 @@ void SearchController::startRoute(quint64 serial)
         SearchService *svc = SearchService::instance();
         const QUrl folder = searchFolder();
         // Whether the index holds the folder is asked of a worker: it reads a few folders.
-        if (m_scope == 0 && folder.isLocalFile() && telamon_search_index_on(uint32_t(svc->state()))) {
+        if (!mustWalk() && m_scope == 0 && folder.isLocalFile() && telamon_search_index_on(uint32_t(svc->state()))) {
             const QString path = folder.toLocalFile();
             const QString roots = svc->roots().join(QLatin1Char('\n'));
             QPointer<SearchController> self(this);
@@ -786,7 +935,9 @@ void SearchController::routeNow(quint64 serial, bool covered)
     }
     SearchService *svc = SearchService::instance();
     const QUrl folder = searchFolder();
-    const Route r = Route(telamon_search_route(uint32_t(m_scope), folder.isLocalFile(), covered, telamon_search_index_on(uint32_t(svc->state()))));
+    // A pattern and words inside files are for the walk: the index matches words in names.
+    const Route r = mustWalk() ? Route(telamon_search_route_live(uint32_t(m_scope), folder.isLocalFile()))
+                               : Route(telamon_search_route(uint32_t(m_scope), folder.isLocalFile(), covered, telamon_search_index_on(uint32_t(svc->state()))));
     setRoute(r);
     switch (r) {
     case IndexEverywhere:
@@ -794,12 +945,20 @@ void SearchController::routeNow(quint64 serial, bool covered)
         searchIndex(serial, r);
         break;
     case LiveFolder:
-        startWalk(serial, folder);
+        contentMode() ? startContent(serial, folder) : startWalk(serial, folder);
         break;
     case LiveHome:
-        startWalk(serial, QUrl::fromLocalFile(QDir::homePath()));
+        contentMode() ? startContent(serial, QUrl::fromLocalFile(QDir::homePath())) : startWalk(serial, QUrl::fromLocalFile(QDir::homePath()));
         break;
     case LiveRemote:
+        if (contentMode()) {
+            // Reading every file of a server's tree would download it.
+            m_folder->setSearchResults({});
+            setPending(false);
+            setFailure(tr("Can't Search Inside These Files"), tr("Searching inside files works for folders on this computer. Turn off Inside Files to search the names here."));
+            setStatusText(QString());
+            break;
+        }
         startKio(serial, folder);
         break;
     case NoRoute:
@@ -887,7 +1046,7 @@ void SearchController::startWalk(quint64 serial, const QUrl &root)
     m_folder->setSearchResults({});
     auto *ctx = new WalkContext{QPointer<SearchController>(this), serial};
     m_walk = telamon_walk_start(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), reinterpret_cast<const uint8_t *>(query.constData()),
-                                size_t(query.size()), &f, m_folder && m_folder->showHidden(), reinterpret_cast<const uint8_t *>(tag.constData()), size_t(tag.size()),
+                                size_t(query.size()), &f, m_folder && m_folder->showHidden(), m_pattern, reinterpret_cast<const uint8_t *>(tag.constData()), size_t(tag.size()),
                                 telamon_search_limit(1), &walkCallback, ctx);
     if (!m_walk) {
         delete ctx;
@@ -950,6 +1109,100 @@ void SearchController::onWalkFromThread(quint64 serial, const QByteArray &batch,
     m_lastMs = m_typed.isValid() ? int(m_typed.elapsed()) : -1;
 }
 
+void SearchController::startContent(quint64 serial, const QUrl &root)
+{
+    const TelamonSearchFilter f = makeFilter(m_kind, m_modified, m_size);
+    const QByteArray path = QFile::encodeName(root.toLocalFile());
+    const QByteArray query = m_text.trimmed().toUtf8();
+    const QByteArray tag = m_tag.toUtf8();
+    m_folder->setSearchResults({});
+    auto *ctx = new ContentContext{QPointer<SearchController>(this), serial};
+    m_walk = telamon_content_start(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), reinterpret_cast<const uint8_t *>(query.constData()),
+                                   size_t(query.size()), m_pattern, &f, m_folder && m_folder->showHidden(), reinterpret_cast<const uint8_t *>(tag.constData()),
+                                   size_t(tag.size()), telamon_search_limit(4), &contentCallback, ctx);
+    if (!m_walk) {
+        delete ctx;
+        setPending(false);
+        setFailure(tr("Can't Search Inside These Files"), tr("Files couldn't start looking through them."));
+        return;
+    }
+    setPending(false);
+    setWalking(true);
+    m_folder->setSearchBusy(true);
+    showContent(0, QByteArray());
+}
+
+void SearchController::showContent(uint end, const QByteArray &stats)
+{
+    QByteArray buf(512, 0);
+    const auto *st = stats.size() == qsizetype(sizeof(TelamonContentStats)) ? reinterpret_cast<const TelamonContentStats *>(stats.constData()) : nullptr;
+    size_t n = telamon_content_text(quint64(m_found), end, st, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    if (n > size_t(buf.size())) {
+        buf.resize(qsizetype(n));
+        n = telamon_content_text(quint64(m_found), end, st, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    }
+    setStatusText(QString::fromUtf8(buf.constData(), qsizetype(qMin(n, size_t(buf.size())))));
+}
+
+// Hits from a search inside files: records like the walk's, each followed by
+// the matching line (its number, how many more lines match, the text).
+void SearchController::onContentFromThread(quint64 serial, const QByteArray &batch, uint end, const QByteArray &stats)
+{
+    if (serial != m_serial || !m_folder) {
+        return; // the search was stopped or replaced
+    }
+    QList<FolderModel::SearchHit> hits;
+    const char *p = batch.constData();
+    qsizetype left = batch.size();
+    while (left >= 22) {
+        quint64 size;
+        qint64 mtime;
+        quint32 n;
+        std::memcpy(&size, p + 2, 8);
+        std::memcpy(&mtime, p + 10, 8);
+        std::memcpy(&n, p + 18, 4);
+        if (qsizetype(n) > left - 22 - 12) {
+            break;
+        }
+        const QByteArray uri(p + 22, qsizetype(n));
+        const char *r = p + 22 + n;
+        quint32 line, more, m;
+        std::memcpy(&line, r, 4);
+        std::memcpy(&more, r + 4, 4);
+        std::memcpy(&m, r + 8, 4);
+        if (qsizetype(m) > left - 22 - qsizetype(n) - 12) {
+            break;
+        }
+        const QString snippet = QString::fromUtf8(r + 12, qsizetype(m));
+        const QUrl url = localUrlOf(uri);
+        if (url.isValid()) {
+            hits.append({url, nameOfEncoded(uri), false, size, mtime, snippet, line, more});
+        }
+        const qsizetype used = 22 + qsizetype(n) + 12 + qsizetype(m);
+        p += used;
+        left -= used;
+    }
+    if (!hits.isEmpty()) {
+        m_folder->appendSearchResults(hits);
+        m_found += int(hits.size());
+    }
+    if (end == 0) {
+        showContent(0, QByteArray());
+        return;
+    }
+    if (m_walk) {
+        telamon_walk_free(m_walk);
+        m_walk = nullptr;
+    }
+    setWalking(false);
+    m_folder->setSearchBusy(false);
+    if (end == 4 && m_found == 0) {
+        setFailure(tr("Can't Search This Folder"), tr("You don't have permission to look through this folder, or it isn't there."));
+    }
+    showContent(end, stats);
+    m_lastMs = m_typed.isValid() ? int(m_typed.elapsed()) : -1;
+}
+
 void SearchController::startKio(quint64 serial, const QUrl &root)
 {
     if (!m_tag.isEmpty()) {
@@ -963,7 +1216,7 @@ void SearchController::startKio(quint64 serial, const QUrl &root)
     const TelamonSearchFilter f = makeFilter(m_kind, m_modified, m_size);
     const bool hidden = m_folder && m_folder->showHidden();
     const QByteArray query = m_text.trimmed().toUtf8();
-    m_matcher = telamon_matcher_new(reinterpret_cast<const uint8_t *>(query.constData()), size_t(query.size()), &f, hidden);
+    m_matcher = telamon_matcher_new(reinterpret_cast<const uint8_t *>(query.constData()), size_t(query.size()), &f, hidden, m_pattern);
     const size_t limit = telamon_search_limit(1);
     m_folder->setSearchResults({});
     KIO::ListJob *job = KIO::listRecursive(root, KIO::HideProgressInfo, hidden ? KIO::ListJob::ListFlag::IncludeHidden : KIO::ListJob::ListFlags());

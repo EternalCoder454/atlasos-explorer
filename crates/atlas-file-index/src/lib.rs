@@ -16,6 +16,7 @@ pub mod config;
 pub mod engine;
 pub mod index;
 pub mod logger;
+pub mod namefilter;
 pub mod query;
 pub mod recent;
 pub mod scan;

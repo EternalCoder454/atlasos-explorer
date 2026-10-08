@@ -101,6 +101,18 @@ class SearchController : public QObject
     // Only items with this tag (a name; empty for any): the sidebar's Tags
     // section and the "tag" chip.
     Q_PROPERTY(QString tag READ tag WRITE setTag NOTIFY tagChanged)
+    // The words are a regular expression (names, or content with `contents`),
+    // not plain words. The same switch drives the folder filter of the pane.
+    Q_PROPERTY(bool usePattern READ usePattern WRITE setUsePattern NOTIFY patternChanged)
+    // Look for the words inside the files (text and PDFs) instead of in their
+    // names: always a walk of the folders, nothing is stored.
+    Q_PROPERTY(bool contents READ contents WRITE setContents NOTIFY contentsChanged)
+    // Why the words can't be run as a pattern (empty: they can).
+    Q_PROPERTY(QString patternError READ patternError NOTIFY patternErrorChanged)
+    // The one line that says what Inside Files does.
+    Q_PROPERTY(QString contentNote READ contentNote CONSTANT)
+    // The search can be saved: there is something to look for and it can run.
+    Q_PROPERTY(bool canSave READ canSave NOTIFY saveChanged)
     // Something is being searched for: words or a chip.
     Q_PROPERTY(bool active READ active NOTIFY activeChanged)
     // A live walk is running (the Stop button shows).
@@ -143,6 +155,13 @@ public:
     void setSize(int s);
     QString tag() const { return m_tag; }
     void setTag(const QString &t);
+    bool usePattern() const { return m_pattern; }
+    void setUsePattern(bool on);
+    bool contents() const { return m_contents; }
+    void setContents(bool on);
+    QString patternError() const { return m_patternError; }
+    QString contentNote() const;
+    bool canSave() const;
     bool active() const;
     bool walking() const { return m_walking; }
     bool pending() const { return m_pending; }
@@ -167,12 +186,21 @@ public:
     Q_INVOKABLE void warm();
     // Runs the search again (files changed, Refresh).
     Q_INVOKABLE void rerun();
+    // What the search is, to save: {query, scope, folder (a URL), kind,
+    // modified, size, tag, pattern, contents}.
+    Q_INVOKABLE QVariantMap snapshot() const;
+    // Sets all of it from a saved search (the same map) and runs it once. The
+    // folder of a This Folder search is the pane's: the caller goes there first.
+    Q_INVOKABLE void applySaved(const QVariantMap &saved);
     // "Small (under 1.0 MiB)" for the Size chip's menu (1 small, 2 medium, 3 large).
     Q_INVOKABLE QString sizeHint(int size) const;
 
     // The walk's thread reports here, through the event loop.
     struct WalkContext;
     void onWalkFromThread(quint64 serial, const QByteArray &batch, uint end);
+    // The same for a search inside files; `stats` is a TelamonContentStats at the end.
+    struct ContentContext;
+    void onContentFromThread(quint64 serial, const QByteArray &batch, uint end, const QByteArray &stats);
 
 Q_SIGNALS:
     void folderChanged();
@@ -182,6 +210,10 @@ Q_SIGNALS:
     void modifiedChanged();
     void sizeChanged();
     void tagChanged();
+    void patternChanged();
+    void contentsChanged();
+    void patternErrorChanged();
+    void saveChanged();
     void activeChanged();
     void walkingChanged();
     void pendingChanged();
@@ -198,6 +230,7 @@ private:
     void routeNow(quint64 serial, bool covered);
     void searchIndex(quint64 serial, Route route);
     void startWalk(quint64 serial, const QUrl &root);
+    void startContent(quint64 serial, const QUrl &root);
     void startKio(quint64 serial, const QUrl &root);
     void stopLive();
     void setRoute(Route r);
@@ -210,6 +243,12 @@ private:
     void showLive(bool running, bool stopped, bool capped);
     void resetState();
     void applyHits(quint64 serial, const QList<FolderModel::SearchHit> &hits, bool append);
+    // Words inside files are looked for (Inside Files is on and there are words).
+    bool contentMode() const { return m_contents && !m_text.trimmed().isEmpty(); }
+    // The search must walk: the index can't match patterns or content.
+    bool mustWalk() const { return contentMode() || (m_pattern && !m_text.trimmed().isEmpty()); }
+    void refreshPatternError();
+    void showContent(uint end, const QByteArray &stats);
 
     QPointer<FolderModel> m_folder;
     QString m_text;
@@ -218,6 +257,10 @@ private:
     int m_modified = 0;
     int m_size = 0;
     QString m_tag;
+    bool m_pattern = false;
+    bool m_contents = false;
+    QString m_patternError;
+    bool m_wasCanSave = false;
     bool m_wasActive = false;
     SearchService::State m_lastState = SearchService::Unknown;
     bool m_resetting = false;

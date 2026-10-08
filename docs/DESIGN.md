@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 14 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window; split view, spring-loaded folders and the quick actions on pictures)
+0.2.0 plus waves 1 to 15 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer; the Trash's tools: Restore, Empty Trash, Original Location and Date Deleted, and "Empty items older than N days"; tags, the star rating and the Properties window; split view, spring-loaded folders and the quick actions on pictures; the folder filter, search inside files, name patterns and saved searches)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -56,8 +56,10 @@ Explorer replaces Dolphin completely.
   Frequent folders' counter (`home`), server addresses and recent servers
   (`servers`),
   the search filters' meaning, where a search runs, and the search texts
-  (`search`). The live search walker is in `atlas-file-index` (`walk`), beside
-  the matcher it shares with the index.
+  (`search`), patterns with their caps (`pattern`), looking inside one file
+  (`content`) and saved searches (`saved`). The live search walker (names and
+  content) is in `atlas-file-index` (`walk`), beside the matcher it shares with
+  the index, and the folder filter's matcher is `namefilter` there.
 - `crates/atlas-file-index`: no Qt. The index (scanner, inotify watcher,
   on-disk snapshot, matcher and ranking) as a library, so tests and the
   service share it.
@@ -80,6 +82,8 @@ Explorer replaces Dolphin completely.
     "Not encrypted" note, the switch for previews on servers) and
     `cpp/kio/NetworkModel.*` (the computers of the Network page, from Avahi over
     QtDBus and the SMB worker's browsing).
+  - `cpp/kio/SavedLogic.*` (the sidebar's Saved Searches: the list kept in
+    the settings file, read and changed by the core).
   - `cpp/kio/ArchiveClient.*` (Archive1 over D-Bus and `ArchiveJob`),
     `cpp/kio/ArchiveGuard.*` (what Files checks before KIO copies out of an
     archive).
@@ -218,8 +222,9 @@ Explorer replaces Dolphin completely.
     text (so it can't show "names containing it" completions that a worker
     ranked) and starts with nothing chosen, so the completion list is
     Files' too. Both would move upstream.
-- **Search field** (wave 4): Ctrl+F or Ctrl+E focuses it; typing searches, Esc
-  ends the search and shows the folder again.
+- **Search field** (wave 4): Ctrl+E focuses it (Ctrl+F is the folder filter
+  since wave 15, below); typing searches, Esc ends the search and shows the
+  folder again.
 
   **Built (wave 4):** the field is in the toolbar (Telamon.Ui's `SearchField`,
   "Search Documents" with the tab's folder name, "Search Everywhere" for the
@@ -301,9 +306,95 @@ Explorer replaces Dolphin completely.
     results area says "Search Isn't Available" with one line of why, and a Try
     Again button; the chip says "Search isn't available". A search of a folder
     the index doesn't hold (a walk) does not need it and still works.
-  - **Not in this wave** (see the roadmap): custom dates and sizes, content
-    search, saved searches, the Settings page for indexed folders and the
-    rebuild button, `re:` patterns.
+  - **Not in this wave** (see the roadmap): custom dates and sizes, the
+    Settings page for indexed folders and the rebuild button. (Content search,
+    saved searches and patterns came in wave 15, below.)
+
+  **Built (wave 15):** the folder filter, Inside Files, patterns and Save
+  Search. The keys are decided cleanly: **Ctrl+F filters the folder shown**
+  (the pane that has the keyboard), **Ctrl+E searches** (it focuses the field
+  in the toolbar, as Ctrl+F did in wave 4); where there is nothing to filter (a
+  page of Files' own, search results) Ctrl+F falls back to the search field, so
+  the key always lands somewhere useful.
+  - **Folder filter** (`qml/FilterBar.qml`, `FolderModel`'s `filterText`): a
+    row above the items of each pane with a field ("Filter This Folder") that
+    narrows the items as you type, the words matched as a search matches
+    names (every word, case and accents ignored; `atlas_file_index::namefilter`).
+    While it narrows, the row is tinted and a chip says **Showing 4 of 120 ·
+    Clear**, so a filter is never forgotten. Esc in the field (or in the list,
+    or Clear, or the x) ends it; Down or Enter moves the keyboard to the items
+    and the filter stays. It is the pane's own (a split tab filters each pane
+    alone) and the folder's: another folder, or a search, ends it; refresh,
+    sorting, Show Hidden and changes in the folder keep it (an item that is
+    added, renamed or changed is tested against it). It is done in the model:
+    the entries that don't match are held aside (`m_held`, no rows, no
+    signals) and come back, sorted in, when the text is shorter; all rows and
+    counts are the shown ones, `filterTotal` is both. When it hides every item
+    the view says "Nothing Matches the Filter" (not "This Folder Is Empty")
+    with Clear Filter. It does not run on a worker: it is one linear pass of
+    the matcher over the names of the folder.
+  - **Filters** (`qml/FiltersPopover.qml`): a chip in the search row and a
+    button in the filter row open a popover with **Use pattern (regular
+    expression)**, a switch that is the pane's (`SearchController.usePattern`)
+    and drives the filter and the search of that pane. The pattern is matched
+    against each name (against each line with Inside Files), ignoring case
+    (`(?-i)` asks for it). It is the Rust `regex` crate: time linear in the
+    text, no backtracking, so a hostile pattern cannot hang the window; on top
+    of that the pattern is at most 512 bytes, compiles to at most 1 MiB, and
+    nests at most 50 deep (`atlas_explorer_core::pattern`). A pattern that is
+    not valid is not run: the popover and the row show an error line in plain
+    words ("That isn't a valid pattern: unclosed group"), the filter shows all
+    items, and the search shows "Not a Valid Pattern" with no results. The
+    index matches words, not patterns, so a pattern search is always a walk of
+    the folders (the folder, or the home folder for Everywhere; KIO's listing
+    for a server) with the same Stop button and cap as any live search.
+  - **Inside Files:** a chip in the search row. With it on, the words are
+    looked for in the content of the files, not in their names (names are not
+    matched; with no words the chips search as before): always a walk, on its
+    own thread, with a Stop button; **nothing is indexed or stored** (the row
+    says so: "Looks inside text files and PDFs for these words. Nothing is
+    stored."). A file is read once, line by line, the words taken literally
+    and case ignored (or as a pattern); the first matching line is shown in a
+    **Match** column of the Details view ("12: the line", and "(+3 more)" when
+    other lines match too), cut around the match, with control and bidi
+    characters made visible and shown as plain text. The folder's chips
+    (Kind, Modified, Size, tag) choose which files are read; hidden names only
+    with Show Hidden; `node_modules` and `__pycache__` are not entered; symlinks
+    are not followed and other filesystems are not entered. Which files:
+    - text and source files up to **4 MiB** (bigger ones are skipped and
+      counted), recognised by name (images, audio, video, archives, fonts
+      and disk images are left alone without being opened) and then by their
+      first 8 KiB (a NUL byte means binary: skipped and counted); a line is
+      read up to 64 KiB;
+    - PDFs up to **50 MiB**, through `pdftotext -q -enc UTF-8 -nopgbrk <path>
+      -` run by argument list (no shell, no input, no environment, no error
+      output), its text read up to 4 MiB, killed after 15 s, when the search is
+      stopped or as soon as a match is found. With no `pdftotext` on the
+      system (poppler-utils, a Recommends of the package) PDFs are counted and
+      the line under the search says so; a PDF it cannot read is counted too;
+    - a search lists at most 2,000 files and ends after 4 GiB read or 5
+      minutes ("Stopped at the time or size limit").
+    The line under the search says what was found and what was left out: "3
+    files contain it. Left out: 1 file over 4 MiB, 12 binary files". It works
+    on folders on this computer only (a server's files would have to be
+    downloaded): there it says so and suggests turning Inside Files off.
+  - **Saved searches:** **Save Search** (a button at the right of the search
+    row, enabled when there is something to look for and any pattern is
+    valid) asks for a name (offered from the words or the filters) and adds
+    the search to the sidebar's **Saved Searches** section, under Tags: the
+    words, the scope (and for This Folder its folder), the Kind, Modified and
+    Size chips, the tag, Use pattern and Inside Files. Never results. A click
+    runs it again in the tab shown (it goes to the saved folder first, then
+    puts the words, chips and switches back and searches once); the tooltip says
+    what it does; the right-click menu (or the Menu key) has Run Search, Rename…
+    and Remove from Sidebar. At most 50, names up to 80 characters. They are
+    kept in Files' settings file, `telamon-explorerrc`, group `[SavedSearches]`,
+    key `Items`: one search a line, tab-separated, the fields percent-encoded
+    where they hold `%` or a control character; the core
+    (`atlas_explorer_core::saved`) reads it as untrusted input, so a damaged
+    or hand-edited file gives the searches that are fine, clamps the chips and
+    drops the rest. The settings file is the only place they live: no
+    `.savedSearch` files in the user's folders.
 - **Command bar:** New (folder, text file, templates from
   `~/Templates` and KNewFileMenu's system templates), Cut, Copy, Paste,
   Rename (one item in place, several in Batch Rename), Share (a portal-free menu: email via `mailto:`, KDE Connect when
@@ -1386,7 +1477,11 @@ The GUI thread never blocks.
   (each carries a number). Whether the index holds a folder is asked of a
   worker; the live walk of a local folder runs on its own thread and reports
   back through queued calls that carry the search's number; a walk of a server
-  or the Trash is a `KIO::listRecursive` job on the GUI thread.
+  or the Trash is a `KIO::listRecursive` job on the GUI thread. A search inside
+  files is a walk of its own thread too (`content-walk`); each PDF it reads is a
+  `pdftotext` child process with a watchdog thread that kills it on Stop or
+  after 15 s. The folder filter runs on the GUI thread, one pass of a compiled
+  matcher over the names (a keystroke on 100,000 items is a few milliseconds).
 - Sorting: names get a natural sort key once (Rust, casefolded, digit runs
   compared as numbers), computed on a worker when the batch arrives; a sort
   is a permutation computed on a worker, applied with one `layoutChanged`.
@@ -1627,6 +1722,15 @@ Untrusted input, checked where it enters:
   worker's answer is used as a path. Pictures are decoded by the thumbnailer
   process, only their header is read here (`QImageReader::size`, SVG
   excepted). Audio and video play only when the user presses Play.
+- **Search inside files:** the content of a file is read line by line by the
+  core and never kept; the only thing that leaves the worker is one snippet a
+  file, with controls, bidi and invisible characters made visible and shown
+  as `Text.PlainText`. Files are opened without following a link and without
+  blocking (`O_NOFOLLOW`, `O_NONBLOCK`) and anything that is not a regular file
+  once open is refused. `pdftotext` is found on the PATH once, run with an
+  absolute path argument (a file named `-q.pdf` is a path), no shell, an empty
+  environment and a time and output cap. Patterns are compiled by the linear
+  `regex` engine with caps on length, size and nesting.
 - **D-Bus callers** (FileManager1, Window1, Search1): any process in the
   session. Arguments are capped and parsed like launch arguments; nothing
   they send is executed or opened with an app.
@@ -1675,6 +1779,10 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Index service not installed, won't start, or doesn't answer | A search that needs the index shows "Search Isn't Available" (and the chip "Search isn't available") with Try Again; a search of a folder the index doesn't hold is a live walk and works |
 | Index service busy (too many searches at once) | The search is asked again after 150 ms |
 | Live walk of a folder that can't be read | The results area says "Can't Search This Folder" |
+| A pattern that is not valid | Never run: the filter shows every item, a search shows "Not a Valid Pattern"; both say why in a line |
+| Inside Files meets a binary file, a file over 4 MiB, a PDF without `pdftotext`, a PDF that can't be read or takes over 15 s | Left out and counted; the line under the search says what ("Left out: …") |
+| Inside Files on a server's folder | "Can't Search Inside These Files" with a hint to turn Inside Files off |
+| The settings file's Saved Searches are damaged | The searches that are fine are kept, the rest dropped |
 | Peer app missing (Archive, Backups, Disks) | Its menu items are hidden; Open on an archive and the Extract button in an archive still work through KIO |
 | Archive busy, not running, or a job it runs fails | The popover row says why in Archive's words (or "Archive is busy, try again when a job finishes."); nothing is retried |
 | An archive KIO can't read, or a zip that needs a password | "This archive couldn't be read…" or "\"a.zip\" needs a password, which Files can't enter."; nothing is extracted |

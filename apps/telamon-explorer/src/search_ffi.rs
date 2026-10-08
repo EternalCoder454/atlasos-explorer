@@ -4,13 +4,18 @@
 //! and `atlas_file_index::walk`; these functions only move bytes.
 
 use crate::ffi::{bytes, put};
+use atlas_explorer_core::content::{self, ContentQuery, Ending, Stats};
+use atlas_explorer_core::pattern::{self, Pattern};
 use atlas_explorer_core::search::{
     self, IndexState, Kind, MAX_HITS, MAX_LIVE_HITS, Modified, Scope, SizeClass,
 };
 use atlas_file_index::category::Category;
+use atlas_file_index::namefilter::NameFilter;
 use atlas_file_index::query::{KindFilter, Options};
 use atlas_file_index::uri::path_to_uri;
-use atlas_file_index::walk::{LiveMatcher, WalkEnd, WalkHit, covers, walk};
+use atlas_file_index::walk::{
+    ContentHit, LiveMatcher, WalkEnd, WalkHit, covers, walk, walk_content,
+};
 use std::ffi::c_void;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -100,6 +105,13 @@ pub extern "C" fn telamon_search_route(
     index_on: bool,
 ) -> u32 {
     search::route(Scope::from_u32(scope), local, indexed, index_on) as u32
+}
+
+/// Where a search runs when it must walk (a name pattern, or words inside
+/// files): 2 a walk of the folder, 3 a walk of the home folder, 4 by KIO.
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_search_route_live(scope: u32, local: bool) -> u32 {
+    search::route_live(Scope::from_u32(scope), local) as u32
 }
 
 /// The index state for the service's `state` text (or the number 5 for "the
@@ -194,13 +206,18 @@ pub unsafe extern "C" fn telamon_search_text(
 }
 
 /// The limits: 0 hits one index search returns, 1 hits a walk stops at, 2 the
-/// smallest "Medium" file in bytes, 3 the smallest "Large" one.
+/// smallest "Medium" file in bytes, 3 the smallest "Large" one, 4 files a
+/// search inside files lists, 5 the biggest text file it reads, 6 the longest
+/// pattern, in bytes.
 #[unsafe(no_mangle)]
 pub extern "C" fn telamon_search_limit(which: u32) -> usize {
     match which {
         0 => MAX_HITS,
         2 => search::SMALL_LIMIT as usize,
         3 => search::LARGE_LIMIT as usize,
+        4 => content::MAX_CONTENT_HITS,
+        5 => content::MAX_TEXT_BYTES as usize,
+        6 => pattern::MAX_PATTERN_BYTES,
         _ => MAX_LIVE_HITS,
     }
 }
@@ -272,6 +289,7 @@ fn matcher_of(
     filter: *const TelamonSearchFilter,
     include_hidden: bool,
     tag: Option<String>,
+    use_pattern: bool,
 ) -> Option<LiveMatcher> {
     if filter.is_null() {
         return None;
@@ -283,11 +301,20 @@ fn matcher_of(
             &*filter,
         )
     };
-    Some(LiveMatcher::new(&q, options_of(f, include_hidden, tag)))
+    let opts = options_of(f, include_hidden, tag);
+    if use_pattern && !q.trim().is_empty() {
+        // An invalid pattern is no matcher (the window has said why already).
+        Pattern::new(q.trim())
+            .ok()
+            .map(|p| LiveMatcher::with_pattern(p, opts))
+    } else {
+        Some(LiveMatcher::new(&q, opts))
+    }
 }
 
 /// A matcher for entries a KIO listing delivers one at a time. Free it with
-/// `telamon_matcher_free`. Null when `filter` is null.
+/// `telamon_matcher_free`. Null when `filter` is null, or when `use_pattern`
+/// is set and the query is not a valid pattern.
 ///
 /// # Safety
 /// `query` covers `query_len` readable bytes (or is null with 0); `filter`
@@ -298,8 +325,9 @@ pub unsafe extern "C" fn telamon_matcher_new(
     query_len: usize,
     filter: *const TelamonSearchFilter,
     include_hidden: bool,
+    use_pattern: bool,
 ) -> *mut c_void {
-    matcher_of(query, query_len, filter, include_hidden, None)
+    matcher_of(query, query_len, filter, include_hidden, None, use_pattern)
         .map_or(std::ptr::null_mut(), |m| Box::into_raw(Box::new(m)).cast())
 }
 
@@ -386,6 +414,7 @@ pub unsafe extern "C" fn telamon_walk_start(
     query_len: usize,
     filter: *const TelamonSearchFilter,
     include_hidden: bool,
+    use_pattern: bool,
     tag: *const u8,
     tag_len: usize,
     max_hits: usize,
@@ -395,7 +424,8 @@ pub unsafe extern "C" fn telamon_walk_start(
     // SAFETY: `tag` covers `tag_len` (contract).
     let tag = String::from_utf8_lossy(unsafe { bytes(tag, tag_len) }).into_owned();
     let tag = (!tag.is_empty()).then_some(tag);
-    let Some(matcher) = matcher_of(query, query_len, filter, include_hidden, tag) else {
+    let Some(matcher) = matcher_of(query, query_len, filter, include_hidden, tag, use_pattern)
+    else {
         return std::ptr::null_mut();
     };
     // SAFETY: `root` covers `root_len` (contract).
@@ -436,6 +466,7 @@ pub unsafe extern "C" fn telamon_walk_start(
                 WalkEnd::Stopped => 2,
                 WalkEnd::Capped => 3,
                 WalkEnd::Unreadable => 4,
+                WalkEnd::Limit => 5,
             };
             callback(user.0, std::ptr::null(), 0, code);
         });
@@ -470,6 +501,316 @@ pub unsafe extern "C" fn telamon_walk_free(handle: *mut c_void) {
         // SAFETY: created by Box::into_raw in telamon_walk_start.
         drop(unsafe { Box::from_raw(handle.cast::<Walking>()) });
     }
+}
+
+// ---- Patterns and the folder filter (Ctrl+F) ----
+
+/// Checks the text of a search or filter. With `use_pattern` it must be a
+/// valid regular expression; with `contents` and no pattern it must be short
+/// enough to look for. Returns the length of the reason (written to `out` if
+/// it fits), or 0 when the text is fine (or empty).
+///
+/// # Safety
+/// `text` covers `len` readable bytes (or is null with 0); `out` points to
+/// `cap` writable bytes (or is null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_pattern_check(
+    text: *const u8,
+    len: usize,
+    use_pattern: bool,
+    contents: bool,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: forwarded from this function's contract.
+    let t = String::from_utf8_lossy(unsafe { bytes(text, len) }).into_owned();
+    let t = t.trim();
+    let err = if t.is_empty() {
+        None
+    } else if use_pattern {
+        pattern::check(t)
+    } else if contents {
+        Pattern::literal(t).err()
+    } else {
+        None
+    };
+    // SAFETY: `out` as promised.
+    err.map_or(0, |e| unsafe { put(e.0.as_bytes(), out, cap) })
+}
+
+/// The matcher of the folder filter, for the text typed. Null when the text
+/// is an invalid pattern (the reason is written to `err`, its length to
+/// `*err_len`). Free it with `telamon_namefilter_free`.
+///
+/// # Safety
+/// `text` covers `len` readable bytes (or is null with 0); `err` points to
+/// `err_cap` writable bytes (or is null); `err_len` is writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_namefilter_new(
+    text: *const u8,
+    len: usize,
+    use_pattern: bool,
+    err: *mut u8,
+    err_cap: usize,
+    err_len: *mut usize,
+) -> *mut c_void {
+    // SAFETY: forwarded from this function's contract.
+    let t = String::from_utf8_lossy(unsafe { bytes(text, len) }).into_owned();
+    match NameFilter::new(&t, use_pattern) {
+        Ok(f) => {
+            if !err_len.is_null() {
+                // SAFETY: `err_len` is writable (contract).
+                unsafe { err_len.write(0) };
+            }
+            Box::into_raw(Box::new(f)).cast()
+        }
+        Err(e) => {
+            // SAFETY: `err` as promised.
+            let n = unsafe { put(e.0.as_bytes(), err, err_cap) };
+            if !err_len.is_null() {
+                // SAFETY: `err_len` is writable (contract).
+                unsafe { err_len.write(n) };
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Does everything stay (nothing is typed)?
+///
+/// # Safety
+/// `filter` is from `telamon_namefilter_new` and not freed (or null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_namefilter_is_all(filter: *const c_void) -> bool {
+    // SAFETY: a live NameFilter (contract).
+    filter.is_null() || unsafe { &*filter.cast::<NameFilter>() }.is_all()
+}
+
+/// Does the name stay? (A null filter keeps everything.)
+///
+/// # Safety
+/// `filter` is from `telamon_namefilter_new` and not freed (or null); `name`
+/// covers `len` readable bytes (or is null with 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_namefilter_test(
+    filter: *const c_void,
+    name: *const u8,
+    len: usize,
+) -> bool {
+    if filter.is_null() {
+        return true;
+    }
+    // SAFETY: a live NameFilter and readable name bytes (contract).
+    unsafe { &*filter.cast::<NameFilter>() }.matches(unsafe { bytes(name, len) })
+}
+
+/// # Safety
+/// `filter` is from `telamon_namefilter_new` (or null) and is not used again.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_namefilter_free(filter: *mut c_void) {
+    if !filter.is_null() {
+        // SAFETY: created by Box::into_raw in telamon_namefilter_new.
+        drop(unsafe { Box::from_raw(filter.cast::<NameFilter>()) });
+    }
+}
+
+// ---- Search inside files ----
+
+/// What a search inside files looked at and left out (the C++ twin is
+/// `TelamonContentStats` in RustBridge.h).
+#[repr(C)]
+pub struct TelamonContentStats {
+    pub searched: u32,
+    pub binary: u32,
+    pub too_large: u32,
+    pub pdf_no_tool: u32,
+    pub pdf_timeout: u32,
+    pub unreadable: u32,
+}
+
+/// Called from the content walk's thread with a batch of hits (see
+/// [`encode_content`]), `end` 0 and no stats; and once at the end with no
+/// hits, `end` 1 done, 2 stopped, 3 cut at the limit, 4 the folder could not
+/// be read, 5 the time or size limit, and the stats. After the last call the
+/// walk never touches `user` again.
+pub type ContentCallback = extern "C" fn(
+    user: *mut c_void,
+    batch: *const u8,
+    len: usize,
+    end: u32,
+    stats: *const TelamonContentStats,
+);
+
+/// One hit as a record: is_dir (1 byte, 0), class (1, 0), size (u64), mtime
+/// (i64), URI length (u32), the URI, then the line number (u32), the further
+/// matching lines (u32), the snippet's length (u32) and the snippet.
+fn encode_content(hits: &[ContentHit], out: &mut Vec<u8>) {
+    for h in hits {
+        let uri = path_to_uri(&h.path);
+        out.push(0);
+        out.push(0);
+        out.extend_from_slice(&h.size.to_le_bytes());
+        out.extend_from_slice(&h.mtime.to_le_bytes());
+        out.extend_from_slice(&(uri.len() as u32).to_le_bytes());
+        out.extend_from_slice(uri.as_bytes());
+        out.extend_from_slice(&h.found.line.to_le_bytes());
+        out.extend_from_slice(&h.found.more.to_le_bytes());
+        out.extend_from_slice(&(h.found.snippet.len() as u32).to_le_bytes());
+        out.extend_from_slice(h.found.snippet.as_bytes());
+    }
+}
+
+/// Starts a search inside the files of the tree at `root`, on its own
+/// thread; hits arrive through `callback`. The filter, hidden flag and tag
+/// choose which files are looked at (the filter's words are not used: `query`
+/// is what to look for). Stop and release it with `telamon_walk_stop` and
+/// `telamon_walk_free`. Null when the query is empty or invalid, or the
+/// thread could not start (the callback is then not called).
+///
+/// # Safety
+/// `root`, `query` and `tag` cover their lengths; `filter` is valid; `user`
+/// stays valid until the callback has been called with a non-zero `end`.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_content_start(
+    root: *const u8,
+    root_len: usize,
+    query: *const u8,
+    query_len: usize,
+    use_pattern: bool,
+    filter: *const TelamonSearchFilter,
+    include_hidden: bool,
+    tag: *const u8,
+    tag_len: usize,
+    max_hits: usize,
+    callback: ContentCallback,
+    user: *mut c_void,
+) -> *mut c_void {
+    if filter.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the contract: lengths as given, `filter` valid.
+    let (q, tag, f, root) = unsafe {
+        (
+            String::from_utf8_lossy(bytes(query, query_len)).into_owned(),
+            String::from_utf8_lossy(bytes(tag, tag_len)).into_owned(),
+            &*filter,
+            PathBuf::from(std::ffi::OsStr::from_bytes(bytes(root, root_len))),
+        )
+    };
+    let Ok(query) = ContentQuery::new(&q, use_pattern) else {
+        return std::ptr::null_mut();
+    };
+    let matcher = LiveMatcher::new(
+        "",
+        options_of(f, include_hidden, (!tag.is_empty()).then_some(tag)),
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let user = UserPtr(user);
+    let max = max_hits.clamp(1, content::MAX_CONTENT_HITS);
+    // For the smoke tests (debug builds only): a pause after every batch.
+    #[cfg(debug_assertions)]
+    let pause = std::env::var("TELAMON_EXPLORER_TEST_WALK_BATCH_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|ms| std::time::Duration::from_millis(ms.min(10_000)));
+    let spawned = std::thread::Builder::new()
+        .name("content-walk".into())
+        .spawn(move || {
+            let user = user;
+            let mut buf: Vec<u8> = Vec::new();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                walk_content(&root, &matcher, &query, &flag, max, &mut |hits| {
+                    buf.clear();
+                    encode_content(&hits, &mut buf);
+                    callback(user.0, buf.as_ptr(), buf.len(), 0, std::ptr::null());
+                    #[cfg(debug_assertions)]
+                    if let Some(p) = pause {
+                        std::thread::sleep(p);
+                    }
+                })
+            }))
+            .unwrap_or((WalkEnd::Unreadable, Stats::default()));
+            let (end, stats) = result;
+            let code = match end {
+                WalkEnd::Done => 1,
+                WalkEnd::Stopped => 2,
+                WalkEnd::Capped => 3,
+                WalkEnd::Unreadable => 4,
+                WalkEnd::Limit => 5,
+            };
+            let out = TelamonContentStats {
+                searched: stats.searched,
+                binary: stats.binary,
+                too_large: stats.too_large,
+                pdf_no_tool: stats.pdf_no_tool,
+                pdf_timeout: stats.pdf_timeout,
+                unreadable: stats.unreadable,
+            };
+            callback(user.0, std::ptr::null(), 0, code, &out);
+        });
+    if spawned.is_err() {
+        return std::ptr::null_mut();
+    }
+    Box::into_raw(Box::new(Walking { stop })).cast()
+}
+
+/// The line under a search inside files. `end` is 0 while it runs, else the
+/// callback's `end`; `found` the files listed; `stats` what was looked at.
+///
+/// # Safety
+/// `stats` is valid (or null); `out` points to `cap` writable bytes (or is null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_content_text(
+    found: u64,
+    end: u32,
+    stats: *const TelamonContentStats,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    let ending = match end {
+        0 => Ending::Running,
+        2 => Ending::Stopped,
+        3 => Ending::TooMany,
+        4 => Ending::Unreadable,
+        5 => Ending::Limit,
+        _ => Ending::Done,
+    };
+    let st = if stats.is_null() {
+        Stats::default()
+    } else {
+        // SAFETY: valid (contract); plain numbers.
+        let s = unsafe { &*stats };
+        Stats {
+            searched: s.searched,
+            binary: s.binary,
+            too_large: s.too_large,
+            pdf_no_tool: s.pdf_no_tool,
+            pdf_timeout: s.pdf_timeout,
+            unreadable: s.unreadable,
+        }
+    };
+    let n = usize::try_from(found).unwrap_or(usize::MAX);
+    let t = content::summary(n, ending, &st);
+    // SAFETY: `out` as promised.
+    unsafe { put(t.as_bytes(), out, cap) }
+}
+
+/// The one line that says what Inside Files does.
+///
+/// # Safety
+/// `out` points to `cap` writable bytes (or is null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_content_note(out: *mut u8, cap: usize) -> usize {
+    // SAFETY: `out` as promised.
+    unsafe { put(content::NOTE.as_bytes(), out, cap) }
+}
+
+/// Is there a `pdftotext` to read PDFs with?
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_content_pdf_available() -> bool {
+    content::pdftotext().is_some()
 }
 
 #[cfg(test)]
@@ -582,7 +923,7 @@ mod tests {
         unsafe { telamon_search_filter(2, 0, 0, 0, 0, f.as_mut_ptr()) };
         let f = unsafe { f.assume_init() };
         let q = "holiday";
-        let m = unsafe { telamon_matcher_new(q.as_ptr(), q.len(), &f, false) };
+        let m = unsafe { telamon_matcher_new(q.as_ptr(), q.len(), &f, false, false) };
         assert!(!m.is_null());
         let t = |name: &str| unsafe {
             telamon_matcher_test(m, name.as_ptr(), name.len(), false, 10, 5)
@@ -594,7 +935,8 @@ mod tests {
         assert!(t("holiday.png") > t("my-holiday-pics.png"));
         unsafe { telamon_matcher_free(m) };
         assert!(
-            unsafe { telamon_matcher_new(q.as_ptr(), q.len(), std::ptr::null(), false) }.is_null()
+            unsafe { telamon_matcher_new(q.as_ptr(), q.len(), std::ptr::null(), false, false) }
+                .is_null()
         );
         assert_eq!(
             unsafe { telamon_matcher_test(std::ptr::null(), q.as_ptr(), q.len(), false, 0, 0) },
@@ -670,6 +1012,7 @@ mod tests {
                 q.len(),
                 &f,
                 false,
+                false,
                 std::ptr::null(),
                 0,
                 100,
@@ -711,6 +1054,7 @@ mod tests {
                 q.len(),
                 &f,
                 false,
+                false,
                 std::ptr::null(),
                 0,
                 100,
@@ -738,5 +1082,208 @@ mod tests {
         assert!(!unsafe {
             telamon_search_covers(inner.as_ptr(), inner.len(), std::ptr::null(), 0)
         });
+    }
+
+    #[test]
+    fn pattern_check_and_the_folder_filter_through_the_abi() {
+        let check = |t: &str, pat: bool, contents: bool| {
+            let mut buf = [0u8; 256];
+            let n = unsafe {
+                telamon_pattern_check(
+                    t.as_ptr(),
+                    t.len(),
+                    pat,
+                    contents,
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                )
+            };
+            String::from_utf8_lossy(&buf[..n.min(256)]).into_owned()
+        };
+        assert_eq!(
+            check("(abc", false, false),
+            "",
+            "plain words are never a pattern error"
+        );
+        assert_eq!(check("", true, false), "");
+        assert!(check("(abc", true, false).contains("unclosed group"));
+        assert_eq!(check(&"a".repeat(600), false, false), "");
+        assert!(check(&"a".repeat(600), false, true).contains("too long"));
+
+        let mut err = [0u8; 256];
+        let mut err_len = 9usize;
+        let new = |t: &str, pat: bool, err: &mut [u8], len: &mut usize| unsafe {
+            telamon_namefilter_new(t.as_ptr(), t.len(), pat, err.as_mut_ptr(), err.len(), len)
+        };
+        let f = new("^img_", true, &mut err, &mut err_len);
+        assert!(!f.is_null() && err_len == 0);
+        let test =
+            |f: *mut c_void, n: &str| unsafe { telamon_namefilter_test(f, n.as_ptr(), n.len()) };
+        assert!(test(f, "IMG_1.jpg") && !test(f, "my IMG_1.jpg"));
+        assert!(!unsafe { telamon_namefilter_is_all(f) });
+        unsafe { telamon_namefilter_free(f) };
+        let f = new("", false, &mut err, &mut err_len);
+        assert!(unsafe { telamon_namefilter_is_all(f) } && test(f, "anything"));
+        unsafe { telamon_namefilter_free(f) };
+        let f = new("(img", true, &mut err, &mut err_len);
+        assert!(f.is_null());
+        assert!(String::from_utf8_lossy(&err[..err_len]).contains("unclosed group"));
+        // A null filter keeps everything; freeing null is harmless.
+        assert!(test(std::ptr::null_mut(), "x"));
+        unsafe { telamon_namefilter_free(std::ptr::null_mut()) };
+    }
+
+    /// A batch, its `end`, and the stats that come with the last call.
+    type CMessage = (Vec<u8>, u32, Option<[u32; 6]>);
+
+    struct CSink {
+        tx: Mutex<mpsc::Sender<CMessage>>,
+    }
+
+    extern "C" fn csink(
+        user: *mut c_void,
+        batch: *const u8,
+        len: usize,
+        end: u32,
+        stats: *const TelamonContentStats,
+    ) {
+        // SAFETY: `user` is a leaked CSink, never freed (see `leaked_sink`).
+        let s = unsafe { &*(user as *const CSink) };
+        let data = if batch.is_null() {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(batch, len) }.to_vec()
+        };
+        let st = (!stats.is_null()).then(|| {
+            let s = unsafe { &*stats };
+            [
+                s.searched,
+                s.binary,
+                s.too_large,
+                s.pdf_no_tool,
+                s.pdf_timeout,
+                s.unreadable,
+            ]
+        });
+        let _ = s.tx.lock().unwrap().send((data, end, st));
+    }
+
+    /// (uri, size, line, more, snippet)
+    fn decode_content(mut b: &[u8]) -> Vec<(String, u64, u32, u32, String)> {
+        let mut out = Vec::new();
+        while !b.is_empty() {
+            let size = u64::from_le_bytes(b[2..10].try_into().unwrap());
+            let n = u32::from_le_bytes(b[18..22].try_into().unwrap()) as usize;
+            let uri = String::from_utf8(b[22..22 + n].to_vec()).unwrap();
+            let r = &b[22 + n..];
+            let line = u32::from_le_bytes(r[0..4].try_into().unwrap());
+            let more = u32::from_le_bytes(r[4..8].try_into().unwrap());
+            let m = u32::from_le_bytes(r[8..12].try_into().unwrap()) as usize;
+            let snip = String::from_utf8(r[12..12 + m].to_vec()).unwrap();
+            out.push((uri, size, line, more, snip));
+            b = &r[12 + m..];
+        }
+        out
+    }
+
+    #[test]
+    fn a_content_search_streams_hits_with_snippets_and_ends_with_stats() {
+        let dir = atlas_file_index::testdir::Scratch::new("ffi-content");
+        std::fs::create_dir_all(dir.0.join("sub dir")).unwrap();
+        std::fs::write(dir.0.join("sub dir/a.txt"), "one\ntwo needle here\n").unwrap();
+        std::fs::write(dir.0.join("b.rs"), "needle\nneedle\n").unwrap();
+        std::fs::write(dir.0.join("c.txt"), "nothing\n").unwrap();
+        std::fs::write(dir.0.join("d.bin"), b"needle\0\0").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let sink: &'static CSink = Box::leak(Box::new(CSink { tx: Mutex::new(tx) }));
+        let user = sink as *const CSink as *mut c_void;
+        let root = dir.0.as_os_str().as_bytes().to_vec();
+        let mut f = std::mem::MaybeUninit::<TelamonSearchFilter>::uninit();
+        unsafe { telamon_search_filter(0, 0, 0, 0, 0, f.as_mut_ptr()) };
+        let f = unsafe { f.assume_init() };
+        let q = "NEEDLE";
+        let h = unsafe {
+            telamon_content_start(
+                root.as_ptr(),
+                root.len(),
+                q.as_ptr(),
+                q.len(),
+                false,
+                &f,
+                false,
+                std::ptr::null(),
+                0,
+                100,
+                csink,
+                user,
+            )
+        };
+        assert!(!h.is_null());
+        let mut hits = Vec::new();
+        let (end, stats) = loop {
+            let (data, end, st) = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            hits.extend(decode_content(&data));
+            if end != 0 {
+                break (end, st.unwrap());
+            }
+        };
+        assert_eq!(end, 1);
+        hits.sort();
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert!(
+            hits[0].0.contains("b.rs") && hits[0].2 == 1 && hits[0].3 == 1 && hits[0].4 == "needle"
+        );
+        assert!(
+            hits[1].0.contains("sub%20dir/a.txt")
+                && hits[1].2 == 2
+                && hits[1].4 == "two needle here"
+        );
+        // searched: the two with hits and c.txt; one binary.
+        assert_eq!((stats[0], stats[1]), (3, 1), "{stats:?}");
+        unsafe { telamon_walk_free(h) };
+        // Nothing to look for, or a bad pattern: no search.
+        let none = unsafe {
+            telamon_content_start(
+                root.as_ptr(),
+                root.len(),
+                b"  ".as_ptr(),
+                2,
+                false,
+                &f,
+                false,
+                std::ptr::null(),
+                0,
+                100,
+                csink,
+                user,
+            )
+        };
+        assert!(none.is_null());
+        let bad = unsafe {
+            telamon_content_start(
+                root.as_ptr(),
+                root.len(),
+                b"(x".as_ptr(),
+                2,
+                true,
+                &f,
+                false,
+                std::ptr::null(),
+                0,
+                100,
+                csink,
+                user,
+            )
+        };
+        assert!(bad.is_null());
+        let mut buf = [0u8; 256];
+        let n =
+            unsafe { telamon_content_text(2, 1, std::ptr::null(), buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(String::from_utf8_lossy(&buf[..n]), "2 files contain it");
+        let n = unsafe { telamon_content_note(buf.as_mut_ptr(), buf.len()) };
+        assert!(String::from_utf8_lossy(&buf[..n]).contains("Nothing is stored"));
+        assert_eq!(telamon_search_route_live(0, true), 2);
+        assert_eq!(telamon_search_route_live(1, true), 3);
+        assert_eq!(telamon_search_route_live(0, false), 4);
     }
 }

@@ -16,6 +16,8 @@ Item {
     readonly property int iconSide: Math.min(rowHeight - 4, Math.max(Kirigami.Units.iconSizes.smallMedium, Math.round(rowHeight * 0.62)))
     // Search results have a Path column (the folder each one is in) after the name.
     readonly property bool withPath: fv.folder.searching
+    // Results of a search inside files also show the matching line (a Match column after Path).
+    readonly property bool withMatch: fv.folder.searching && fv.folder.hasSnippets
     // The top of the Trash: the folder each item was in, and when it was deleted.
     readonly property bool withTrash: fv.folder.trashTop
     // Widths of the columns by key. The Trash has an Original Location and a
@@ -25,6 +27,7 @@ Item {
         return trash ? {
             "name": gu * 15,
             "path": gu * 13,
+            "match": gu * 24,
             "size": gu * 5.5,
             "type": gu * 10,
             "modified": gu * 10,
@@ -35,6 +38,7 @@ Item {
         } : {
             "name": gu * 22,
             "path": gu * 16,
+            "match": gu * 26,
             "size": gu * 7,
             "type": gu * 12,
             "modified": gu * 11,
@@ -67,6 +71,9 @@ Item {
     ]
     readonly property var columns: {
         const list = baseColumns.slice();
+        if (withMatch) {
+            list.splice(2, 0, { key: "match", title: qsTr("Match"), sort: -1 });
+        }
         if (withTags) {
             list.push({ key: "tags", title: qsTr("Tags"), sort: -1 });
         }
@@ -82,6 +89,7 @@ Item {
         return list;
     }
     readonly property real pathWidth: withPath || withTrash ? widths.path : 0
+    readonly property real matchWidth: withMatch ? widths.match : 0
     // The optional columns (View menu): Tags, then the ones read from the files.
     // None in the Trash, where an item's tags don't matter.
     readonly property bool withTags: ColumnLogic.tags && !withTrash
@@ -89,7 +97,7 @@ Item {
     readonly property bool withDuration: ColumnLogic.duration && !withTrash
     readonly property bool withTaken: ColumnLogic.taken && !withTrash
     readonly property real extraWidth: (withTags ? widths.tags : 0) + (withDimensions ? widths.dimensions : 0) + (withDuration ? widths.duration : 0) + (withTaken ? widths.taken : 0)
-    readonly property real totalWidth: widths.name + pathWidth + widths.size + widths.type + widths.modified + extraWidth
+    readonly property real totalWidth: widths.name + pathWidth + matchWidth + widths.size + widths.type + widths.modified + extraWidth
     // Only while a column wants them are the files read for their details.
     Binding {
         target: root.fv.folder
@@ -264,6 +272,7 @@ Item {
             required property string modifiedText
             required property string typeText
             required property string pathText
+            required property string snippetText
             required property string originText
             required property string deletedText
             required property var tagColours
@@ -347,6 +356,19 @@ Item {
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
                     text: root.withTrash ? row.originText : row.pathText
+                    color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
+                }
+                // The matching line of a search inside files ("12: the line").
+                Text {
+                    width: root.matchWidth
+                    height: root.rowHeight
+                    visible: root.withMatch
+                    leftPadding: Kirigami.Units.largeSpacing
+                    rightPadding: Kirigami.Units.largeSpacing
+                    verticalAlignment: Text.AlignVCenter
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    text: row.snippetText
                     color: Qt.alpha(Kirigami.Theme.textColor, 0.75)
                 }
                 Text {

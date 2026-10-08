@@ -155,6 +155,7 @@ using TelamonWalkCallback = void (*)(void *user, const uint8_t *batch, size_t le
 void telamon_search_filter(uint32_t kind, uint32_t modified, uint32_t size, int64_t now, int64_t startOfToday, TelamonSearchFilter *out);
 size_t telamon_search_kinds(uint32_t kind, uint8_t *out, size_t cap);
 uint32_t telamon_search_route(uint32_t scope, bool local, bool indexed, bool indexOn);
+uint32_t telamon_search_route_live(uint32_t scope, bool local);
 uint32_t telamon_search_index_state(const uint8_t *state, size_t len);
 bool telamon_search_index_on(uint32_t state);
 size_t telamon_search_chip(uint32_t state, const uint8_t *error, size_t errorLen, uint8_t *out, size_t cap, uint32_t *level);
@@ -162,13 +163,43 @@ size_t telamon_search_text(uint32_t which, uint64_t n, uint32_t flags, uint8_t *
 size_t telamon_search_limit(uint32_t which);
 size_t telamon_search_path_text(const uint8_t *parent, size_t parentLen, const uint8_t *home, size_t homeLen, uint8_t *out, size_t cap);
 bool telamon_search_covers(const uint8_t *folder, size_t folderLen, const uint8_t *roots, size_t rootsLen);
-void *telamon_matcher_new(const uint8_t *query, size_t queryLen, const TelamonSearchFilter *filter, bool includeHidden);
+void *telamon_matcher_new(const uint8_t *query, size_t queryLen, const TelamonSearchFilter *filter, bool includeHidden, bool usePattern);
 uint32_t telamon_matcher_test(const void *matcher, const uint8_t *name, size_t nameLen, bool isDir, uint64_t size, int64_t mtime);
 void telamon_matcher_free(void *matcher);
 void *telamon_walk_start(const uint8_t *root, size_t rootLen, const uint8_t *query, size_t queryLen, const TelamonSearchFilter *filter, bool includeHidden,
-                         const uint8_t *tag, size_t tagLen, size_t maxHits, TelamonWalkCallback callback, void *user);
+                         bool usePattern, const uint8_t *tag, size_t tagLen, size_t maxHits, TelamonWalkCallback callback, void *user);
 void telamon_walk_stop(void *handle);
 void telamon_walk_free(void *handle);
+
+// Patterns, the folder filter and search inside files (src/search_ffi.rs).
+size_t telamon_pattern_check(const uint8_t *text, size_t len, bool usePattern, bool contents, uint8_t *out, size_t cap);
+void *telamon_namefilter_new(const uint8_t *text, size_t len, bool usePattern, uint8_t *err, size_t errCap, size_t *errLen);
+bool telamon_namefilter_is_all(const void *filter);
+bool telamon_namefilter_test(const void *filter, const uint8_t *name, size_t len);
+void telamon_namefilter_free(void *filter);
+struct TelamonContentStats {
+    uint32_t searched;
+    uint32_t binary;
+    uint32_t tooLarge;
+    uint32_t pdfNoTool;
+    uint32_t pdfTimeout;
+    uint32_t unreadable;
+};
+using TelamonContentCallback = void (*)(void *user, const uint8_t *batch, size_t len, uint32_t end, const TelamonContentStats *stats);
+void *telamon_content_start(const uint8_t *root, size_t rootLen, const uint8_t *query, size_t queryLen, bool usePattern, const TelamonSearchFilter *filter,
+                            bool includeHidden, const uint8_t *tag, size_t tagLen, size_t maxHits, TelamonContentCallback callback, void *user);
+size_t telamon_content_text(uint64_t found, uint32_t end, const TelamonContentStats *stats, uint8_t *out, size_t cap);
+size_t telamon_content_note(uint8_t *out, size_t cap);
+bool telamon_content_pdf_available();
+
+// Saved searches (src/saved_ffi.rs).
+size_t telamon_saved_limit(uint32_t which);
+size_t telamon_saved_clean(const uint8_t *list, size_t listLen, uint8_t *out, size_t cap);
+size_t telamon_saved_add(const uint8_t *list, size_t listLen, const uint8_t *record, size_t recordLen, uint8_t *out, size_t cap, uint32_t *status);
+size_t telamon_saved_rename(const uint8_t *list, size_t listLen, uint32_t id, const uint8_t *name, size_t nameLen, uint8_t *out, size_t cap, uint32_t *status);
+size_t telamon_saved_remove(const uint8_t *list, size_t listLen, uint32_t id, uint8_t *out, size_t cap);
+size_t telamon_saved_default_name(const uint8_t *record, size_t len, uint8_t *out, size_t cap);
+size_t telamon_saved_describe(const uint8_t *list, size_t listLen, uint32_t id, const uint8_t *folderLabel, size_t labelLen, uint8_t *out, size_t cap);
 
 // ---- Quick Look, the preview pane and zoom (src/preview_ffi.rs) ----
 uint32_t telamon_preview_classify(const uint8_t *mime, size_t len);

@@ -44,6 +44,8 @@ FocusScope {
     property alias pathBar: headerBar
     // The tab's search: words, scope and chips live here, so each tab has its own.
     property alias search: tabSearch
+    // The folder filter's row (Ctrl+F).
+    property alias filterBar: filterBar
     property bool loaded: false
     property var backStack: []
     property var forwardStack: []
@@ -78,6 +80,16 @@ FocusScope {
     // Home and Network are pages Files draws itself: this one shows while the
     // tab is there, and the folder view stays out of sight.
     readonly property string pageKind: view.folder.pageKind
+    // Ctrl+F: the filter row opens above the items with the keyboard in it.
+    // False when there is nothing to filter (a page of Files' own, or search
+    // results, which the search field narrows): the caller uses the search.
+    function openFilter() {
+        if (!loaded || pageKind.length > 0 || view.folder.searching) {
+            return false;
+        }
+        filterBar.show();
+        return true;
+    }
     // The keyboard goes to what the tab shows: its folder, or its page.
     function focusContent() {
         if (pageKind.length > 0) {
@@ -221,6 +233,12 @@ FocusScope {
     SearchController {
         id: tabSearch
         folder: view.folder
+    }
+    // Use pattern is the pane's: the folder filter reads it as the search does.
+    Binding {
+        target: view.folder
+        property: "filterPattern"
+        value: tabSearch.usePattern
     }
 
     // F5 on a page reads it again.
@@ -378,17 +396,35 @@ FocusScope {
             visible: view.folder.inTrash && page.pageKind.length === 0
             height: visible ? implicitHeight : 0
         }
+        // The folder filter (Ctrl+F): its own row in every pane.
+        FilterBar {
+            id: filterBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: trashBar.bottom
+            folder: view.folder
+            search: tabSearch
+            visible: open && !view.folder.searching && page.pageKind.length === 0
+            onDismissed: page.focusContent()
+            onListRequested: {
+                view.forceActiveFocus();
+                if (view.folder.count > 0 && view.selectedUrls.length === 0) {
+                    view.chooseRow(0, 0, false);
+                }
+            }
+        }
 
         FolderView {
             id: view
             anchors.fill: parent
-            anchors.topMargin: trashBar.height
+            anchors.topMargin: trashBar.height + filterBar.height
             focus: true
             actions: page.actions
             search: tabSearch
             onOpenLocationRequested: urls => page.openLocation(urls)
             onQuickLookRequested: page.quickLookRequested()
             onSearchCloseRequested: tabSearch.clear()
+            onFilterCloseRequested: filterBar.dismiss()
             onNavigateRequested: target => page.navigate(target)
             // A step between the columns: the folder, with the items selected in it.
             onColumnNavigateRequested: (target, select) => {
