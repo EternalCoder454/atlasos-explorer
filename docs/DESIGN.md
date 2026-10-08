@@ -15,15 +15,13 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 5 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom)
+0.2.0 plus waves 1 to 6 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
 shows the index's answer (or a live walk) as a Details view with a Path column, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
-with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs with KIO's own
-dialogs, `FileManager1`, the launch parser and the index service. Everything
-else (the details pane, the operations
-popover and queue wiring, Columns and Gallery views, split view) is design,
+with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs run by one operation queue (ring and popover, conflict dialog, undo and redo), `FileManager1`, the launch parser and the index service. Everything
+else (the details pane, Columns and Gallery views, split view) is design,
 not behaviour. Sections that
 have been built say so in a "Built" line.
 
@@ -719,15 +717,64 @@ trash, delete, rename, new folder, restore from trash and empty trash.
   both files side by side (thumbnail, size, date, which is newer), Replace,
   Skip, Keep Both (KIO's suggested name, editable), and "Do this for all
   conflicts" for multi-item operations. Folders get Merge or Skip.
-- **v0.1 note:** v0.1 uses KIO's `FileUndoManager` (every job is recorded
-  with it) and KIO's own delegate for conflicts and job progress; the core's
-  own undo record and the QML conflict dialog below come later.
-- **Undo** (Ctrl+Z) undoes the last operation: copy (trash the copies),
-  move and rename (move back), new folder (remove if still empty), trash
-  (restore from the trash). Explorer keeps its own undo record in the core,
-  not KIO's FileUndoManager, so it can say exactly what an undo will do and
-  refuse when the files changed since. Permanent delete has no undo, and its
-  confirmation says so.
+- **Built (wave 6):** the state machines are the core's (`queue`, `history`,
+  `undo`, `conflict`, `preflight`, `optext`), reached through `src/ops_ffi.rs`
+  by `cpp/kio/OperationQueue.*` (a list model for the popover; it turns the
+  core's actions into KIO jobs: `CopyJob`, `DeleteJob`, `KIO::trash`,
+  `moveAs`, `mkdir`, `rmdir`, `restoreFromTrash`, `emptyTrash`, all with
+  `HideProgressInfo`, so KIO shows no dialog and no Plasma tracker) and
+  `OperationAsker`, the `AskUserActionInterface` that is a child of each job's
+  delegate. `FileActions` only asks the queue; nothing else changes files.
+  Progress is read from the jobs every 250 ms and handed to the core, which
+  computes speed and time left over 5 s.
+  - **Ring and popover:** `qml/OperationsButton.qml` in the command bar shows
+    while any operation is listed: a ring that fills (a quarter turns while
+    the total is not known; grey while everything is paused), a tick when all
+    is done, a warning mark when the last one failed. The popover has one row
+    per operation: label, bar, "186 MiB of 781 MiB, 38.7 MiB/s, 16 s left",
+    Pause or Resume, Cancel, Run Now on a waiting transfer, Undo on the last
+    one done, Dismiss on finished ones, and Clear Finished.
+  - **Conflicts:** `qml/ConflictDialog.qml` (a Telamon.Ui `TelamonDialog`)
+    shows the file there and the one coming side by side (thumbnail or icon,
+    size, date, "Newer" on the later one) and the answers the core allows
+    (`conflict::choices`): a file gets Replace, Skip and Keep Both with a
+    suggested, editable name; a folder gets Merge or Skip; a file and a
+    folder, or a paste onto itself, only Skip and Keep Both. "Do this for all
+    conflicts" is remembered per kind by the core's queue; a remembered answer
+    that doesn't fit a conflict skips it. Escape cancels the operation. A
+    problem a job reports (a file that can't be copied) opens
+    `qml/ProblemDialog.qml`: Retry, Skip, Skip All, Cancel; so does KIO's
+    "can't go to the Trash, delete instead?".
+  - **Cut:** items cut here or in another app (`application/x-kde-cutselection`)
+    are drawn at half strength (`FolderModel` role `isCut`) and the command
+    bar says "2 items waiting to move". The clipboard is cleared only after
+    the move finished, so a refused or cancelled paste leaves them waiting.
+  - **Undo and redo:** Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y (not while a text field
+    has the keys). The core keeps the last 20 entries on each side with the
+    title the user sees ("Move 3 Items to Backup"); the toast says "Undid:
+    Move 3 Items to Backup". Before an undo the files are looked at (workers,
+    and KIO stat jobs for the Trash and servers) and `Undo::check` refuses in
+    words when something changed since; the entry is then dropped. Running an
+    undo produces the record that reverses it (`Undo::inverse`), which is
+    what Redo runs: copies are trashed and restored, moves go back and
+    forth, a new folder is removed (`rmdir`, which refuses a folder that
+    holds anything) and made again. Undo never deletes: it only trashes,
+    moves, restores or `rmdir`s. **An operation that replaced or merged
+    files is not recorded** and empties both lists (what it "created" holds
+    files that were there before), and the window says so. Permanent delete
+    has no record; its dialog says "This can't be undone."
+  - **Refused up front:** a folder moved or copied into itself (or into one
+    inside it) is refused before it is queued, from the URLs; for local files
+    the check runs again on a worker with real paths (links), together with
+    the room at the destination (`statvfs` against the sources' size; a move
+    on the same disk needs none). The dialog gives the numbers: "There isn't
+    enough space in "Backup". Copying "big.iso" needs 4.2 GiB, and only 1.1
+    GiB is free."
+  - **Drops:** the path bar's and the sidebar's drops, the tab strip's and the
+    folder view's, and the search results' trash, cut, copy and delete all
+    call the queue. A drop with Shift moves, with Ctrl copies, with
+    Ctrl+Shift links; with no key a menu offers Move Here, Copy Here, Link
+    Here.
 - **Delete:** Delete moves to the Trash. Shift+Delete asks first ("Delete 3
   items for good? This can't be undone.", default button Cancel) and then
   deletes. Where a trash isn't available (some remote and removable
@@ -741,7 +788,8 @@ file stays whole until the new one is complete; on any error the partial
 output is removed; a move across filesystems deletes each source only after
 its copy succeeded. What Explorer adds:
 
-- **Journal.** Before an operation starts, a record (operation, sources,
+- **Journal** (not built: the Reliable phase; wave 6 keeps its undo
+  lists in memory only). Before an operation starts, a record (operation, sources,
   destination, what existed before) is appended to
   `~/.local/state/telamon-explorer/journal` (0600, fsync'd). The file being
   copied is recorded from CopyJob's `copying` signal (appended, fsync'd at

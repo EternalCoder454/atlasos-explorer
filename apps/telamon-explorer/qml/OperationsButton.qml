@@ -76,7 +76,7 @@ ToolbarButton {
                 running: ring.visible && button.fraction < 0 && !button.queue.allPaused && !TelamonStyle.reducedMotion
                 from: 0
                 to: 360
-                duration: 1100
+                duration: 1100 // telamon-lint: allow-raw (a turn of the ring, not a UI transition)
                 loops: Animation.Infinite
             }
         }
@@ -123,7 +123,7 @@ ToolbarButton {
                     id: row
                     required property int opId
                     required property string label
-                    required property string state
+                    required property string opState
                     required property real progress
                     required property string detail
                     required property string error
@@ -183,17 +183,17 @@ ToolbarButton {
                         Layout.fillWidth: true
                         visible: !row.finished
                         value: Math.max(0, row.progress)
-                        indeterminate: row.progress < 0 && row.state === "running"
-                        status: row.state === "paused" ? "paused" : "normal"
+                        indeterminate: row.progress < 0 && row.opState === "running"
+                        status: row.opState === "paused" ? "paused" : "normal"
                     }
                     Text {
                         Layout.fillWidth: true
                         visible: text.length > 0
-                        text: row.state === "failed" && row.error.length > 0 ? row.error : row.detail
+                        text: row.opState === "failed" && row.error.length > 0 ? row.error : row.detail
                         wrapMode: Text.Wrap
                         font.family: TelamonStyle.fontFamily
                         font.pointSize: TelamonStyle.fontSizeCaption
-                        color: row.state === "failed" ? Kirigami.Theme.negativeTextColor : TelamonStyle.textMuted
+                        color: row.opState === "failed" ? Kirigami.Theme.negativeTextColor : TelamonStyle.textMuted
                         textFormat: Text.PlainText
                     }
                 }

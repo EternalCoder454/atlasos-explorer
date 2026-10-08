@@ -26,6 +26,8 @@
 #include <QSet>
 #include <QThreadPool>
 
+#include <memory>
+
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -256,7 +258,7 @@ QHash<int, QByteArray> OperationQueue::roleNames() const
     return {
         {IdRole, "opId"},
         {LabelRole, "label"},
-        {StateRole, "state"},
+        {StateRole, "opState"},
         {ProgressRole, "progress"},
         {DetailRole, "detail"},
         {ErrorRole, "error"},
@@ -1158,7 +1160,7 @@ void OperationQueue::makeFolder(const QUrl &folder, const QString &name)
     w.kind = NewFolder;
     w.dest = target;
     w.created = {target};
-    w.title = tr("New Folder %1").arg(rustDisplayName(name.toUtf8()));
+    w.title = tr("Create Folder %1").arg(rustDisplayName(name.toUtf8()));
     w.steps << [target]() -> KJob * { return KIO::mkdir(target); };
     enqueue(std::move(w), tr("Creating folder %1").arg(rustDisplayName(name.toUtf8())));
 }
@@ -1223,8 +1225,22 @@ void OperationQueue::redo()
     startHistory(1);
 }
 
+void OperationQueue::recordingDone()
+{
+    if (--m_recording == 0 && m_deferredSide >= 0) {
+        const int side = m_deferredSide;
+        m_deferredSide = -1;
+        startHistory(side);
+    }
+}
+
 void OperationQueue::startHistory(int side)
 {
+    if (m_recording > 0) {
+        // The last operation is still being written down.
+        m_deferredSide = side;
+        return;
+    }
     const QStringList titles = side == 0 ? m_undoTitles : m_redoTitles;
     if (titles.isEmpty()) {
         Q_EMIT message(side == 0 ? tr("There is nothing to undo.") : tr("There is nothing to redo."));
@@ -1392,10 +1408,16 @@ void OperationQueue::recordHistory(const Work &w)
     }
     QPointer<OperationQueue> self(this);
     const quint64 opId = id;
+    ++m_recording;
     StatBatch::run(look, this, [self, kind, title, pairs, created, opId](const SeenMap &seen) {
         if (!self) {
             return;
         }
+        const std::shared_ptr<void> done(nullptr, [self](void *) {
+            if (self) {
+                self->recordingDone();
+            }
+        });
         QString rec;
         auto state = [&](const QUrl &u) { return seen.value(urlKey(u)); };
         switch (kind) {

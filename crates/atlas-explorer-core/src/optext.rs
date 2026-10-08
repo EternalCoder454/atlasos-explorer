@@ -38,10 +38,10 @@ pub struct About<'a> {
 
 fn items(a: &About, title_case: bool) -> String {
     let n = a.count.max(a.names.len());
-    if n == 1 {
-        if let Some(first) = a.names.first() {
-            return short_name(first);
-        }
+    if n == 1
+        && let Some(first) = a.names.first()
+    {
+        return short_name(first);
     }
     if title_case {
         format!("{n} Items")
@@ -67,7 +67,7 @@ pub fn title(a: &About) -> String {
             Some(n) => format!("Rename {what} to {}", short_name(n)),
             None => format!("Rename {what}"),
         },
-        (Kind::NewFolder, _) => format!("New Folder {what}"),
+        (Kind::NewFolder, _) => format!("Create Folder {what}"),
         (Kind::Copy, None) => format!("Copy {what}"),
         (Kind::Move, None) => format!("Move {what}"),
         (Kind::Link, None) => format!("Link {what}"),
@@ -232,7 +232,7 @@ mod tests {
         let f = names(&["New Folder"]);
         assert_eq!(
             title(&about(Kind::NewFolder, &f, 1, None)),
-            "New Folder New Folder"
+            "Create Folder New Folder"
         );
         // More items than names (only the first few are passed in).
         assert_eq!(

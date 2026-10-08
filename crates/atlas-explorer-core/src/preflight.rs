@@ -133,7 +133,7 @@ pub fn free_space(path: &Path) -> Option<u64> {
     if st.f_blocks == 0 {
         return None;
     }
-    Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+    Some(st.f_bavail.saturating_mul(st.f_frsize))
 }
 
 fn name_of(p: &Path) -> String {
@@ -253,7 +253,10 @@ mod tests {
             assert!(e.starts_with("Can't move"), "{e}");
         }
         let e = check_local(Transfer::Move, std::slice::from_ref(&a), &a, None).unwrap_err();
-        assert_eq!(e, "Can't move \"Projects\" into itself. Choose a different folder.");
+        assert_eq!(
+            e,
+            "Can't move \"Projects\" into itself. Choose a different folder."
+        );
         let e = check_local(Transfer::Move, std::slice::from_ref(&a), &old, None).unwrap_err();
         assert_eq!(
             e,

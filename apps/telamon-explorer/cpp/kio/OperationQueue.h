@@ -168,6 +168,7 @@ private:
     void recordHistory(const Work &w);
     void completeHistory(const Work &w);
     void startHistory(int side);
+    void recordingDone();
     QString nameList(const QList<QUrl> &urls, int max) const;
     static QString folderName(const QUrl &folder);
     static QString key(const QUrl &url);
@@ -183,5 +184,9 @@ private:
     quint64 m_undoableId = 0;
     // A history step (undo or redo) is being prepared or run: one at a time.
     bool m_historyBusy = false;
+    // Finished operations whose undo record is still being made (their files
+    // are looked at first); an undo asked for meanwhile waits for them.
+    int m_recording = 0;
+    int m_deferredSide = -1;
     QTimer m_tick;
 };
