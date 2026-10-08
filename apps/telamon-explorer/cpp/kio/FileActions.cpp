@@ -718,10 +718,6 @@ void FileActions::setPermissions(const QList<QUrl> &urls, uint setBits, uint cle
     m_ops->setAttributes(urls, edit, tr("Change Permissions of %1").arg(labelOf(urls)));
 }
 
-// What the Tags submenu offers for these items, from what the folder has read
-// of their tags (nothing is read here). {available, why, colours: [{name,
-// colour, state}], named: [{name, text, state}], hasTags}; state 0 no item has
-// the tag, 1 some, 2 all.
 // ---- Quick actions on pictures ----
 
 namespace
@@ -937,6 +933,10 @@ void FileActions::transferTo(const QList<QUrl> &urls, const QUrl &folder, bool m
     m_ops->transfer(move && !fromArchive ? OperationQueue::Move : OperationQueue::Copy, urls, folder);
 }
 
+// What the Tags submenu offers for these items, from what the folder has read
+// of their tags (nothing is read here). {available, why, colours: [{name,
+// colour, state}], named: [{name, text, state}], hasTags}; state 0 no item has
+// the tag, 1 some, 2 all.
 QVariantMap FileActions::tagMenu(const QList<QUrl> &urls) const
 {
     QString why;
@@ -1557,18 +1557,19 @@ void FileActions::startDrag(const QList<QUrl> &urls)
         auto *drag = new QDrag(m_window);
         drag->setMimeData(md);
         // The first item's icon, and how many there are.
-        const QString iconName = QMimeDatabase().mimeTypeForUrl(urls.first()).iconName();
+        const QString iconName = QMimeDatabase().mimeTypeForFile(urls.first().fileName(), QMimeDatabase::MatchExtension).iconName();
         QIcon icon = QIcon::fromTheme(iconName);
         if (icon.isNull()) {
             icon = QIcon::fromTheme(QStringLiteral("text-x-generic"));
         }
         QPixmap pix = icon.pixmap(32);
         if (urls.size() > 1) {
-            QPixmap withCount(pix.size() + QSize(8, 8));
-            withCount.setDevicePixelRatio(pix.devicePixelRatio());
+            const qreal dpr = pix.devicePixelRatio();
+            QPixmap withCount(pix.size() + QSize(8, 8) * dpr);
+            withCount.setDevicePixelRatio(dpr);
             withCount.fill(Qt::transparent);
             QPainter p(&withCount);
-            p.drawPixmap(0, 8, pix);
+            p.drawPixmap(QPointF(0, 8), pix);
             const QString n = urls.size() > 99 ? QStringLiteral("99+") : QString::number(urls.size());
             QFont f = p.font();
             f.setBold(true);

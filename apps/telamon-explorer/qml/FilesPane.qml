@@ -277,6 +277,10 @@ FocusScope {
         onPressedChanged: {
             if (pressed) {
                 page.activated();
+                // The keyboard goes with the click, unless a field in this pane has it.
+                if (!page.activeFocus && !headerBar.editing) {
+                    page.focusContent();
+                }
             }
         }
     }
@@ -317,7 +321,12 @@ FocusScope {
                 location: page.location
                 showHidden: view.folder.showHidden
                 actions: page.actions
-                onNavigateRequested: target => page.navigate(target)
+                // A click in this pane's bar is a click in the pane: it has the keyboard now.
+                onNavigateRequested: target => {
+                    page.activated();
+                    page.navigate(target);
+                    page.focusContent();
+                }
                 onOpenInNewTabRequested: target => page.openInNewTab(target)
                 onAddressAccepted: text => page.addressAccepted(text)
                 onAddressEdited: page.addressEdited()

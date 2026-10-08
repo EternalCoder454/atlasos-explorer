@@ -266,6 +266,9 @@ QString combine(const QList<Source> &in, const QString &outPath, const QString &
     if (badIndex != UINT32_MAX) {
         *bad = int(badIndex);
     }
+    if (rc != 0) {
+        QFile::remove(outPath);
+    }
     switch (rc) {
     case 0:
         return {};

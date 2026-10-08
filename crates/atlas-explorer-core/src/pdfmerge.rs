@@ -264,7 +264,11 @@ pub fn merge(inputs: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Result<u
         w.flush()?;
         w.into_inner().map_err(|e| e.into_error())?.sync_all()
     };
-    write().map_err(|_| MergeError::plain(Failure::CannotWrite))?;
+    if write().is_err() {
+        // Never leave half a PDF where a finished one is expected.
+        let _ = std::fs::remove_file(output);
+        return Err(MergeError::plain(Failure::CannotWrite));
+    }
     Ok(count)
 }
 

@@ -74,6 +74,8 @@ FocusScope {
     signal addressEdited
     // The panes or the one with the keyboard changed.
     signal paneLayoutChanged
+    // Either pane went to another folder.
+    signal paneMoved
 
     // The keyboard goes to what the tab shows: its folder, or its page.
     function focusContent() {
@@ -170,6 +172,7 @@ FocusScope {
             tab.contextMenuRequested(urls, x, y, p.view);
         });
         p.connectRequested.connect(() => tab.connectRequested());
+        p.locationChanged.connect(() => tab.paneMoved());
         p.activated.connect(() => tab.activate(p));
         p.closeRequested.connect(() => tab.closePane(tab.panes.indexOf(p)));
         p.addressAccepted.connect(text => tab.addressAccepted(text));

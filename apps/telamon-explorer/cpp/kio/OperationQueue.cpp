@@ -426,7 +426,7 @@ public:
                     self->setError(KJob::KilledJobError);
                 } else if (run->made.isEmpty()) {
                     self->setError(KJob::UserDefinedError);
-                    self->setErrorText(run->problems.isEmpty() ? OperationQueue::tr("Nothing could be made.") : run->problems.join(QLatin1Char('\n')));
+                    self->setErrorText(run->problems.isEmpty() ? OperationQueue::tr("Nothing could be made.") : run->problems.join(QStringLiteral("  ")));
                 }
                 self->emitResult();
             });
@@ -587,6 +587,14 @@ OperationQueue::OperationQueue(QObject *parent)
     : QAbstractListModel(parent)
     , m_engine(telamon_ops_new())
 {
+    // What a crash left of the folders where new pictures are made (a day old or more).
+    const QDir cache(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
+    const QDateTime old = QDateTime::currentDateTime().addDays(-1);
+    for (const QFileInfo &stale : cache.entryInfoList({QStringLiteral("made-??????")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (stale.lastModified() < old) {
+            QDir(stale.absoluteFilePath()).removeRecursively();
+        }
+    }
     m_tick.setInterval(250);
     connect(&m_tick, &QTimer::timeout, this, &OperationQueue::tick);
 }

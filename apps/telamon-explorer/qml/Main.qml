@@ -912,6 +912,8 @@ TelamonWindow {
         p.addressAccepted.connect(text => root.goToAddress(text));
         p.addressEdited.connect(() => root.addressError = "");
         p.paneLayoutChanged.connect(() => root.markSession());
+        // Either pane moving is a change of the session (the tab's own location is the active pane's).
+        p.paneMoved.connect(() => root.markSession());
         p.navigated.connect(() => root.freshStart = false);
         // A folder the user went to is counted for Home's Frequent Folders.
         p.navigated.connect(() => HomeLogic.visited(p.location));
@@ -965,12 +967,13 @@ TelamonWindow {
         const p = pageAt(i);
         if (p) {
             freshStart = false;
-            addTab(p.location, {
+            const first = p.panes[0];
+            addTab(first.location, {
                 "index": i + 1,
-                "viewMode": p.view.viewMode,
-                "back": p.backStack.slice(-TabLogic.maxHistory),
-                "forward": p.forwardStack.slice(-TabLogic.maxHistory),
-                "split": p.split ? p.panes[1].view.url : undefined,
+                "viewMode": first.view.viewMode,
+                "back": first.backStack.slice(-TabLogic.maxHistory),
+                "forward": first.forwardStack.slice(-TabLogic.maxHistory),
+                "split": p.split ? p.panes[1].location : undefined,
                 "active": p.activeIndex
             });
         }
@@ -998,12 +1001,13 @@ TelamonWindow {
         if (!p) {
             return;
         }
+        const first = p.panes[0];
         closedTabs = closedTabs.concat([{
-                    "url": p.location,
-                    "viewMode": p.view.viewMode,
-                    "back": p.backStack.slice(-TabLogic.maxHistory),
-                    "forward": p.forwardStack.slice(-TabLogic.maxHistory),
-                    "split": p.split ? p.panes[1].view.url : undefined,
+                    "url": first.location,
+                    "viewMode": first.view.viewMode,
+                    "back": first.backStack.slice(-TabLogic.maxHistory),
+                    "forward": first.forwardStack.slice(-TabLogic.maxHistory),
+                    "split": p.split ? p.panes[1].location : undefined,
                     "active": p.activeIndex,
                     "index": i
                 }]).slice(-TabLogic.maxClosed);
