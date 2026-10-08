@@ -53,8 +53,9 @@ class FolderModel : public QAbstractListModel
     // Bumped when the groups were worked out again (the headers' counts are read again).
     Q_PROPERTY(int groupRevision READ groupRevision NOTIFY groupRevisionChanged)
     // "home" or "network" while `url` is one of Files' own pages (the window
-    // draws the page; nothing is listed), else empty.
-    Q_PROPERTY(QString pageKind READ pageKind NOTIFY urlChanged)
+    // draws the page; nothing is listed), else empty. Search results are shown
+    // in the page's place while a search is on.
+    Q_PROPERTY(QString pageKind READ pageKind NOTIFY pageChanged)
     // The folder is on a server (smb, sftp, ftp, webdav, nfs ...).
     Q_PROPERTY(bool onServer READ onServer NOTIFY urlChanged)
     // "Not encrypted" for a folder on FTP, plain WebDAV or NFS; empty otherwise.
@@ -130,6 +131,8 @@ public:
     void setUrl(const QUrl &url);
     bool inArchive() const;
     QString pageKind() const;
+    // Which page `url` is, whatever else is shown now.
+    QString pageOfUrl() const;
     bool onServer() const;
     QString securityNote() const;
     bool unreachable() const { return m_unreachable; }
@@ -230,6 +233,7 @@ Q_SIGNALS:
     void pageRefreshRequested();
     void unreachableChanged();
     void stoppedChanged();
+    void pageChanged();
 
 private:
     struct Entry {

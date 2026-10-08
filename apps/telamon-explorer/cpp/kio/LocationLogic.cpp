@@ -103,8 +103,19 @@ QString LocationLogic::sizeText(double bytes) const
 }
 
 // A local folder is read on a worker; a server's by a KIO job.
-void LocationLogic::list(const QUrl &folder, std::function<void(const Listing &)> done)
+void LocationLogic::list(const QUrl &where, std::function<void(const Listing &)> done)
 {
+    QUrl folder = where;
+    // Files' own pages: Home's subfolders are those of the home folder, and
+    // Network has none (the computers are on its page).
+    if (folder.scheme() == QLatin1String("home")) {
+        folder = QUrl::fromLocalFile(QDir::homePath());
+    } else if (folder.scheme() == QLatin1String("network")) {
+        Listing l;
+        l.ok = true;
+        QTimer::singleShot(0, this, [done = std::move(done), l] { done(l); });
+        return;
+    }
     if (!folder.isLocalFile()) {
         listRemote(folder, std::move(done));
         return;

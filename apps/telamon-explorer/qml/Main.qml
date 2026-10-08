@@ -1024,7 +1024,7 @@ TelamonWindow {
     Shortcut { sequence: "Alt+Left"; enabled: !root.typing; onActivated: root.goBack() }
     Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
     Shortcut { sequences: ["F5", "Ctrl+R"]; enabled: !root.typing; onActivated: { if (root.view) root.view.folder.refresh(); } }
-    Shortcut { sequence: "Ctrl+Shift+K"; enabled: !quickLook.opened; onActivated: connectDialog.ask() }
+    Shortcut { sequence: "Ctrl+Shift+K"; enabled: !quickLook.opened && !connectDialog.opened; onActivated: connectDialog.ask() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
     Shortcut { sequence: "Ctrl+W"; onActivated: root.closeTab(root.currentIndex) }
     Shortcut { sequence: "Ctrl+Shift+T"; onActivated: root.reopenClosedTab() }

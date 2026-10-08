@@ -6,6 +6,8 @@
 #include <KIO/Global>
 #include <KIO/Job>
 #include <KIO/UDSEntry>
+#include <KConfigGroup>
+#include <KSharedConfig>
 
 #include <QDateTime>
 #include <QDir>
@@ -98,6 +100,8 @@ FolderModel::FolderModel(QObject *parent)
     s_models.append(this);
     connect(this, &FolderModel::urlChanged, this, &FolderModel::archiveChanged);
     connect(this, &FolderModel::searchingChanged, this, &FolderModel::archiveChanged);
+    connect(this, &FolderModel::urlChanged, this, &FolderModel::pageChanged);
+    connect(this, &FolderModel::searchingChanged, this, &FolderModel::pageChanged);
     m_pool.setMaxThreadCount(1);
     m_lister->setDelayedMimeTypes(true);
     m_lister->setAutoErrorHandlingEnabled(false);
@@ -114,42 +118,42 @@ FolderModel::FolderModel(QObject *parent)
     // While the rows are search results the lister is stopped and its signals
     // change nothing; the folder is listed again when the search ends.
     connect(m_lister, &KCoreDirLister::itemsAdded, this, [this](const QUrl &, const KFileItemList &items) {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             addItems(items);
         }
     });
     connect(m_lister, &KCoreDirLister::itemsDeleted, this, [this](const KFileItemList &items) {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             removeItems(items);
         }
     });
     connect(m_lister, &KCoreDirLister::refreshItems, this, [this](const QList<QPair<KFileItem, KFileItem>> &items) {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             refreshItems(items);
         }
     });
     connect(m_lister, &KCoreDirLister::clear, this, [this] {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             resetRows();
         }
     });
     connect(m_lister, &KCoreDirLister::completed, this, [this] {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             onCompleted();
         }
     });
     connect(m_lister, &KCoreDirLister::canceled, this, [this] {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             setLoading(false);
         }
     });
     connect(m_lister, &KCoreDirLister::jobError, this, [this](KIO::Job *job) {
-        if (!m_searching && pageKind().isEmpty()) {
+        if (!m_searching && pageOfUrl().isEmpty()) {
             onJobError(job);
         }
     });
     connect(m_lister, &KCoreDirLister::redirection, this, [this](const QUrl &, const QUrl &to) {
-        if (m_searching || !pageKind().isEmpty()) {
+        if (m_searching || !pageOfUrl().isEmpty()) {
             return;
         }
         m_url = to;
@@ -194,6 +198,11 @@ bool FolderModel::inArchive() const
 }
 
 QString FolderModel::pageKind() const
+{
+    return m_searching ? QString() : pageOf(m_url);
+}
+
+QString FolderModel::pageOfUrl() const
 {
     return pageOf(m_url);
 }
@@ -400,7 +409,7 @@ void FolderModel::refresh()
     if (!m_url.isValid()) {
         return;
     }
-    if (!pageKind().isEmpty()) {
+    if (!pageOfUrl().isEmpty()) {
         Q_EMIT pageRefreshRequested();
         return;
     }
@@ -418,7 +427,7 @@ void FolderModel::refresh()
 
 void FolderModel::stop()
 {
-    if (m_searching || !pageKind().isEmpty()) {
+    if (m_searching || !pageOfUrl().isEmpty()) {
         return;
     }
     stopProbe();
@@ -451,6 +460,11 @@ void FolderModel::startProbe(const QUrl &url)
     stopProbe();
     const int port = url.port(ServerLogic::defaultPort(url.scheme()));
     if (url.host().isEmpty() || !ServerLogic::isServerScheme(url.scheme()) || port <= 0) {
+        return;
+    }
+    // With a proxy set up, KIO reaches the server another way than a direct
+    // connection: the test would say nothing true, and KIO's own limits apply.
+    if (KSharedConfig::openConfig(QStringLiteral("kioslaverc"), KConfig::NoGlobals)->group(QStringLiteral("Proxy Settings")).readEntry("ProxyType", 0) != 0) {
         return;
     }
     auto *sock = new QTcpSocket(this);

@@ -3,6 +3,9 @@
 #include "RustBridge.h"
 
 #include <KConfigGroup>
+#include <KIO/Job>
+#include <KIO/ListJob>
+#include <KIO/UDSEntry>
 #include <KSharedConfig>
 
 #include <QCoreApplication>
@@ -12,8 +15,10 @@
 #include <QLocale>
 #include <QMimeDatabase>
 #include <QPointer>
+#include <QSet>
 #include <QStandardPaths>
 #include <QThreadPool>
+#include <QTimer>
 
 namespace
 {
@@ -107,58 +112,149 @@ void HomeLogic::rebuildPinned()
     }
 }
 
+// A recent file as the page lists it. `secs` is when it was last used (0 when
+// the source doesn't say).
+static QVariantMap recentItem(const QUrl &url, qint64 secs, QMimeDatabase &mime)
+{
+    const QString file = url.toLocalFile();
+    const QString name = rustDisplayName(QFileInfo(file).fileName().toUtf8());
+    const QMimeType mt = mime.mimeTypeForFile(file, QMimeDatabase::MatchExtension);
+    const QString when = secs > 0 ? HomeLogic::tr("Used %1").arg(QLocale().toString(QDateTime::fromSecsSinceEpoch(secs), QLocale::ShortFormat)) : QString();
+    return item(name, url, parentText(url), mt.iconName().isEmpty() ? QStringLiteral("application-octet-stream") : mt.iconName(), false, when);
+}
+
 void HomeLogic::refresh()
 {
     rebuildPinned();
     const int serial = ++m_serial;
+    m_pendingReads = 2;
     setLoading(true);
-    const QByteArray counts = m_counts;
-    const QString xbel = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/recently-used.xbel");
-    const QString home = QDir::homePath();
-    QPointer<HomeLogic> self(this);
-    // Reading the recent list and checking that things are still there are
-    // stat calls: never on the GUI thread.
-    QThreadPool::globalInstance()->start([self, serial, counts, xbel, home] {
-        QVariantList recent;
-        QVariantList frequent;
-        QStringList gone;
-        QMimeDatabase mime;
+    startRecent(serial, {});
+    startFrequent(serial);
+    startRecentKio(serial);
+}
 
+// The Recent place's own list (KActivities, through KIO's `recentlyused:`
+// worker) is asked for too. Where there is no activity service it fails or
+// stays empty, which changes nothing; where there is one, its files come
+// first, and the freedesktop list fills what is left.
+void HomeLogic::startRecentKio(int serial)
+{
+    if (m_kioJob) {
+        m_kioJob->kill(KJob::Quietly);
+        m_kioJob = nullptr;
+    }
+    m_kioUrls.clear();
+    auto *job = KIO::listDir(QUrl(QStringLiteral("recentlyused:/files")), KIO::HideProgressInfo);
+    // A list that is only read, never a dialog.
+    job->setUiDelegate(nullptr);
+    m_kioJob = job;
+    QPointer<HomeLogic> self(this);
+    connect(job, &KIO::ListJob::entries, this, [self, serial](KIO::Job *, const KIO::UDSEntryList &list) {
+        if (!self || serial != self->m_serial) {
+            return;
+        }
+        for (const KIO::UDSEntry &e : list) {
+            if (self->m_kioUrls.size() >= int(telamon_home_limit(LimitRecent))) {
+                break;
+            }
+            QUrl url(e.stringValue(KIO::UDSEntry::UDS_URL));
+            if (!url.isLocalFile()) {
+                const QString local = e.stringValue(KIO::UDSEntry::UDS_LOCAL_PATH);
+                url = local.isEmpty() ? QUrl() : QUrl::fromLocalFile(local);
+            }
+            if (url.isLocalFile() && !e.isDir() && !self->m_kioUrls.contains(url)) {
+                self->m_kioUrls.append(url);
+            }
+        }
+    });
+    connect(job, &KJob::result, this, [self, serial] {
+        if (!self || serial != self->m_serial) {
+            return;
+        }
+        self->m_kioJob = nullptr;
+        if (!self->m_kioUrls.isEmpty()) {
+            self->startRecent(serial, self->m_kioUrls);
+        }
+    });
+    // A worker that does not answer is let go after a while.
+    QTimer::singleShot(5000, job, [job] { job->kill(KJob::Quietly); });
+}
+
+// Reads the freedesktop list and puts `first` (files the activity service
+// named, newest first) in front of it; stat calls, so on a worker.
+void HomeLogic::startRecent(int serial, const QList<QUrl> &first)
+{
+    const QString xbel = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/recently-used.xbel");
+    QPointer<HomeLogic> self(this);
+    QThreadPool::globalInstance()->start([self, serial, xbel, first] {
+        QVariantList recent;
+        QSet<QUrl> seen;
+        QMimeDatabase mime;
+        const int cap = int(telamon_home_limit(LimitRecent));
+        for (const QUrl &u : first) {
+            if (recent.size() >= cap) {
+                break;
+            }
+            if (QFileInfo(u.toLocalFile()).isFile() && !seen.contains(u)) {
+                seen.insert(u);
+                recent.append(recentItem(u, 0, mime));
+            }
+        }
         const QByteArray path = xbel.toUtf8();
         QByteArray buf(8192, 0);
-        const size_t cap = telamon_home_limit(LimitRecent);
-        size_t n = telamon_home_recent_files(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), cap, reinterpret_cast<uint8_t *>(buf.data()),
+        const auto call = [&] {
+            return telamon_home_recent_files(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), size_t(cap), reinterpret_cast<uint8_t *>(buf.data()),
                                              size_t(buf.size()));
+        };
+        size_t n = call();
         if (n > size_t(buf.size())) {
             buf.resize(qsizetype(n));
-            n = telamon_home_recent_files(reinterpret_cast<const uint8_t *>(path.constData()), size_t(path.size()), cap, reinterpret_cast<uint8_t *>(buf.data()),
-                                          size_t(buf.size()));
+            n = call();
         }
         for (const QByteArray &line : buf.left(qsizetype(n)).split('\n')) {
             const int tab = line.indexOf('\t');
-            if (tab <= 0) {
+            if (tab <= 0 || recent.size() >= cap) {
                 continue;
             }
-            const qint64 secs = line.left(tab).toLongLong();
             const QUrl url = QUrl::fromEncoded(line.mid(tab + 1));
-            if (!url.isLocalFile()) {
-                continue;
+            if (url.isLocalFile() && !seen.contains(url)) {
+                seen.insert(url);
+                recent.append(recentItem(url, line.left(tab).toLongLong(), mime));
             }
-            const QString file = url.toLocalFile();
-            const QString name = rustDisplayName(QFileInfo(file).fileName().toUtf8());
-            const QMimeType mt = mime.mimeTypeForFile(file, QMimeDatabase::MatchExtension);
-            const QString when = QLocale().toString(QDateTime::fromSecsSinceEpoch(secs), QLocale::ShortFormat);
-            recent.append(item(name, url, parentText(url), mt.iconName().isEmpty() ? QStringLiteral("application-octet-stream") : mt.iconName(), false,
-                               tr("Used %1").arg(when)));
         }
+        QMetaObject::invokeMethod(
+            self.data(),
+            [self, serial, recent] {
+                if (!self || serial != self->m_serial) {
+                    return;
+                }
+                if (recent != self->m_recent) {
+                    self->m_recent = recent;
+                    Q_EMIT self->recentChanged();
+                }
+                self->readDone();
+            },
+            Qt::QueuedConnection);
+    });
+}
 
+void HomeLogic::startFrequent(int serial)
+{
+    const QByteArray counts = m_counts;
+    QPointer<HomeLogic> self(this);
+    QThreadPool::globalInstance()->start([self, serial, counts] {
+        QVariantList frequent;
+        QStringList gone;
         QByteArray top(8192, 0);
-        size_t t = telamon_home_top(reinterpret_cast<const uint8_t *>(counts.constData()), size_t(counts.size()), telamon_home_limit(LimitFolders), reinterpret_cast<uint8_t *>(top.data()),
-                                    size_t(top.size()));
+        const auto call = [&] {
+            return telamon_home_top(reinterpret_cast<const uint8_t *>(counts.constData()), size_t(counts.size()), telamon_home_limit(LimitFolders),
+                                    reinterpret_cast<uint8_t *>(top.data()), size_t(top.size()));
+        };
+        size_t t = call();
         if (t > size_t(top.size())) {
             top.resize(qsizetype(t));
-            t = telamon_home_top(reinterpret_cast<const uint8_t *>(counts.constData()), size_t(counts.size()), telamon_home_limit(LimitFolders), reinterpret_cast<uint8_t *>(top.data()),
-                                 size_t(top.size()));
+            t = call();
         }
         const int shown = int(telamon_home_limit(LimitShown));
         for (const QByteArray &line : top.left(qsizetype(t)).split('\n')) {
@@ -175,37 +271,38 @@ void HomeLogic::refresh()
                 continue;
             }
             const bool local = url.isLocalFile();
-            const QString note = tr("Opened %n time(s)", "", count);
             frequent.append(item(folderName(url), url, local ? parentText(url) : rustDisplayName(url.toString(QUrl::PrettyDecoded | QUrl::RemovePassword).toUtf8()),
-                                 local ? QStringLiteral("folder") : QStringLiteral("folder-remote"), true, note));
+                                 local ? QStringLiteral("folder") : QStringLiteral("folder-remote"), true, tr("Opened %n time(s)", "", count)));
         }
         QMetaObject::invokeMethod(
             self.data(),
-            [self, serial, recent, frequent, gone] {
+            [self, serial, frequent, gone] {
                 if (!self || serial != self->m_serial) {
                     return;
                 }
                 for (const QString &g : gone) {
-                    const QByteArray k = g.toUtf8();
-                    self->m_counts = rustBytes2(telamon_home_forget, self->m_counts, k);
+                    self->m_counts = rustBytes2(telamon_home_forget, self->m_counts, g.toUtf8());
                     self->m_dirty = true;
                 }
                 if (!gone.isEmpty()) {
                     self->m_timer.start();
                     Q_EMIT self->countedChanged();
                 }
-                if (recent != self->m_recent) {
-                    self->m_recent = recent;
-                    Q_EMIT self->recentChanged();
-                }
                 if (frequent != self->m_frequent) {
                     self->m_frequent = frequent;
                     Q_EMIT self->frequentChanged();
                 }
-                self->setLoading(false);
+                self->readDone();
             },
             Qt::QueuedConnection);
     });
+}
+
+void HomeLogic::readDone()
+{
+    if (m_pendingReads > 0 && --m_pendingReads == 0) {
+        setLoading(false);
+    }
 }
 
 void HomeLogic::visited(const QUrl &folder)
@@ -243,6 +340,7 @@ void HomeLogic::clearFrequent()
 {
     // A read that is under way is let go.
     ++m_serial;
+    m_pendingReads = 0;
     setLoading(false);
     m_counts.clear();
     m_dirty = true;

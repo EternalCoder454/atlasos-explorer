@@ -922,7 +922,7 @@ FocusScope {
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.topMargin: Kirigami.Units.largeSpacing
-        radius: 6
+        radius: TelamonStyle.radius
         color: Kirigami.Theme.backgroundColor
         border.color: Qt.alpha(Kirigami.Theme.textColor, 0.2)
         implicitWidth: pillRow.implicitWidth + Kirigami.Units.gridUnit

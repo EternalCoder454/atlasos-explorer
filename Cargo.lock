@@ -1002,6 +1002,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "telamon-avahi-standin"
+version = "0.2.0"
+dependencies = [
+ "zbus",
+]
+
+[[package]]
 name = "telamon-explorer"
 version = "0.2.0"
 dependencies = [

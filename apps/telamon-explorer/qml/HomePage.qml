@@ -120,7 +120,7 @@ FocusScope {
                             row: true
                             iconName: modelData.iconName
                             text: modelData.name
-                            subtitle: modelData.path.length > 0 ? modelData.path + " · " + modelData.tip : modelData.tip
+                            subtitle: [modelData.path, modelData.tip].filter(s => s.length > 0).join(" \u00b7 ")
                             onClicked: page.openItem(modelData, false)
                             // A file's folder, not the file, opens in a tab behind.
                             onOpenInNewTab: page.navigateRequested(StandardPlaces.parentUrl(modelData.url), true)

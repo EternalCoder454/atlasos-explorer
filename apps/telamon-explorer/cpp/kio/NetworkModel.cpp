@@ -274,10 +274,14 @@ void NetworkModel::maybeDone()
 
 void NetworkModel::addRow(const Row &row)
 {
-    if (m_rows.size() >= MaxRows || m_urls.contains(row.url.toString())) {
+    // The same computer is found by more than one way (Avahi and the SMB
+    // worker; "nas" and "nas.local"): one row for a name and kind.
+    const QString same = row.kind + QLatin1Char('\n') + row.name.toLower();
+    if (m_rows.size() >= MaxRows || m_urls.contains(row.url.toString()) || m_urls.contains(same)) {
         return;
     }
     m_urls.insert(row.url.toString());
+    m_urls.insert(same);
     const int at = int(m_rows.size());
     beginInsertRows({}, at, at);
     m_rows.append(row);
@@ -357,6 +361,7 @@ void NetworkModel::onItemRemove(const QDBusMessage &msg)
         if (m_rows.at(i).key == key) {
             beginRemoveRows({}, i, i);
             m_urls.remove(m_rows.at(i).url.toString());
+            m_urls.remove(m_rows.at(i).kind + QLatin1Char('\n') + m_rows.at(i).name.toLower());
             m_rows.removeAt(i);
             endRemoveRows();
             Q_EMIT countChanged();

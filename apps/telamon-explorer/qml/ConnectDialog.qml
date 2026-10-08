@@ -27,13 +27,18 @@ TelamonDialog {
     readonly property bool encrypted: protocols.length > 0 && protocolBox.currentIndex >= 0 ? protocols[protocolBox.currentIndex].encrypted : true
     // {ok, text}: the address, or why there isn't one.
     readonly property var built: ServerLogic.build(protocolCode, serverField.text, folderField.text, userField.text)
-    // A refusal shows once something was typed in the server field.
-    readonly property bool refused: !built.ok && serverField.text.length > 0
+    // A refusal shows once something was typed.
+    readonly property bool refused: !built.ok && (serverField.text.length > 0 || folderField.text.length > 0 || userField.text.length > 0)
     readonly property bool ready: built.ok
 
     function ask() {
         protocols = ServerLogic.protocols();
         recents = ServerLogic.recents();
+        // Always a clean form: what was typed last time is in the recent list.
+        protocolBox.currentIndex = 0;
+        serverField.text = "";
+        folderField.text = "";
+        userField.text = "";
         open();
     }
     // A server of the list fills the fields.
@@ -128,7 +133,7 @@ TelamonDialog {
             Layout.fillWidth: true
             maximumLength: 260
             placeholderText: qsTr("nas.local or 192.168.1.20")
-            errorText: dialog.refused ? dialog.built.text : ""
+            invalidText: ""
             Accessible.name: qsTr("Server")
             onAccepted: dialog.connectNow()
         }
@@ -166,6 +171,19 @@ TelamonDialog {
         }
     }
 
+    // Why there is no address yet, in plain words (whichever field it is about).
+    Text {
+        Layout.fillWidth: true
+        visible: dialog.refused
+        text: dialog.built.text
+        textFormat: Text.PlainText
+        wrapMode: Text.Wrap
+        font.family: TelamonStyle.fontFamily
+        font.pointSize: TelamonStyle.fontSizeCaption
+        color: Kirigami.Theme.negativeTextColor
+        Accessible.role: Accessible.AlertMessage
+        Accessible.name: text
+    }
     Text {
         Layout.fillWidth: true
         text: qsTr("The server asks for the password when you connect. Files doesn't keep it.")

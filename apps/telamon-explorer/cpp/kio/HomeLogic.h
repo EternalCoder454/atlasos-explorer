@@ -8,8 +8,12 @@
 // results between a worker and the GUI thread. Stat calls run on the worker.
 #pragma once
 
+#include <KIO/ListJob>
+
 #include <QByteArray>
+#include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QQmlEngine>
 #include <QTimer>
 #include <QUrl>
@@ -63,7 +67,10 @@ Q_SIGNALS:
 
 private:
     void rebuildPinned();
-    void readWorker();
+    void startRecent(int serial, const QList<QUrl> &first);
+    void startRecentKio(int serial);
+    void startFrequent(int serial);
+    void readDone();
     void setLoading(bool on);
 
     // The counts as the core writes them, one folder per line.
@@ -75,4 +82,8 @@ private:
     QVariantList m_frequent;
     bool m_loading = false;
     int m_serial = 0;
+    int m_pendingReads = 0;
+    // The files the Recent place's own worker named, newest first.
+    QList<QUrl> m_kioUrls;
+    QPointer<KIO::ListJob> m_kioJob;
 };

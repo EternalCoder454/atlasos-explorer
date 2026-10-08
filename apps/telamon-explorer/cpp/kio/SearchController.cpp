@@ -622,7 +622,7 @@ void SearchController::run()
 // Network) there is no folder to look in, so it is the home folder.
 QUrl SearchController::searchFolder() const
 {
-    if (m_folder && !m_folder->pageKind().isEmpty()) {
+    if (m_folder && !m_folder->pageOfUrl().isEmpty()) {
         return QUrl::fromLocalFile(QDir::homePath());
     }
     return m_folder ? m_folder->url() : QUrl();
