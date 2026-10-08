@@ -8,6 +8,7 @@ pub mod launch;
 pub mod legacy;
 pub mod location;
 pub mod names;
+pub mod places;
 pub mod queue;
 pub mod sort;
 pub mod tabs;
