@@ -729,7 +729,11 @@ KFileItem FolderModel::fileItemOf(const QUrl &url) const
 FolderModel::Entry FolderModel::makeSearchEntry(const SearchHit &hit, quint32 rank)
 {
     KIO::UDSEntry u;
-    u.fastInsert(KIO::UDSEntry::UDS_NAME, hit.name);
+    // A file on this computer is named by its URL (the real name, which the
+    // index's display name may have changed); the name given is for the rest.
+    if (!hit.url.isLocalFile()) {
+        u.fastInsert(KIO::UDSEntry::UDS_NAME, hit.name);
+    }
     u.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, hit.isDir ? S_IFDIR : S_IFREG);
     u.fastInsert(KIO::UDSEntry::UDS_SIZE, qlonglong(hit.size));
     u.fastInsert(KIO::UDSEntry::UDS_MODIFICATION_TIME, qlonglong(hit.mtime));

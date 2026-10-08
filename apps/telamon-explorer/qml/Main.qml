@@ -42,7 +42,7 @@ TelamonWindow {
     property string addressError
     readonly property bool editingAddress: pathBar.editing
     // A text field has the keyboard: keys that mean something to it are not the window's.
-    readonly property bool typing: pathBar.editing || searchField.activeFocus
+    readonly property bool typing: pathBar.editing || searchField.activeFocus || searchBar.activeFocus
     // The tab's search, and whether its results are what the view shows.
     readonly property var search: page ? page.search : null
     readonly property bool searching: view ? view.folder.searching : false
@@ -106,9 +106,13 @@ TelamonWindow {
         // Files in the results were trashed, moved or renamed: drop the ones
         // that are gone now, and look again once the index has caught up.
         onJobFinished: {
-            if (root.view && root.view.folder.searching) {
-                root.view.folder.pruneSearchResults();
-                searchAgain.restart();
+            // Any tab may be the one whose results were changed.
+            for (const id in root.pages) {
+                const f = root.pages[id].view.folder;
+                if (f.searching) {
+                    f.pruneSearchResults();
+                    searchAgain.restart();
+                }
             }
         }
     }
@@ -116,8 +120,11 @@ TelamonWindow {
         id: searchAgain
         interval: 900
         onTriggered: {
-            if (root.search && root.search.active && !root.search.live) {
-                root.search.rerun();
+            for (const id in root.pages) {
+                const s = root.pages[id].search;
+                if (s.active && !s.live) {
+                    s.rerun();
+                }
             }
         }
     }
@@ -844,8 +851,8 @@ TelamonWindow {
             }
         }
         ContextMenuSeparator {}
-        ContextMenuItem { text: qsTr("Ascending"); radio: true; checkable: true; checked: !root.view?.folder.sortDescending; onTriggered: root.view.folder.sortDescending = false }
-        ContextMenuItem { text: qsTr("Descending"); radio: true; checkable: true; checked: root.view?.folder.sortDescending ?? false; onTriggered: root.view.folder.sortDescending = true }
+        ContextMenuItem { text: qsTr("Ascending"); enabled: !root.searching || root.view?.folder.sortColumn !== FolderModel.Relevance; radio: true; checkable: true; checked: !root.view?.folder.sortDescending; onTriggered: root.view.folder.sortDescending = false }
+        ContextMenuItem { text: qsTr("Descending"); enabled: !root.searching || root.view?.folder.sortColumn !== FolderModel.Relevance; radio: true; checkable: true; checked: root.view?.folder.sortDescending ?? false; onTriggered: root.view.folder.sortDescending = true }
     }
 
     // The places Back or Forward would go to: picking one jumps there.
@@ -1177,6 +1184,7 @@ TelamonWindow {
 
             // Where the search looks, its filters and how it is going.
             SearchBar {
+                id: searchBar
                 Layout.fillWidth: true
                 search: root.search
                 field: searchField

@@ -206,6 +206,7 @@ private:
     Route m_route = NoRoute;
     bool m_walking = false;
     bool m_pending = false;
+    int m_busyRetries = 0;
     bool m_stopped = false;
     int m_found = 0;
     int m_chipLevel = 0;

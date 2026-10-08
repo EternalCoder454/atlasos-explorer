@@ -255,6 +255,13 @@ namespace
 void walkCallback(void *user, const uint8_t *batch, size_t len, uint32_t end)
 {
     auto *ctx = static_cast<SearchController::WalkContext *>(user);
+    // The application may be gone already (the window was closed during a walk).
+    if (!QCoreApplication::instance()) {
+        if (end != 0) {
+            delete ctx;
+        }
+        return;
+    }
     QByteArray data = batch ? QByteArray(reinterpret_cast<const char *>(batch), qsizetype(len)) : QByteArray();
     QMetaObject::invokeMethod(
         QCoreApplication::instance(),
@@ -589,6 +596,7 @@ void SearchController::run()
     const quint64 serial = ++m_serial;
     m_stopped = false;
     m_found = 0;
+    m_busyRetries = 0;
     if (!m_folder) {
         return;
     }
@@ -711,12 +719,16 @@ void SearchController::searchIndex(quint64 serial, Route route)
         }
         if (failure == SearchService::Busy) {
             // The service is answering as many as it allows: try again in a moment.
-            QTimer::singleShot(150, this, [this, serial, route] {
-                if (serial == m_serial) {
-                    searchIndex(serial, route);
-                }
-            });
-            return;
+            // At most a few seconds of it: then it is a failure like any other.
+            if (++m_busyRetries <= 20) {
+                QTimer::singleShot(150, this, [this, serial, route] {
+                    if (serial == m_serial) {
+                        searchIndex(serial, route);
+                    }
+                });
+                return;
+            }
+            failure = SearchService::Unreachable;
         }
         setPending(false);
         if (failure != SearchService::NoFailure) {
