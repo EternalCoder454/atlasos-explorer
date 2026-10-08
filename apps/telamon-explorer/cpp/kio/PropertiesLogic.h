@@ -140,7 +140,7 @@ private:
     void applyChecksum();
     void setChecksumState(bool running, double progress);
     void checksumFinished(const QString &hex, int alg, int rc, const QString &error);
-    void updateCompare();
+    void updateCompare(bool mayStart = true);
     void setFolderSizeState(const QString &state, const QString &text, bool running);
     QString sizeLine(quint64 bytes) const;
 

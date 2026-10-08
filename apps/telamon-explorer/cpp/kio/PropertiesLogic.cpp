@@ -744,7 +744,8 @@ void PropertiesLogic::checksumFinished(const QString &hex, int alg, int rc, cons
         m_pendingCompareAlg = -1;
     }
     applyChecksum();
-    updateCompare();
+    // A stopped calculation is not started again by a pasted checksum.
+    updateCompare(rc == 0);
 }
 
 void PropertiesLogic::cancelChecksum()
@@ -762,7 +763,7 @@ void PropertiesLogic::compareWith(const QString &text)
     updateCompare();
 }
 
-void PropertiesLogic::updateCompare()
+void PropertiesLogic::updateCompare(bool mayStart)
 {
     QVariantMap c{{QStringLiteral("state"), QString()}, {QStringLiteral("text"), QString()}};
     if (!m_expected.trimmed().isEmpty()) {
@@ -779,7 +780,7 @@ void PropertiesLogic::updateCompare()
                      {QStringLiteral("text"), same ? tr("The %1 checksums match.").arg(name) : tr("The %1 checksums are different. The file is not the one that checksum is for.").arg(name)}};
             } else if (m_sumRunning) {
                 c = {{QStringLiteral("state"), QStringLiteral("waiting")}, {QStringLiteral("text"), tr("Calculating, then comparing…")}};
-            } else if (m_checksum.value(QStringLiteral("available")).toBool() && m_sumError.isEmpty()) {
+            } else if (mayStart && m_checksum.value(QStringLiteral("available")).toBool() && m_sumError.isEmpty()) {
                 // A checksum of a kind not calculated yet: calculate it now.
                 c = {{QStringLiteral("state"), QStringLiteral("waiting")}, {QStringLiteral("text"), tr("Calculating %1 to compare…").arg(name)}};
                 m_pendingCompareAlg = int(alg);

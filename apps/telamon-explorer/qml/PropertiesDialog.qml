@@ -28,7 +28,7 @@ TelamonDialog {
     readonly property var perms: props.perms
     readonly property var urls: props.urls
     // The new URL of the item after a rename that was asked for.
-    property url pendingUrl
+    property string pendingName
     // The permission boxes changed by the user: "who:bit" -> true or false.
     property var edits: ({})
     property bool recurse: false
@@ -44,7 +44,7 @@ TelamonDialog {
     function showFor(list) {
         edits = ({});
         recurse = false;
-        pendingUrl = Qt.url("");
+        pendingName = "";
         pages.currentIndex = 0;
         tabs.currentIndex = 0;
         nameField.text = "";
@@ -58,15 +58,19 @@ TelamonDialog {
     Connections {
         target: dialog.actions.operations
         function onAttributesChanged() {
-            dialog.edits = ({});
-            props.reloadAttributes();
+            if (dialog.visible) {
+                props.reloadAttributes();
+            }
         }
-        function onJobFinished() {
-            // A rename that was asked for: show the item under its new name.
-            if (dialog.pendingUrl.toString().length > 0) {
-                const target = dialog.pendingUrl;
-                dialog.pendingUrl = Qt.url("");
-                props.load([target]);
+    }
+    Connections {
+        target: dialog.actions
+        // The rename that was asked for went through: show the item under its
+        // new name (a rename that was refused or failed leaves the dialog as it is).
+        function onResultsReady(urls) {
+            if (dialog.pendingName.length > 0 && urls.length === 1 && decodeURIComponent(urls[0].toString()).endsWith("/" + dialog.pendingName)) {
+                dialog.pendingName = "";
+                props.load([urls[0]]);
             }
         }
     }
@@ -188,8 +192,8 @@ TelamonDialog {
                             if (!enabled) {
                                 return;
                             }
-                            dialog.pendingUrl = props.renamedUrl(nameField.text);
-                            dialog.actions.renameTo(props.urls[0], nameField.text, false);
+                            dialog.pendingName = nameField.text;
+                            dialog.actions.renameTo(props.urls[0], nameField.text, true);
                         }
                         onClicked: activate()
                     }
@@ -792,5 +796,7 @@ TelamonDialog {
             return;
         }
         dialog.actions.setPermissions(props.urls, changes.set, changes.clear, dialog.recurse);
+        // Taken: the boxes show what is on disk once it has been changed.
+        dialog.edits = ({});
     }
 }

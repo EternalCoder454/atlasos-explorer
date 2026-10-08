@@ -242,6 +242,26 @@ void SearchService::search(const QString &query, uint limit, const QVariantMap &
     });
 }
 
+void SearchService::notifyChanged(const QList<QUrl> &urls)
+{
+    const QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
+    if (!bus || !bus->isServiceRegistered(ServiceName)) {
+        return;
+    }
+    QStringList uris;
+    for (const QUrl &u : urls) {
+        if (u.isLocalFile() && uris.size() < 1000) {
+            uris << QString::fromLatin1(u.adjusted(QUrl::StripTrailingSlash).toEncoded());
+        }
+    }
+    if (uris.isEmpty()) {
+        return;
+    }
+    QDBusMessage msg = QDBusMessage::createMethodCall(ServiceName, ObjectPath, Interface, QStringLiteral("NotifyChanged"));
+    msg.setArguments({uris});
+    QDBusConnection::sessionBus().asyncCall(msg, CallTimeoutMs);
+}
+
 void SearchService::tags(QObject *context, bool activate, TagsDone done)
 {
     if (!activate) {

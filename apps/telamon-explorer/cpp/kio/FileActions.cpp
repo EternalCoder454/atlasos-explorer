@@ -6,6 +6,7 @@
 #include "PlacesLogic.h"
 #include "PropsBridge.h"
 #include "RustBridge.h"
+#include "SearchController.h"
 #include "TagLogic.h"
 
 #include <KConfigGroup>
@@ -100,6 +101,8 @@ FileActions::FileActions(QObject *parent)
     // shown reads the items again.
     connect(m_ops, &OperationQueue::attributesChanged, this, [](const QList<QUrl> &urls) {
         FolderModel::invalidateAttributes(urls);
+        // The index sees an attribute change on its own (inotify); this makes it sure.
+        SearchService::instance()->notifyChanged(urls);
         TagLogic::noteChanged();
     });
     m_ops->setArchiveProbe([this] { return archiveInstalled(); });

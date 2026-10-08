@@ -486,7 +486,11 @@ impl Undo {
                         let [path, key, before, after] = r.as_slice() else {
                             return None;
                         };
-                        if !matches!(*key, "tags" | "rating" | "mode") {
+                        if !matches!(*key, "tags" | "rating" | "mode")
+                            || [path, before, after]
+                                .iter()
+                                .any(|f| f.chars().any(char::is_control))
+                        {
                             return None;
                         }
                         Some(AttrChange {

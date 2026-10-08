@@ -681,7 +681,9 @@ Explorer replaces Dolphin completely.
     workers (`FolderModel::readTagBatch`), local files only. The colour dots
     (`qml/TagDots.qml`, at most four) are drawn after the name in Details,
     at the foot of the picture in Icons and Gallery, at the end of the row in
-    Compact and in Columns. A refresh (F5, Ctrl+R) reads the tags again; a
+    Compact and in Columns. A tag name with a control character or over 64
+    characters is kept when other tags change but not listed (the index leaves
+    it out as well). A refresh (F5, Ctrl+R) reads the tags again; a
     change by Files does too (below). A change made by another program while
     the folder is shown is seen on the next refresh (the lister does not watch
     extended attributes).
@@ -700,12 +702,14 @@ Explorer replaces Dolphin completely.
     core makes them on a worker (`attrs::run_edit`, `run_mode_tree`) and writes
     each down as *item, key, value before, value after*; the history entry
     (`Undo::Attrs`) puts the values back, **only when the value is still the one
-    the change left** (all items are checked first; nothing changes otherwise),
+    the change left** (all items are checked first, and nothing changes unless every one passes; a write that then fails is reported and the entry is dropped),
     and Redo is the inverse. Permission changes widen a folder's bits first
     and narrow them last, what is inside a folder before the folder, so an undo
     never locks itself out. A change that did part of its items before a failure
-    is one step to undo for those; more than 20,000 changed items are done but
-    not undoable (said in a toast). A change ends with `attributesChanged`:
+    or a Cancel is one step to undo for those (Cancel stops the worker after the
+    item it is on and the operation ends when it has answered); more than 20,000
+    changed items, or a value or name with a control character (a line break
+    in another program's tag), are done but not undoable (said in a toast). A change ends with `attributesChanged`:
     every folder shown, the sidebar and an open Properties window read again.
   - **Sidebar Tags section.** Under Network: the tags in use, a colour dot or a
     label symbol, the name and the number of items when the index knows it.
@@ -761,8 +765,9 @@ Explorer replaces Dolphin completely.
     calculates its kind first if that has not been done. Several selected
     items show the combined size and count, the kinds, and the fields they
     share (tags with "some items", a rating that differs, boxes with a dash).
-    Everything the dialog reads happens on workers (disk) or through KIO
-    (servers); closing it stops what runs. The hash functions are written out in
+    Everything the dialog reads from the disk happens on workers or through KIO
+    (servers); the application list and `mimeapps.list` are KService's and
+    KConfig's, on the GUI thread; closing the dialog stops what runs. The hash functions are written out in
     the core (tested against the published vectors); MD5 and SHA-1 are there to
     check downloads, not for security.
   - **Framework gaps** (for the Telamon OS Framework session):

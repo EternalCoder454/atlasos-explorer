@@ -236,7 +236,8 @@ pub struct Outcome {
     pub failed: u64,
     /// The first reason, for the window.
     pub problem: Option<Problem>,
-    /// More changes than can be written down for Undo: `changes` is empty.
+    /// More changes than can be written down for Undo, or one that can't be
+    /// (a value or a name with a control character): `changes` is empty.
     pub overflow: bool,
     pub cancelled: bool,
 }
@@ -254,6 +255,21 @@ impl Outcome {
 
     fn push(&mut self, c: Change) {
         if self.overflow {
+            return;
+        }
+        // A value with a control character (a line break in a foreign tag)
+        // can't be written down safely: the change is made, not undoable.
+        let plain = |s: &str| !s.chars().any(char::is_control);
+        if !plain(&c.before)
+            || !plain(&c.after)
+            || c.path
+                .as_os_str()
+                .as_bytes()
+                .iter()
+                .any(|b| b.is_ascii_control())
+        {
+            self.overflow = true;
+            self.changes.clear();
             return;
         }
         if self.changes.len() >= MAX_RECORDED {
@@ -354,8 +370,9 @@ pub fn run_revert(changes: &[Change], rev: bool, cancel: &AtomicBool) -> Outcome
 
 /// Changes the permissions of `root` and everything below it (links are not
 /// followed, other file systems are not entered): the bits in `set` are turned
-/// on and the bits in `clear` off. Files keep their run bits (only folders
-/// get `RUN` changes) so a folder's change doesn't turn documents into programs.
+/// on and the bits in `clear` off. Files found inside a folder keep their run
+/// bits (only folders get `RUN` changes) so a folder's change doesn't turn
+/// documents into programs; a file given as `root` gets what was asked.
 pub fn run_mode_tree(root: &Path, set: u32, clear: u32, cancel: &AtomicBool) -> Outcome {
     let mut out = Outcome::default();
     let Ok(md) = fs::symlink_metadata(root) else {
@@ -382,7 +399,9 @@ pub fn run_mode_tree(root: &Path, set: u32, clear: u32, cancel: &AtomicBool) -> 
         out.items += 1;
         let is_dir = md.is_dir();
         let cur = md.mode() & perms::ALL_BITS;
-        let (s, c) = if is_dir {
+        // A file named on its own keeps what was asked for it; files found
+        // inside a folder keep their run bits.
+        let (s, c) = if is_dir || path == root {
             (set, clear)
         } else {
             (set & !perms::RUN, clear & !perms::RUN)
@@ -636,6 +655,34 @@ mod tests {
         let back = run_revert(&out.changes, true, &no());
         assert_eq!(back.failed, 0, "{:?}", back.problem);
         assert_eq!(read_mode(&top).unwrap(), 0o750);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn values_that_cant_be_written_down_are_done_but_not_undoable() {
+        let dir = scratch("ctrl");
+        if !keeps_xattrs(&dir) {
+            return;
+        }
+        let a = dir.join("a");
+        fs::write(&a, b"1").unwrap();
+        xattr::set(&a, xattr::TAGS, b"Odd\tone").unwrap();
+        let out = run_edit(std::slice::from_ref(&a), &tag_edit(&["Red"], &[]), &no());
+        assert_eq!(out.failed, 0);
+        assert!(out.overflow && out.changes.is_empty());
+        assert_eq!(read(&a, Key::Tags).unwrap(), "Odd\tone,Red");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_given_on_its_own_gets_its_run_bit_changed() {
+        let dir = scratch("rootrun");
+        let f = dir.join("f");
+        fs::write(&f, b"1").unwrap();
+        write_mode(&f, 0o644).unwrap();
+        let out = run_mode_tree(&f, 0o100, 0, &no());
+        assert_eq!(read_mode(&f).unwrap(), 0o744);
+        assert_eq!(out.changes.len(), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
 

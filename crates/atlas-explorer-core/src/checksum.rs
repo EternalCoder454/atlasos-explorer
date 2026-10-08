@@ -5,8 +5,8 @@
 //! them. MD5 and SHA-1 are there to check downloads that only publish those;
 //! they are not for anything that needs to resist an attacker.
 
-use std::fs::File;
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -476,7 +476,12 @@ pub fn hash_file(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<String, FileError> {
-    let mut f = File::open(path).map_err(|e| FileError::Read(e.kind().to_string()))?;
+    // Opened so that a pipe with no writer can't block: only regular files go on.
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+        .map_err(|e| FileError::Read(e.kind().to_string()))?;
     let md = f
         .metadata()
         .map_err(|e| FileError::Read(e.kind().to_string()))?;
@@ -642,6 +647,15 @@ mod tests {
         );
         assert_eq!(
             hash_file(&dir, Alg::Sha256, &no, &mut |_| {}),
+            Err(FileError::NotAFile)
+        );
+        // A pipe is refused, not waited for.
+        let fifo = dir.join("pipe");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            hash_file(&fifo, Alg::Sha256, &no, &mut |_| {}),
             Err(FileError::NotAFile)
         );
         assert!(matches!(

@@ -70,7 +70,7 @@ pub unsafe extern "C" fn telamon_tags_read(
                     Ok(None) => (0, String::new()),
                     Ok(Some(raw)) => (
                         if tags::is_clean(&raw) { 0 } else { 4 },
-                        tags::parse(&raw).join("\n"),
+                        tags::parse_shown(&raw).join("\n"),
                     ),
                     Err(xattr::Error::Unsupported) => (1, String::new()),
                     Err(_) => (3, String::new()),

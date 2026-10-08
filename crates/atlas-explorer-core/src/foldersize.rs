@@ -43,6 +43,9 @@ pub fn measure(
     progress: &mut dyn FnMut(&Totals),
 ) -> Result<Totals, Totals> {
     let mut t = Totals::default();
+    // A link to a folder, asked about itself, is counted as the folder it
+    // leads to (what it shows as); links inside are never followed.
+    let root = &fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let Ok(md) = fs::symlink_metadata(root) else {
         t.unreadable += 1;
         return Ok(t);
@@ -69,7 +72,7 @@ pub fn measure(
                 continue;
             }
             // The folder asked about is not counted in its own "folders".
-            if path != root {
+            if path != *root {
                 t.folders += 1;
             }
             t.on_disk += md.blocks() * 512;
@@ -120,6 +123,11 @@ mod tests {
         assert_eq!((one.files, one.folders, one.bytes), (1, 0, 24));
         let yes = AtomicBool::new(true);
         assert!(measure(&dir, &yes, &mut |_| {}).is_err());
+        // A link to a folder asked about itself counts the folder.
+        let to_a = dir.join("to-a");
+        std::os::unix::fs::symlink(dir.join("a"), &to_a).unwrap();
+        let via = measure(&to_a, &no, &mut |_| {}).unwrap();
+        assert_eq!((via.files, via.folders), (3, 1));
         let gone = measure(&dir.join("nope"), &no, &mut |_| {}).unwrap();
         assert_eq!(gone.unreadable, 1);
         fs::remove_dir_all(&dir).unwrap();

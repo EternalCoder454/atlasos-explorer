@@ -429,6 +429,11 @@ public:
         });
     }
 
+    // The user cancelled: the worker stops after the item it is on, and the job
+    // ends with KilledJobError. The queue keeps the operation until then, so
+    // what was done is written down for Undo and nothing else runs meanwhile.
+    void requestStop() { m_run->cancel = true; }
+
 protected:
     bool doKill() override
     {
@@ -826,6 +831,12 @@ void OperationQueue::pump()
             break;
         default: {
             Work &w = work(id);
+            // A change of attributes is stopped, not killed: its worker is
+            // still in the core, and its result (what it did) is awaited.
+            if (auto *attrJob = dynamic_cast<AttrJob *>(w.job.data())) {
+                attrJob->requestStop();
+                break;
+            }
             if (w.job) {
                 w.job->kill(KJob::Quietly);
             }
@@ -962,6 +973,17 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
     Work &w = work(id);
     w.job = nullptr;
     if (job->error()) {
+        if (dynamic_cast<AttrJob *>(job) && job->error() == KJob::KilledJobError) {
+            // Stopped by the user: what the worker did before it stopped is one step to undo.
+            const Work stopped = w;
+            endOp(id);
+            if (stopped.record && stopped.side < 0 && stopped.attrs && !stopped.attrs->changes.isEmpty()) {
+                recordHistory(stopped);
+            }
+            refresh();
+            Q_EMIT jobFinished();
+            return;
+        }
         if (job->error() == KIO::ERR_USER_CANCELED || job->error() == KJob::KilledJobError) {
             cancel(id);
             return;
@@ -978,9 +1000,12 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
             return;
         }
         if (dynamic_cast<AttrJob *>(job)) {
-            // Said as it is (the core's sentence), once.
+            // Said as it is (the core's sentence), once: an undo or redo says
+            // it in failOp's own line.
             const QString text = job->errorString();
-            Q_EMIT message(text);
+            if (w.side < 0) {
+                Q_EMIT message(text);
+            }
             failOp(id, text, false);
             return;
         }
@@ -1019,7 +1044,7 @@ void OperationQueue::finishOp(quint64 id)
         recordHistory(w);
     }
     if (w.kind == Attrs && w.attrs && (w.attrs->flags & 1) && w.side < 0) {
-        Q_EMIT message(tr("%1 changed too many items to be undone.").arg(w.title));
+        Q_EMIT message(tr("%1 can't be undone.").arg(w.title));
     }
     if (w.kind == EmptyTrash && !w.quiet) {
         Q_EMIT message(tr("Trash emptied."));

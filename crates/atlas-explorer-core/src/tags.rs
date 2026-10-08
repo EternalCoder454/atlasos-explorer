@@ -68,6 +68,19 @@ pub fn parse(raw: &[u8]) -> Vec<String> {
     out
 }
 
+/// The tags of a value as a window lists them: [`parse`] without the names it
+/// can't show or carry safely (a control character, as in a line break, or
+/// more than [`MAX_NAME_CHARS`] characters). Those stay in the attribute
+/// when other tags are changed (an edit works on [`parse`]), they are only not
+/// listed, so the sidebar and the menus agree with the file index, which
+/// leaves them out too.
+pub fn parse_shown(raw: &[u8]) -> Vec<String> {
+    parse(raw)
+        .into_iter()
+        .filter(|t| !t.chars().any(char::is_control) && t.chars().count() <= MAX_NAME_CHARS)
+        .collect()
+}
+
 /// Whether [`parse`] shows every byte of the value as it is: valid UTF-8.
 /// A value that is not is shown, but never rewritten (it would lose bytes).
 pub fn is_clean(raw: &[u8]) -> bool {
@@ -171,10 +184,13 @@ pub fn apply_edit(
             out.push(a.clone());
         }
     }
-    if out.len() > MAX_TAGS {
+    // The limits are for what an edit adds: an item that holds more already
+    // (another program wrote it) can still have tags taken away.
+    if out.len() > MAX_TAGS && out.len() > tags.len() {
         return Err(EditProblem::TooMany);
     }
-    if encode(&out).is_some_and(|v| v.len() > MAX_VALUE) {
+    let now = encode(&out).map_or(0, |v| v.len());
+    if now > MAX_VALUE && now > encode(tags).map_or(0, |v| v.len()) {
         return Err(EditProblem::TooLong);
     }
     Ok(out)
@@ -346,8 +362,30 @@ mod tests {
             .map(|i| format!("{}{i:0>2}", "\u{e9}".repeat(60)))
             .collect();
         assert_eq!(
-            apply_edit(&long, &[], &[], false),
+            apply_edit(&long, &v(&["more"]), &[], false),
             Err(EditProblem::TooLong)
+        );
+        // Not growing, it is no problem.
+        assert_eq!(apply_edit(&long, &[], &[], false), Ok(long.clone()));
+    }
+
+    #[test]
+    fn what_is_shown_leaves_out_names_that_cant_be() {
+        let raw = format!("Red,a\nb,{},Work", "x".repeat(65));
+        assert_eq!(parse_shown(raw.as_bytes()), v(&["Red", "Work"]));
+        // An edit keeps them.
+        assert_eq!(parse(raw.as_bytes()).len(), 4);
+    }
+
+    #[test]
+    fn an_item_over_the_limits_can_still_lose_tags() {
+        let many: Vec<String> = (0..40).map(|i| format!("t{i}")).collect();
+        let fewer = apply_edit(&many, &[], &v(&["t0"]), false).unwrap();
+        assert_eq!(fewer.len(), 39);
+        assert_eq!(apply_edit(&many, &[], &[], true), Ok(vec![]));
+        assert_eq!(
+            apply_edit(&many, &v(&["new"]), &[], false),
+            Err(EditProblem::TooMany)
         );
     }
 

@@ -61,6 +61,9 @@ public:
     // called when `context` is gone.
     using TagsDone = std::function<void(bool ok, const QList<QPair<QString, uint>> &tags)>;
     void tags(QObject *context, bool activate, TagsDone done);
+    // NotifyChanged(uris): tells the service that these items changed in a way
+    // its watches may not show (a tag). Only when it is running; no answer is waited for.
+    void notifyChanged(const QList<QUrl> &urls);
 
 Q_SIGNALS:
     void stateChanged();
