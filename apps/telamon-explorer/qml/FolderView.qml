@@ -22,9 +22,13 @@ FocusScope {
     property int currentRow: -1
     property int anchorRow: -1
     property string typed: ""
-    readonly property var activeView: viewMode === "details" ? details : icons
+    // Search results are always a Details view (they have a Path column).
+    readonly property bool showsDetails: viewMode === "details" || folderModel.searching
+    readonly property var activeView: showsDetails ? details : icons
     // The FileActions that drags and drops go to.
     property var actions
+    // The tab's SearchController: why a search has no results shows in place of them.
+    property var search: null
     // The URLs of the selected rows.
     readonly property var selectedUrls: {
         top.selRevision;
@@ -37,6 +41,10 @@ FocusScope {
     // A folder to open in a new background tab (middle click, Ctrl+Enter).
     signal openInNewTabRequested(url target)
     signal renameRequested()
+    // Open File Location on the selected search results (Ctrl+Enter).
+    signal openLocationRequested(var urls)
+    // Escape while the rows are search results: end the search.
+    signal searchCloseRequested()
 
     FolderModel {
         id: folderModel
@@ -238,7 +246,14 @@ FocusScope {
             break;
         case Qt.Key_Return:
         case Qt.Key_Enter:
-            activateSelection(!!(mods & Qt.ControlModifier));
+            if ((mods & Qt.ControlModifier) && folderModel.searching) {
+                // Ctrl+Enter on a result: its folder, with it selected.
+                if (selectedUrls.length > 0) {
+                    openLocationRequested(selectedUrls);
+                }
+            } else {
+                activateSelection(!!(mods & Qt.ControlModifier));
+            }
             event.accepted = true;
             return;
         case Qt.Key_Backspace:
@@ -250,7 +265,11 @@ FocusScope {
             event.accepted = true;
             return;
         case Qt.Key_Escape:
-            sel.clearSelection();
+            if (folderModel.searching) {
+                searchCloseRequested();
+            } else {
+                sel.clearSelection();
+            }
             event.accepted = true;
             return;
         case Qt.Key_A:
@@ -316,25 +335,49 @@ FocusScope {
     DetailsView {
         id: details
         anchors.fill: parent
-        visible: top.viewMode === "details"
+        visible: top.showsDetails
         fv: top
     }
 
     IconsView {
         id: icons
         anchors.fill: parent
-        visible: top.viewMode !== "details"
+        visible: !top.showsDetails
         compact: top.viewMode === "compact"
         fv: top
     }
 
     TelamonEmptyState {
         anchors.centerIn: parent
-        visible: folderModel.errorText.length > 0 || (folderModel.count === 0)
-        symbol: folderModel.errorText.length > 0 ? Symbols.FolderOff : (folderModel.loading ? Symbols.HourglassEmpty : Symbols.FolderOpen)
-        title: folderModel.errorText.length > 0 ? qsTr("Can't Open This Folder") : (folderModel.loading ? qsTr("Loading…") : qsTr("This Folder Is Empty"))
-        text: folderModel.errorText
-        actionText: folderModel.errorText.length > 0 ? qsTr("Retry") : ""
+        visible: folderModel.searching ? (folderModel.count === 0 && !(top.search && top.search.pending)) : (folderModel.errorText.length > 0 || folderModel.count === 0)
+        symbol: {
+            if (folderModel.searching) {
+                return folderModel.loading ? Symbols.HourglassEmpty : Symbols.SearchOff;
+            }
+            return folderModel.errorText.length > 0 ? Symbols.FolderOff : (folderModel.loading ? Symbols.HourglassEmpty : Symbols.FolderOpen);
+        }
+        title: {
+            if (folderModel.searching) {
+                if (top.search && top.search.failureTitle.length > 0) {
+                    return top.search.failureTitle;
+                }
+                return folderModel.loading ? qsTr("Searching…") : qsTr("No Results");
+            }
+            return folderModel.errorText.length > 0 ? qsTr("Can't Open This Folder") : (folderModel.loading ? qsTr("Loading…") : qsTr("This Folder Is Empty"));
+        }
+        text: {
+            if (folderModel.searching) {
+                if (top.search && top.search.failureText.length > 0) {
+                    return top.search.failureText;
+                }
+                if (folderModel.loading) {
+                    return "";
+                }
+                return top.search && top.search.chipLevel === 2 && !top.search.live ? qsTr("Nothing matches so far. The search index is still updating, so results may be missing.") : qsTr("Nothing here matches. Try other words, or another scope or filter.");
+            }
+            return folderModel.errorText;
+        }
+        actionText: folderModel.searching ? (top.search && top.search.failureTitle.length > 0 ? qsTr("Try Again") : "") : (folderModel.errorText.length > 0 ? qsTr("Retry") : "")
         onTriggered: folderModel.refresh()
     }
 

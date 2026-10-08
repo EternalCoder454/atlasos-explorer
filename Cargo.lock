@@ -958,6 +958,7 @@ name = "telamon-explorer"
 version = "0.2.0"
 dependencies = [
  "atlas-explorer-core",
+ "atlas-file-index",
  "cxx",
  "cxx-qt",
  "cxx-qt-build",

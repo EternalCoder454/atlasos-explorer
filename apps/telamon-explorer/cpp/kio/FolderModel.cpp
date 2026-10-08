@@ -6,10 +6,18 @@
 #include <KIO/Job>
 #include <KIO/UDSEntry>
 
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+#include <QSet>
+
+#include <sys/stat.h>
+
+#include <cerrno>
 
 #include <algorithm>
+#include <numeric>
 
 namespace
 {
@@ -50,14 +58,47 @@ FolderModel::FolderModel(QObject *parent)
     m_hiddenTimer.setInterval(100);
     connect(&m_hiddenTimer, &QTimer::timeout, this, &FolderModel::recountHidden);
 
-    connect(m_lister, &KCoreDirLister::itemsAdded, this, [this](const QUrl &, const KFileItemList &items) { addItems(items); });
-    connect(m_lister, &KCoreDirLister::itemsDeleted, this, &FolderModel::removeItems);
-    connect(m_lister, &KCoreDirLister::refreshItems, this, &FolderModel::refreshItems);
-    connect(m_lister, &KCoreDirLister::clear, this, &FolderModel::resetRows);
-    connect(m_lister, &KCoreDirLister::completed, this, &FolderModel::onCompleted);
-    connect(m_lister, &KCoreDirLister::canceled, this, [this] { setLoading(false); });
-    connect(m_lister, &KCoreDirLister::jobError, this, &FolderModel::onJobError);
+    // While the rows are search results the lister is stopped and its signals
+    // change nothing; the folder is listed again when the search ends.
+    connect(m_lister, &KCoreDirLister::itemsAdded, this, [this](const QUrl &, const KFileItemList &items) {
+        if (!m_searching) {
+            addItems(items);
+        }
+    });
+    connect(m_lister, &KCoreDirLister::itemsDeleted, this, [this](const KFileItemList &items) {
+        if (!m_searching) {
+            removeItems(items);
+        }
+    });
+    connect(m_lister, &KCoreDirLister::refreshItems, this, [this](const QList<QPair<KFileItem, KFileItem>> &items) {
+        if (!m_searching) {
+            refreshItems(items);
+        }
+    });
+    connect(m_lister, &KCoreDirLister::clear, this, [this] {
+        if (!m_searching) {
+            resetRows();
+        }
+    });
+    connect(m_lister, &KCoreDirLister::completed, this, [this] {
+        if (!m_searching) {
+            onCompleted();
+        }
+    });
+    connect(m_lister, &KCoreDirLister::canceled, this, [this] {
+        if (!m_searching) {
+            setLoading(false);
+        }
+    });
+    connect(m_lister, &KCoreDirLister::jobError, this, [this](KIO::Job *job) {
+        if (!m_searching) {
+            onJobError(job);
+        }
+    });
     connect(m_lister, &KCoreDirLister::redirection, this, [this](const QUrl &, const QUrl &to) {
+        if (m_searching) {
+            return;
+        }
         m_url = to;
         Q_EMIT urlChanged();
     });
@@ -85,6 +126,7 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {SizeTextRole, "sizeText"},
         {ModifiedTextRole, "modifiedText"},
         {TypeTextRole, "typeText"},
+        {PathTextRole, "pathText"},
         {ThumbnailSourceRole, "thumbnailSource"},
     };
 }
@@ -159,6 +201,15 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
     case TypeTextRole:
         fillType(e);
         return e.type;
+    case PathTextRole:
+        if (!m_searching) {
+            return QString();
+        }
+        if (e.path.isNull()) {
+            const QUrl parent = e.item.url().adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
+            e.path = rustSearchPathText(parent.toString(QUrl::FullyEncoded | QUrl::RemovePassword), QDir::homePath());
+        }
+        return e.path;
     case ThumbnailSourceRole: {
         const QUrl u = e.item.url();
         if (e.isDir || !u.isLocalFile()) {
@@ -174,7 +225,10 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
 
 void FolderModel::setUrl(const QUrl &url)
 {
-    if (url == m_url && m_error.isEmpty()) {
+    if (m_searching) {
+        // Going to a folder ends the search, even to the folder it was in.
+        leaveSearch();
+    } else if (url == m_url && m_error.isEmpty()) {
         return;
     }
     open(url, QString());
@@ -212,6 +266,10 @@ void FolderModel::open(const QUrl &url, const QString &notice)
 
 void FolderModel::refresh()
 {
+    if (m_searching) {
+        Q_EMIT searchRefreshRequested();
+        return;
+    }
     if (!m_url.isValid()) {
         return;
     }
@@ -260,7 +318,7 @@ void FolderModel::updateCounts()
 // rows is what is hidden.
 void FolderModel::recountHidden()
 {
-    const int hidden = m_showHidden ? 0 : qMax(0, int(m_lister->items(KCoreDirLister::AllItems).size()) - int(m_rows.size()));
+    const int hidden = m_showHidden || m_searching ? 0 : qMax(0, int(m_lister->items(KCoreDirLister::AllItems).size()) - int(m_rows.size()));
     if (hidden != m_hidden) {
         m_hidden = hidden;
         Q_EMIT hiddenCountChanged();
@@ -417,13 +475,19 @@ void FolderModel::setShowHidden(bool on)
     }
     m_showHidden = on;
     m_lister->setShowHiddenFiles(on);
-    m_lister->emitChanges();
+    if (!m_searching) {
+        m_lister->emitChanges();
+    }
     Q_EMIT showHiddenChanged();
     m_hiddenTimer.start();
 }
 
 void FolderModel::setSortColumn(SortColumn c)
 {
+    // Relevance is the order of a search's results: it exists only then.
+    if (c == Relevance && !m_searching) {
+        return;
+    }
     if (m_sortColumn != c) {
         m_sortColumn = c;
         ++m_structGen;
@@ -481,7 +545,7 @@ void FolderModel::startSort()
         }
         const bool needKey = e.key.isEmpty();
         rows->append({needKey || e.display.isEmpty() ? e.item.name() : QString(), e.key, byType ? e.type.toUtf8() : QByteArray(), e.size, e.mtime, e.ctime,
-                      e.atime, e.isDir, e.display.isEmpty()});
+                      e.atime, e.isDir, e.display.isEmpty(), e.rank});
     }
     const quint64 gen = m_structGen;
     const quint32 column = quint32(m_sortColumn);
@@ -518,7 +582,14 @@ void FolderModel::startSort()
                                r.isDir};
         }
         res.perm.resize(res.n);
-        res.ok = telamon_sort_permutation(flat.data(), flat.size(), column, desc, ff, res.perm.data());
+        if (column == quint32(Relevance)) {
+            // Search results: the order the search gave them in.
+            std::iota(res.perm.begin(), res.perm.end(), quint32(0));
+            std::stable_sort(res.perm.begin(), res.perm.end(), [&rows](quint32 a, quint32 b) { return (*rows)[a].rank < (*rows)[b].rank; });
+            res.ok = true;
+        } else {
+            res.ok = telamon_sort_permutation(flat.data(), flat.size(), column, desc, ff, res.perm.data());
+        }
         QMetaObject::invokeMethod(this, [this, res = std::move(res)]() mutable { applySort(std::move(res)); }, Qt::QueuedConnection);
     });
 }
@@ -651,4 +722,195 @@ KFileItem FolderModel::fileItemOf(const QUrl &url) const
 {
     const int row = rowOfUrl(url);
     return row >= 0 ? m_rows.at(row).item : KFileItem();
+}
+
+// ---- Search results ----
+
+FolderModel::Entry FolderModel::makeSearchEntry(const SearchHit &hit, quint32 rank)
+{
+    KIO::UDSEntry u;
+    u.fastInsert(KIO::UDSEntry::UDS_NAME, hit.name);
+    u.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, hit.isDir ? S_IFDIR : S_IFREG);
+    u.fastInsert(KIO::UDSEntry::UDS_SIZE, qlonglong(hit.size));
+    u.fastInsert(KIO::UDSEntry::UDS_MODIFICATION_TIME, qlonglong(hit.mtime));
+    if (hit.url.isLocalFile()) {
+        u.fastInsert(KIO::UDSEntry::UDS_LOCAL_PATH, hit.url.toLocalFile());
+    }
+    Entry e = makeEntry(KFileItem(u, hit.url));
+    e.rank = rank;
+    return e;
+}
+
+void FolderModel::beginSearch()
+{
+    if (m_searching) {
+        return;
+    }
+    m_searching = true;
+    m_gone = false;
+    // The lister stops: its signals are ignored from here (see the constructor).
+    m_lister->stop();
+    ++m_structGen;
+    m_sortDirty = false;
+    m_sortTimer.stop();
+    m_folderSortColumn = m_sortColumn;
+    m_folderSortDescending = m_descending;
+    m_sortColumn = Relevance;
+    m_descending = false;
+    resetRows();
+    m_nextRank = 0;
+    if (!m_notice.isEmpty()) {
+        m_notice.clear();
+        Q_EMIT noticeChanged();
+    }
+    setError(QString());
+    setLoading(false);
+    if (!m_canWrite) {
+        // Results are files from many folders; each operation says if it fails.
+        m_canWrite = true;
+        Q_EMIT canWriteChanged();
+    }
+    if (m_hidden != 0) {
+        m_hidden = 0;
+        Q_EMIT hiddenCountChanged();
+    }
+    Q_EMIT sortChanged();
+    Q_EMIT searchingChanged();
+}
+
+// Back to the folder's own sort, without listing it.
+void FolderModel::leaveSearch()
+{
+    m_searching = false;
+    ++m_structGen;
+    m_sortDirty = false;
+    m_sortTimer.stop();
+    m_sortColumn = m_folderSortColumn;
+    m_descending = m_folderSortDescending;
+    setLoading(false);
+    Q_EMIT sortChanged();
+    Q_EMIT searchingChanged();
+}
+
+void FolderModel::endSearch()
+{
+    if (!m_searching) {
+        return;
+    }
+    leaveSearch();
+    // The folder, listed again (KIO has it cached, so this is quick).
+    open(m_url, QString());
+}
+
+void FolderModel::setSearchResults(const QList<SearchHit> &hits)
+{
+    if (!m_searching) {
+        return;
+    }
+    ++m_structGen;
+    QList<Entry> rows;
+    rows.reserve(hits.size());
+    int dirs = 0;
+    m_nextRank = 0;
+    for (const SearchHit &h : hits) {
+        rows.append(makeSearchEntry(h, m_nextRank++));
+        dirs += rows.last().isDir;
+    }
+    beginResetModel();
+    m_rows = std::move(rows);
+    m_folders = dirs;
+    endResetModel();
+    Q_EMIT countChanged();
+    if (m_sortColumn != Relevance) {
+        scheduleSort();
+    }
+}
+
+void FolderModel::appendSearchResults(const QList<SearchHit> &hits)
+{
+    if (!m_searching || hits.isEmpty()) {
+        return;
+    }
+    QList<Entry> batch;
+    batch.reserve(hits.size());
+    int dirs = 0;
+    for (const SearchHit &h : hits) {
+        batch.append(makeSearchEntry(h, m_nextRank++));
+        dirs += batch.last().isDir;
+    }
+    const int first = int(m_rows.size());
+    beginInsertRows({}, first, first + int(batch.size()) - 1);
+    m_rows.append(std::move(batch));
+    m_folders += dirs;
+    endInsertRows();
+    Q_EMIT countChanged();
+    if (m_sortColumn != Relevance) {
+        scheduleSort();
+    }
+}
+
+void FolderModel::pruneSearchResults()
+{
+    if (!m_searching || m_rows.isEmpty()) {
+        return;
+    }
+    QList<QUrl> urls;
+    urls.reserve(m_rows.size());
+    for (const Entry &e : std::as_const(m_rows)) {
+        if (e.item.url().isLocalFile()) {
+            urls.append(e.item.url());
+        }
+    }
+    const quint64 gen = m_structGen;
+    m_pool.start([this, urls, gen] {
+        QSet<QUrl> gone;
+        for (const QUrl &u : urls) {
+            struct stat st;
+            if (::lstat(QFile::encodeName(u.toLocalFile()).constData(), &st) != 0 && errno == ENOENT) {
+                gone.insert(u);
+            }
+        }
+        if (gone.isEmpty()) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [this, gone, gen] {
+                // Results that were replaced meanwhile are checked by the next search.
+                if (m_searching && gen == m_structGen) {
+                    removeSearchRows(gone);
+                }
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void FolderModel::removeSearchRows(const QSet<QUrl> &gone)
+{
+    QList<int> rows;
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (gone.contains(m_rows[i].item.url())) {
+            rows.append(i);
+        }
+    }
+    if (rows.isEmpty()) {
+        return;
+    }
+    for (int k = int(rows.size()) - 1; k >= 0;) {
+        int hi = rows[k];
+        int j = k;
+        while (j > 0 && rows[j - 1] == rows[j] - 1) {
+            --j;
+        }
+        const int lo = rows[j];
+        beginRemoveRows({}, lo, hi);
+        for (int r = hi; r >= lo; --r) {
+            m_folders -= m_rows[r].isDir;
+            m_rows.removeAt(r);
+        }
+        endRemoveRows();
+        k = j - 1;
+    }
+    ++m_structGen;
+    Q_EMIT countChanged();
 }

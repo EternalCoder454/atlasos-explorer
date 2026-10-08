@@ -41,6 +41,11 @@ TelamonWindow {
     // Why the address typed in the path bar was refused, shown under it.
     property string addressError
     readonly property bool editingAddress: pathBar.editing
+    // A text field has the keyboard: keys that mean something to it are not the window's.
+    readonly property bool typing: pathBar.editing || searchField.activeFocus
+    // The tab's search, and whether its results are what the view shows.
+    readonly property var search: page ? page.search : null
+    readonly property bool searching: view ? view.folder.searching : false
     readonly property var selected: view ? view.selectedUrls : []
     readonly property bool hasSelection: selected.length > 0
     readonly property bool canWrite: view ? view.folder.canWrite : false
@@ -95,6 +100,24 @@ TelamonWindow {
         onOpenInNewTabRequested: folders => {
             for (const f of folders) {
                 root.openInNewTab(f);
+            }
+        }
+        onOpenLocationRequested: files => root.openFileLocation(files)
+        // Files in the results were trashed, moved or renamed: drop the ones
+        // that are gone now, and look again once the index has caught up.
+        onJobFinished: {
+            if (root.view && root.view.folder.searching) {
+                root.view.folder.pruneSearchResults();
+                searchAgain.restart();
+            }
+        }
+    }
+    Timer {
+        id: searchAgain
+        interval: 900
+        onTriggered: {
+            if (root.search && root.search.active && !root.search.live) {
+                root.search.rerun();
             }
         }
     }
@@ -355,6 +378,46 @@ TelamonWindow {
             page.goForward();
         }
     }
+    // ---- Search ----
+    // Puts the keyboard in the search field (which opens the search row).
+    function focusSearch() {
+        pathBar.endEdit();
+        searchField.forceActiveFocus(Qt.ShortcutFocusReason);
+        searchField.selectAll();
+    }
+    // Open File Location on search results: the folder they are in is shown in
+    // this tab with them selected, replacing the search; results in other
+    // folders open in tabs behind it.
+    function openFileLocation(urls) {
+        if (!page || urls.length === 0) {
+            return;
+        }
+        const groups = [];
+        for (const u of urls) {
+            const folder = StandardPlaces.parentUrl(u);
+            const key = folder.toString();
+            let g = groups.find(x => x.key === key);
+            if (!g) {
+                g = {
+                    "key": key,
+                    "folder": folder,
+                    "items": []
+                };
+                groups.push(g);
+            }
+            g.items.push(u);
+        }
+        const shown = page;
+        freshStart = false;
+        shown.navigate(groups[0].folder);
+        shown.showItems(groups[0].items);
+        for (let i = 1; i < groups.length && i < 8; ++i) {
+            addTab(groups[i].folder, {
+                "background": true,
+                "select": groups[i].items
+            });
+        }
+    }
     // The menu of Back (or Forward): the last places of the tab, nearest first.
     property bool menuOpenedByPress: false
     function showHistory(forward, anchor) {
@@ -439,6 +502,7 @@ TelamonWindow {
         }
         pages[id] = p;
         p.openInNewTab.connect(u => root.openInNewTab(u));
+        p.openLocation.connect(urls => root.openFileLocation(urls));
         p.navigated.connect(() => root.freshStart = false);
         p.titleChanged.connect(() => root.syncTab(p));
         p.toolTipChanged.connect(() => root.syncTab(p));
@@ -718,18 +782,19 @@ TelamonWindow {
 
     // The keys. Those that mean something to a text field are off while the
     // address is being typed.
-    Shortcut { sequence: "Ctrl+C"; enabled: !root.editingAddress && root.hasSelection; onActivated: fileActions.copy(root.selected, false) }
-    Shortcut { sequence: "Ctrl+X"; enabled: !root.editingAddress && root.hasSelection && root.canWrite; onActivated: fileActions.copy(root.selected, true) }
-    Shortcut { sequence: "Ctrl+V"; enabled: !root.editingAddress && root.canWrite; onActivated: fileActions.paste() }
-    Shortcut { sequence: "Ctrl+Z"; enabled: !root.editingAddress; onActivated: fileActions.undo() }
-    Shortcut { sequence: "Delete"; enabled: !root.editingAddress && root.hasSelection && root.canWrite; onActivated: fileActions.trash(root.selected) }
-    Shortcut { sequence: "Shift+Delete"; enabled: !root.editingAddress && root.hasSelection && root.canWrite; onActivated: fileActions.deleteForGood(root.selected) }
-    Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite; onActivated: fileActions.newFolder() }
-    Shortcut { sequence: "Ctrl+H"; enabled: !root.editingAddress; onActivated: root.toggleHidden() }
+    Shortcut { sequence: "Ctrl+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copy(root.selected, false) }
+    Shortcut { sequence: "Ctrl+X"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.copy(root.selected, true) }
+    Shortcut { sequence: "Ctrl+V"; enabled: !root.typing && root.canWrite && !root.searching; onActivated: fileActions.paste() }
+    Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
+    Shortcut { sequence: "Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.trash(root.selected) }
+    Shortcut { sequence: "Shift+Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.deleteForGood(root.selected) }
+    Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching; onActivated: fileActions.newFolder() }
+    Shortcut { sequence: "Ctrl+H"; enabled: !root.typing; onActivated: root.toggleHidden() }
     Shortcut { sequence: "Shift+F4"; onActivated: fileActions.openTerminal() }
     Shortcut { sequences: ["Ctrl+L", "F4", "F6", "Alt+D"]; onActivated: pathBar.startEdit() }
-    Shortcut { sequence: "Alt+Left"; enabled: !root.editingAddress; onActivated: root.goBack() }
-    Shortcut { sequence: "Alt+Right"; enabled: !root.editingAddress; onActivated: root.goForward() }
+    Shortcut { sequences: ["Ctrl+F", "Ctrl+E"]; onActivated: root.focusSearch() }
+    Shortcut { sequence: "Alt+Left"; enabled: !root.typing; onActivated: root.goBack() }
+    Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
     Shortcut { sequence: "Ctrl+W"; onActivated: root.closeTab(root.currentIndex) }
     Shortcut { sequence: "Ctrl+Shift+T"; onActivated: root.reopenClosedTab() }
@@ -754,6 +819,14 @@ TelamonWindow {
 
     ContextMenu {
         id: sortMenu
+        ContextMenuItem {
+            text: qsTr("Best Match")
+            visible: root.searching
+            radio: true
+            checkable: true
+            checked: root.view?.folder.sortColumn === FolderModel.Relevance
+            onTriggered: root.view.folder.sortColumn = FolderModel.Relevance
+        }
         Repeater {
             model: [
                 { text: qsTr("Name"), column: FolderModel.Name },
@@ -1058,6 +1131,63 @@ TelamonWindow {
                         }
                     }
                 }
+                // Search: type to see the best matches at once (Ctrl+F or Ctrl+E).
+                SearchField {
+                    id: searchField
+                    Layout.preferredWidth: Kirigami.Units.gridUnit * 16
+                    Layout.minimumWidth: Kirigami.Units.gridUnit * 8
+                    enabled: root.page !== null
+                    placeholderText: root.search && root.search.scope === 1 ? qsTr("Search Everywhere") : qsTr("Search %1").arg(root.page ? root.page.title : "")
+                    text: root.search ? root.search.text : ""
+                    Accessible.name: qsTr("Search")
+                    onTextChanged: {
+                        if (root.search && root.search.text !== text) {
+                            root.search.text = text;
+                        }
+                    }
+                    onActiveFocusChanged: {
+                        if (activeFocus && root.search) {
+                            root.search.warm();
+                        }
+                    }
+                    // Escape ends the search and returns to the folder; Down and
+                    // Enter move to the results.
+                    Keys.onPressed: event => {
+                        if (event.key === Qt.Key_Escape) {
+                            if (root.search) {
+                                root.search.clear();
+                            }
+                            if (root.view) {
+                                root.view.forceActiveFocus();
+                            }
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                            const v = root.view;
+                            if (v) {
+                                v.forceActiveFocus();
+                                if (v.folder.count > 0 && v.selectedUrls.length === 0) {
+                                    v.chooseRow(0, 0, false);
+                                }
+                            }
+                            event.accepted = true;
+                        }
+                    }
+                }
+            }
+
+            // Where the search looks, its filters and how it is going.
+            SearchBar {
+                Layout.fillWidth: true
+                search: root.search
+                field: searchField
+                onCloseRequested: {
+                    if (root.search) {
+                        root.search.clear();
+                    }
+                    if (root.view) {
+                        root.view.forceActiveFocus();
+                    }
+                }
             }
 
             Text {
@@ -1083,7 +1213,7 @@ TelamonWindow {
                     symbol: Symbols.CreateNewFolder
                     text: qsTr("New Folder")
                     shortcutText: "Ctrl+Shift+N"
-                    enabled: root.canWrite
+                    enabled: root.canWrite && !root.searching
                     focusable: true
                     onClicked: fileActions.newFolder()
                 }
@@ -1107,7 +1237,7 @@ TelamonWindow {
                     symbol: Symbols.ContentPaste
                     text: qsTr("Paste")
                     shortcutText: "Ctrl+V"
-                    enabled: root.canWrite && fileActions.canPaste
+                    enabled: root.canWrite && !root.searching && fileActions.canPaste
                     focusable: true
                     onClicked: fileActions.paste()
                 }
@@ -1164,6 +1294,7 @@ TelamonWindow {
             StatusLine {
                 Layout.fillWidth: true
                 folder: root.view?.folder ?? null
+                search: root.search
                 selection: root.selectionStats
                 freeBytes: root.freeBytes
             }

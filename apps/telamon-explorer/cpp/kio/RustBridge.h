@@ -52,6 +52,36 @@ int32_t telamon_places_usage_percent(int64_t total, int64_t free);
 size_t telamon_places_text(uint32_t which, const uint8_t *a, size_t aLen, const uint8_t *b, size_t bLen, uint64_t n, uint8_t *out, size_t cap);
 int32_t telamon_places_nearly_full();
 size_t telamon_tabs_restore(const uint8_t *saved, size_t len, size_t current, uint8_t *out, size_t cap, size_t *currentOut);
+
+// ---- Search (src/search_ffi.rs) ----
+struct TelamonSearchFilter {
+    uint32_t kinds_mask;
+    bool files_only;
+    bool has_after;
+    int64_t after;
+    bool has_min;
+    uint64_t min;
+    bool has_max;
+    uint64_t max;
+};
+using TelamonWalkCallback = void (*)(void *user, const uint8_t *batch, size_t len, uint32_t end);
+void telamon_search_filter(uint32_t kind, uint32_t modified, uint32_t size, int64_t now, int64_t startOfToday, TelamonSearchFilter *out);
+size_t telamon_search_kinds(uint32_t kind, uint8_t *out, size_t cap);
+uint32_t telamon_search_route(uint32_t scope, bool local, bool indexed, bool indexOn);
+uint32_t telamon_search_index_state(const uint8_t *state, size_t len);
+bool telamon_search_index_on(uint32_t state);
+size_t telamon_search_chip(uint32_t state, const uint8_t *error, size_t errorLen, uint8_t *out, size_t cap, uint32_t *level);
+size_t telamon_search_text(uint32_t which, uint64_t n, uint32_t flags, uint8_t *out, size_t cap);
+size_t telamon_search_limit(uint32_t which);
+size_t telamon_search_path_text(const uint8_t *parent, size_t parentLen, const uint8_t *home, size_t homeLen, uint8_t *out, size_t cap);
+bool telamon_search_covers(const uint8_t *folder, size_t folderLen, const uint8_t *roots, size_t rootsLen);
+void *telamon_matcher_new(const uint8_t *query, size_t queryLen, const TelamonSearchFilter *filter, bool includeHidden);
+uint32_t telamon_matcher_test(const void *matcher, const uint8_t *name, size_t nameLen, bool isDir, uint64_t size, int64_t mtime);
+void telamon_matcher_free(void *matcher);
+void *telamon_walk_start(const uint8_t *root, size_t rootLen, const uint8_t *query, size_t queryLen, const TelamonSearchFilter *filter, bool includeHidden,
+                         size_t maxHits, TelamonWalkCallback callback, void *user);
+void telamon_walk_stop(void *handle);
+void telamon_walk_free(void *handle);
 }
 
 using RustFn = size_t (*)(const uint8_t *, size_t, uint8_t *, size_t);
@@ -254,4 +284,36 @@ inline bool rustPlacesPinnable(const QString &scheme)
 {
     const QByteArray s = scheme.toUtf8();
     return telamon_places_pinnable(reinterpret_cast<const uint8_t *>(s.constData()), size_t(s.size()));
+}
+
+
+// ---- Search ----
+
+// A text of the search (see telamon_search_text for `which`).
+inline QString rustSearchText(uint32_t which, quint64 n = 0, uint32_t flags = 0)
+{
+    QByteArray buf(256, 0);
+    size_t len = telamon_search_text(which, n, flags, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = telamon_search_text(which, n, flags, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+}
+
+// The folder of a result as the Path column writes it.
+inline QString rustSearchPathText(const QString &parentUrl, const QString &home)
+{
+    const QByteArray p = parentUrl.toUtf8(), h = home.toUtf8();
+    QByteArray buf(256, 0);
+    auto call = [&] {
+        return telamon_search_path_text(reinterpret_cast<const uint8_t *>(p.constData()), size_t(p.size()), reinterpret_cast<const uint8_t *>(h.constData()),
+                                      size_t(h.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
 }

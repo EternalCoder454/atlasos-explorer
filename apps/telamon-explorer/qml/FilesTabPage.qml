@@ -26,6 +26,8 @@ FocusScope {
     anchors.fill: parent
 
     property alias view: view
+    // The tab's search: words, scope and chips live here, so each tab has its own.
+    property alias search: tabSearch
     property bool loaded: false
     property var backStack: []
     property var forwardStack: []
@@ -40,6 +42,8 @@ FocusScope {
     signal openInNewTab(url target)
     // The user moved this tab to another folder (not a restore or a launch).
     signal navigated
+    // Open File Location on search results: their URLs.
+    signal openLocation(var urls)
 
     function load() {
         if (loaded) {
@@ -56,6 +60,8 @@ FocusScope {
     // Goes to `target`, remembering where it was.
     function navigate(target) {
         load();
+        // Going to a folder, even the one shown, ends a search.
+        tabSearch.clear();
         if (!target || target.toString().replace(/\/+$/, "") === view.url.toString().replace(/\/+$/, "")) {
             return;
         }
@@ -163,11 +169,19 @@ FocusScope {
         }
     }
 
+    SearchController {
+        id: tabSearch
+        folder: view.folder
+    }
+
     FolderView {
         id: view
         anchors.fill: parent
         focus: true
         actions: page.actions
+        search: tabSearch
+        onOpenLocationRequested: urls => page.openLocation(urls)
+        onSearchCloseRequested: tabSearch.clear()
         onNavigateRequested: target => page.navigate(target)
         onOpenInNewTabRequested: target => page.openInNewTab(target)
         // KIO's own prompts apply (Run or open?, untrusted .desktop files).
