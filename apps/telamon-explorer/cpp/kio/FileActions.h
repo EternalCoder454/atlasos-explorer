@@ -144,6 +144,7 @@ private:
     // The entries of `menu` for the window, at most two levels deep; each
     // action gets an id for `runMenuAction`.
     QVariantList entriesOf(QMenu *menu, int depth = 0);
+    void dropScratch();
     QUrl terminalFolder(const KFileItemList &items) const;
     bool archiveInstalled() const;
     void loadTemplates();

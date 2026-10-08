@@ -352,7 +352,7 @@ KFileItemList FileActions::itemsOf(const QList<QUrl> &urls) const
     // otherwise read its contents on the GUI thread (slow on a network or
     // FUSE mount). An item no longer listed is left out.
     static const QMimeDatabase mimeDb;
-    for (const QUrl &u : urls.mid(0, 64)) {
+    for (const QUrl &u : urls) {
         const KFileItem it = m_folder ? m_folder->fileItemOf(u) : KFileItem();
         if (it.isNull()) {
             continue;
@@ -451,14 +451,22 @@ QUrl FileActions::terminalFolder(const KFileItemList &items) const
     return dir.isLocalFile() ? dir : QUrl();
 }
 
+// The previous menu's entries are not needed any more. The actions are not
+// deleted at once: one that opened a dialog ("Other Application…") or started
+// a job may still be at work, so they go a minute and a half later.
+void FileActions::dropScratch()
+{
+    m_menuActions.clear();
+    if (m_scratch) {
+        QMenu *old = m_scratch;
+        m_scratch = nullptr;
+        QTimer::singleShot(90000, old, &QObject::deleteLater);
+    }
+}
+
 QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
 {
-    // The previous menu's entries are not needed any more.
-    if (m_scratch) {
-        m_scratch->deleteLater();
-        m_scratch = nullptr;
-    }
-    m_menuActions.clear();
+    dropScratch();
     const KFileItemList items = itemsOf(urls);
     if (items.isEmpty()) {
         return {};
@@ -484,7 +492,9 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
     // is never shown; it only holds the actions until the next menu is made.
     m_scratch = new QMenu;
     auto *actions = new KFileItemActions(m_scratch);
-    actions->setItemListProperties(KFileItemListProperties(items));
+    // What the service menus are offered for is the first items' (as before);
+    // the menu's own actions act on every item.
+    actions->setItemListProperties(KFileItemListProperties(items.mid(0, 64)));
     connect(actions, &KFileItemActions::error, this, &FileActions::failed);
     auto *openWithMenu = new QMenu(m_scratch);
     actions->insertOpenWithActionsTo(nullptr, openWithMenu, {});
@@ -543,11 +553,7 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
 
 QVariantMap FileActions::backgroundMenu()
 {
-    if (m_scratch) {
-        m_scratch->deleteLater();
-        m_scratch = nullptr;
-    }
-    m_menuActions.clear();
+    dropScratch();
     if (!m_folder) {
         return {};
     }
@@ -711,9 +717,13 @@ void FileActions::compress(const QList<QUrl> &urls)
         {"net.eterneon.telamon.archive", "/net/eterneon/telamon/archive", "net.eterneon.telamon.Archive1"},
         {"net.eterneon.atlas.archive", "/net/eterneon/atlas/archive", "net.eterneon.atlas.Archive1"},
     };
+    // Tries the service names in turn, the next only when the one asked has no
+    // owner (Archive is not running and can't be started under that name); any
+    // other answer is the answer.
     auto attempt = std::make_shared<std::function<void(int)>>();
+    std::weak_ptr<std::function<void(int)>> again = attempt;
     QPointer<FileActions> self(this);
-    *attempt = [self, files, options, attempt](int i) {
+    *attempt = [self, files, options, again](int i) {
         if (!self) {
             return;
         }
@@ -725,11 +735,21 @@ void FileActions::compress(const QList<QUrl> &urls)
                                                            QString::fromLatin1(targets[i].iface), QStringLiteral("CompressDialog"));
         call << files << options;
         auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call, 10000), self);
-        QObject::connect(w, &QDBusPendingCallWatcher::finished, self.data(), [attempt, i, w] {
+        // The watcher holds the function while the call is out.
+        auto keep = again.lock();
+        QObject::connect(w, &QDBusPendingCallWatcher::finished, self.data(), [self, keep, i, w] {
+            const QDBusError error = w->error();
             const bool failed = w->isError();
             w->deleteLater();
-            if (failed) {
-                (*attempt)(i + 1);
+            if (!failed || !self) {
+                return;
+            }
+            if (error.type() == QDBusError::ServiceUnknown || error.type() == QDBusError::NoServer) {
+                (*keep)(i + 1);
+            } else if (error.name().endsWith(QLatin1String(".TooManyJobs"))) {
+                Q_EMIT self->failed(tr("Archive is busy, try again when a job finishes."));
+            } else {
+                Q_EMIT self->failed(tr("Telamon Archive could not compress these: %1").arg(rustDisplayName(error.message().toUtf8())));
             }
         });
     };

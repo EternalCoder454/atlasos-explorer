@@ -7,6 +7,7 @@
 #include <KIO/CopyJob>
 #include <KIO/DeleteJob>
 #include <KIO/EmptyTrashJob>
+#include <KIO/FileCopyJob>
 #include <KIO/Job>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/MkdirJob>
@@ -25,6 +26,7 @@
 #include <QLocale>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QMutex>
 #include <QSaveFile>
 #include <QSet>
 #include <QThreadPool>
@@ -249,6 +251,10 @@ private:
     // "" when done, else why not.
     static QString change(const QString &dir, const QStringList &names, bool hide)
     {
+        // Two edits of one file at once would each start from the old text and
+        // the later commit would drop the earlier's change.
+        static QMutex lock;
+        const QMutexLocker locker(&lock);
         const QString path = dir + QStringLiteral("/.hidden");
         const QFileInfo info(path);
         // A link could lead anywhere; a file managed by hand is left alone.
@@ -1289,7 +1295,7 @@ void OperationQueue::makeFile(const QUrl &folder, const QString &name, const QUr
     w.pairs.insert(key(from), target);
     w.title = tr("Create File %1").arg(rustDisplayName(name.toUtf8()));
     if (templateFile.isValid()) {
-        w.steps << [templateFile, target]() -> KJob * { return KIO::copyAs(templateFile, target, KIO::HideProgressInfo); };
+        w.steps << [templateFile, target]() -> KJob * { return KIO::file_copy(templateFile, target, -1, KIO::HideProgressInfo); };
     } else {
         w.steps << [target]() -> KJob * { return KIO::storedPut(QByteArray(), target, -1, KIO::HideProgressInfo); };
     }

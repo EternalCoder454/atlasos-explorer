@@ -49,14 +49,16 @@ Item {
         return list.indexAt(x + list.contentX, y + list.contentY);
     }
 
-    // Where a row is, in this item's coordinates (the row may be off screen).
+    // Where a row is, in the folder view's coordinates (the row may be off screen).
     function rowRect(row) {
         const item = list.itemAtIndex(row);
         if (item) {
-            const at = item.mapToItem(root, 0, 0);
-            return Qt.rect(0, at.y, list.width, rowHeight);
+            const at = item.mapToItem(root.fv, 0, 0);
+            return Qt.rect(at.x, at.y, list.width, rowHeight);
         }
-        return Qt.rect(0, row * rowHeight - list.contentY, list.width, rowHeight);
+        // Not made yet: worked out from where the list is.
+        const at = list.mapToItem(root.fv, 0, row * rowHeight - list.contentY);
+        return Qt.rect(at.x, at.y, list.width, rowHeight);
     }
 
     function neighbor(row, dir) {

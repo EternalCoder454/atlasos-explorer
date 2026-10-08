@@ -127,10 +127,12 @@ pub fn item_menu(count: usize, folders: usize, flags: u32) -> Vec<(Cmd, bool)> {
     let paste_target_ok = if paste_into_selected_folder(count, folders) {
         has(F_FOLDER_WRITABLE)
     } else {
-        writable
+        // Results are from many folders: there is no "here" to paste into.
+        writable && !has(F_SEARCHING)
     };
     out.push((Cmd::Paste, has(F_CAN_PASTE) && paste_target_ok));
-    out.push((Cmd::Rename, single && writable));
+    // Items in the Trash keep the names they were deleted with.
+    out.push((Cmd::Rename, single && writable && !has(F_IN_TRASH)));
     out.push((Cmd::Trash, writable && !has(F_IN_TRASH)));
     if has(F_ARCHIVE) {
         out.push((Cmd::Compress, has(F_LOCAL) && !has(F_IN_TRASH)));
@@ -482,6 +484,18 @@ mod tests {
     }
 
     #[test]
+    fn nothing_is_pasted_into_search_results() {
+        let flags = BASE | F_CAN_PASTE | F_SEARCHING;
+        assert_eq!(on(&item_menu(1, 0, flags), Cmd::Paste), Some(false));
+        assert_eq!(on(&item_menu(3, 0, flags), Cmd::Paste), Some(false));
+        // A folder among the results still takes it.
+        assert_eq!(
+            on(&item_menu(1, 1, flags | F_FOLDER_WRITABLE), Cmd::Paste),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn folders_get_tab_and_pin() {
         let m = item_menu(1, 1, BASE | F_PINNABLE);
         assert_eq!(on(&m, Cmd::OpenInNewTab), Some(true));
@@ -565,8 +579,9 @@ mod tests {
 
     #[test]
     fn the_trash_cannot_be_trashed_but_can_be_emptied_for_good() {
-        let m = item_menu(1, 0, F_IN_TRASH | F_LOCAL);
+        let m = item_menu(1, 0, F_IN_TRASH | F_LOCAL | F_WRITABLE);
         assert_eq!(on(&m, Cmd::Trash), Some(false));
+        assert_eq!(on(&m, Cmd::Rename), Some(false));
         assert_eq!(on(&m, Cmd::DeleteForGood), Some(true));
     }
 
