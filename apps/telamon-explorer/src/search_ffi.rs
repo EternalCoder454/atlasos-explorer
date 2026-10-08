@@ -599,8 +599,20 @@ mod tests {
         tx: Mutex<mpsc::Sender<(Vec<u8>, u32)>>,
     }
 
+    /// A sink that lives for the rest of the process. The walk's thread is
+    /// still inside this callback (releasing the lock, dropping the sender)
+    /// when the receiver sees the `end` message, so a Sink the test dropped
+    /// at its own end would be freed under that thread: a write into freed
+    /// memory, seen as a corrupted heap and a SIGSEGV in whichever test
+    /// allocates next. A few bytes leaked per test is the price.
+    fn leaked_sink() -> (mpsc::Receiver<(Vec<u8>, u32)>, *mut c_void) {
+        let (tx, rx) = mpsc::channel();
+        let sink: &'static Sink = Box::leak(Box::new(Sink { tx: Mutex::new(tx) }));
+        (rx, sink as *const Sink as *mut c_void)
+    }
+
     extern "C" fn sink(user: *mut c_void, batch: *const u8, len: usize, end: u32) {
-        // SAFETY: `user` is the Sink the test keeps alive until `end` != 0.
+        // SAFETY: `user` is a leaked Sink (see `leaked_sink`), never freed.
         let s = unsafe { &*(user as *const Sink) };
         let data = if batch.is_null() {
             Vec::new()
@@ -637,9 +649,7 @@ mod tests {
         std::fs::write(dir.0.join("a b/c/needle one.txt"), "hello").unwrap();
         std::fs::write(dir.0.join("needle two.md"), "x").unwrap();
         std::fs::write(dir.0.join("other.txt"), "x").unwrap();
-        let (tx, rx) = mpsc::channel();
-        let sink_box = Box::new(Sink { tx: Mutex::new(tx) });
-        let user = &*sink_box as *const Sink as *mut c_void;
+        let (rx, user) = leaked_sink();
         let root = dir.0.as_os_str().as_bytes().to_vec();
         let mut f = std::mem::MaybeUninit::<TelamonSearchFilter>::uninit();
         unsafe { telamon_search_filter(0, 0, 0, 0, 0, f.as_mut_ptr()) };
@@ -681,9 +691,7 @@ mod tests {
         }
 
         // A folder that is not there: the end says so, with no hits.
-        let (tx, rx) = mpsc::channel();
-        let sink_box = Box::new(Sink { tx: Mutex::new(tx) });
-        let user = &*sink_box as *const Sink as *mut c_void;
+        let (rx, user) = leaked_sink();
         let nope = dir.0.join("nope");
         let nope = nope.as_os_str().as_bytes();
         let h = unsafe {
