@@ -20,8 +20,23 @@ Item {
     property var ancestors: []
 
     // The row selected when exactly one item is, else -1.
+    // Bumped when the rows moved (a new sort, a change in the folder).
+    property int rowsRevision: 0
+    Connections {
+        target: root.fv.folder
+        function onLayoutChanged() {
+            root.rowsRevision++;
+        }
+        function onModelReset() {
+            root.rowsRevision++;
+        }
+        function onDataChanged() {
+            root.rowsRevision++;
+        }
+    }
     readonly property int onlyRow: {
         fv.selRevision;
+        rowsRevision;
         fv.folder.count;
         const rows = fv.selectedRows();
         return rows.length === 1 ? rows[0] : -1;
@@ -89,6 +104,11 @@ Item {
             return -1;
         }
         return primaryColumn.rowAt(at.x, at.y);
+    }
+    // Whether a point (in this view's coordinates) is over the tab's own column.
+    function inPrimary(x, y) {
+        const at = root.mapToItem(primaryColumn, x, y);
+        return at.x >= 0 && at.x < primaryColumn.width && at.y >= 0 && at.y < primaryColumn.height;
     }
     function rowRect(row) {
         const at = primaryColumn.mapToItem(root.fv, 0, primaryColumn.rowY(row));

@@ -1,6 +1,7 @@
 #include "GroupLines.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 GroupLines::GroupLines(QObject *parent)
     : QAbstractListModel(parent)
@@ -150,6 +151,29 @@ int GroupLines::lineOf(int sourceRow) const
         }
     }
     return -1;
+}
+
+int GroupLines::rowAfterLines(int row, int steps) const
+{
+    int at = lineOf(row);
+    if (at < 0 || steps == 0) {
+        return row;
+    }
+    const int column = row - m_lines.at(at).first;
+    const int dir = steps < 0 ? -1 : 1;
+    for (int left = std::abs(steps); left > 0;) {
+        int next = at + dir;
+        while (next >= 0 && next < m_lines.size() && m_lines.at(next).kind != 1) {
+            next += dir;
+        }
+        if (next < 0 || next >= m_lines.size()) {
+            break;
+        }
+        at = next;
+        --left;
+    }
+    const Line &l = m_lines.at(at);
+    return l.first + std::min(column, l.cells - 1);
 }
 
 int GroupLines::rowAtCell(int line, int cell) const

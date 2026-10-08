@@ -640,7 +640,7 @@ TelamonWindow {
         const p = pageComponent.createObject(pageHost, {
             "tabId": id,
             "startUrl": target,
-            "startViewMode": o.viewMode || "details",
+            "startViewMode": o.viewMode || "",
             "startBack": o.back || [],
             "startForward": o.forward || [],
             "lazy": !!o.lazy,

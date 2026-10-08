@@ -14,7 +14,8 @@ FocusScope {
     required property int tabId
     // Where the tab starts, how it is shown and what its history was.
     property url startUrl
-    property string startViewMode: "details"
+    // A view to show the folder in instead of the one it remembers ("": its own).
+    property string startViewMode: ""
     property var startBack: []
     property var startForward: []
     // A restored background tab loads its folder when it is first shown, so a
@@ -55,11 +56,16 @@ FocusScope {
             return;
         }
         loaded = true;
-        view.viewMode = startViewMode;
         view.folder.showHidden = actions.savedShowHidden();
         backStack = startBack;
         forwardStack = startForward;
         view.url = startUrl;
+        if (startViewMode.length > 0) {
+            // A duplicated or reopened tab looks as it did; nothing is remembered for that.
+            view.restoring = true;
+            view.viewMode = startViewMode;
+            view.restoring = false;
+        }
     }
 
     // Goes to `target`, remembering where it was.

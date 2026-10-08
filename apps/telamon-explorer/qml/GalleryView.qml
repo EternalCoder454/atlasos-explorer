@@ -102,7 +102,7 @@ Item {
         anchors.bottom: caption.top
         anchors.margins: Kirigami.Units.largeSpacing
         info: root.info
-        playerActive: root.visible && !root.fv.covered
+        playerActive: root.visible && !root.fv.covered && !PreviewLogic.paneShown
         thumbSide: 1600
         iconSide: Kirigami.Units.iconSizes.enormous
     }

@@ -441,7 +441,9 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
             continue;
         }
         m_folders -= m_rows[i].isDir;
+        const QString group = m_rows[i].group;
         m_rows[i] = makeEntry(*found);
+        m_rows[i].group = group;
         m_folders += m_rows[i].isDir;
         Q_EMIT dataChanged(index(i), index(i));
         any = true;

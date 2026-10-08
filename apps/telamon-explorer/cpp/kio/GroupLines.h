@@ -36,6 +36,10 @@ public:
     Q_INVOKABLE int lineOf(int sourceRow) const;
     // The folder's row in cell `cell` of line `line`; -1 when there is none.
     Q_INVOKABLE int rowAtCell(int line, int cell) const;
+    // The row `steps` lines of cells down (negative: up) from `row`, in the same
+    // column or the last one of a short line, headers and folded groups skipped;
+    // the first or last row's line at the ends.
+    Q_INVOKABLE int rowAfterLines(int row, int steps) const;
 
 Q_SIGNALS:
     void sourceChanged();

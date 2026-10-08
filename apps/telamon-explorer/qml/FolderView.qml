@@ -100,6 +100,11 @@ FocusScope {
             return;
         }
         const p = ViewMemory.prefsFor(folderModel.url);
+        // In the columns, a folder with no view of its own (one reached by Back,
+        // Forward or a click on the sidebar) is shown in the columns too.
+        if (!p.remembered && viewMode === "columns" && !ViewMemory.sameForAll) {
+            return;
+        }
         restoring = true;
         viewMode = p.mode;
         iconSize = p.icon;
@@ -189,6 +194,10 @@ FocusScope {
         for (const u of urls) {
             const r = folderModel.rowOfUrl(u);
             if (r >= 0) {
+                // An item that was put in a folded group opens it: nothing is selected out of sight.
+                if (folderModel.isRowCollapsed(r)) {
+                    folderModel.toggleGroup(folderModel.groupAt(r));
+                }
                 sel.select(folderModel.index(r, 0), ItemSelectionModel.Select);
                 last = r;
             }
@@ -203,6 +212,7 @@ FocusScope {
     // selection, so a drag can take all of it; the release then narrows it.
     function pressRow(row, mods) {
         forceActiveFocus();
+        selectFirst = false;
         if (mods === 0 && isSelected(row, selRevision)) {
             setCurrent(row);
             return false;
@@ -452,6 +462,8 @@ FocusScope {
     }
 
     Keys.onPressed: event => {
+        // The user took over: the first item is not selected for them any more.
+        selectFirst = false;
         const n = folderModel.count;
         const mods = event.modifiers;
         const cur = currentRow < 0 ? 0 : currentRow;
@@ -592,6 +604,10 @@ FocusScope {
         onTapped: (point, button) => {
             // A row's own handler shows its menu.
             if (top.activeView.rowAt(point.position.x, point.position.y) >= 0) {
+                return;
+            }
+            // A column that isn't the tab's has its own menus.
+            if (top.shown === "columns" && !columns.inPrimary(point.position.x, point.position.y)) {
                 return;
             }
             top.forceActiveFocus();

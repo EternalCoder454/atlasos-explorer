@@ -75,6 +75,22 @@ Item {
     }
 
     function neighbor(row, dir) {
+        if (grouped) {
+            switch (dir) {
+            case "up":
+                return lines.rowAfterLines(row, -1);
+            case "down":
+                return lines.rowAfterLines(row, 1);
+            case "pageUp":
+                return lines.rowAfterLines(row, -Math.max(1, Math.floor(list.height / cellH) - 1));
+            case "pageDown":
+                return lines.rowAfterLines(row, Math.max(1, Math.floor(list.height / cellH) - 1));
+            case "left":
+                return row - 1;
+            default:
+                return row + 1;
+            }
+        }
         const page = compact ? perColumn * Math.max(1, Math.floor(grid.width / cellW) - 1) : perRow * Math.max(1, perColumn - 1);
         switch (dir) {
         case "up":

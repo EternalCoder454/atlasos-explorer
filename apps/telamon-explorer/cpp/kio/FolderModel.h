@@ -167,6 +167,8 @@ public:
     Q_INVOKABLE int groupCount(const QString &group) const { return m_groupCounts.value(group, 0); }
     // Whether the row is in a collapsed group.
     Q_INVOKABLE bool isRowCollapsed(int row) const;
+    // The name of the group a row is in (empty for none).
+    Q_INVOKABLE QString groupAt(int row) const { return row >= 0 && row < m_rows.size() && grouped() ? m_rows.at(row).group : QString(); }
     // The row from `row` going by `step` (1 or -1) that is not in a collapsed
     // group (`row` itself when it is not); -1 when there is none.
     Q_INVOKABLE int visibleRowFrom(int row, int step) const;
