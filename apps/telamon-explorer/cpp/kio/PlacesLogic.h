@@ -102,8 +102,8 @@ public:
     Q_INVOKABLE void openInDisks(const QString &key);
     // Asks how big the Trash is, then `emptyTrashAsk` carries the question
     // (the text names the size) for the window to show.
+    // (Emptying it is an operation of the queue: FileActions.emptyTrash.)
     Q_INVOKABLE void requestEmptyTrash();
-    Q_INVOKABLE void emptyTrash();
     // Pin to Sidebar in menus: pins `url` once KIO says it is a folder.
     Q_INVOKABLE void pinFolder(const QUrl &url);
 

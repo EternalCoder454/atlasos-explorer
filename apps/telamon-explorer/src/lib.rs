@@ -4,6 +4,7 @@
 
 mod backend;
 mod ffi;
+mod ops_ffi;
 mod preview_ffi;
 mod search_ffi;
 

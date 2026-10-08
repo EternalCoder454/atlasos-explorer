@@ -155,6 +155,7 @@ Item {
             required property string iconName
             required property bool isDir
             required property bool isHidden
+            required property bool isCut
             required property string sizeText
             required property string modifiedText
             required property string typeText
@@ -173,7 +174,7 @@ Item {
                 border.color: Kirigami.Theme.highlightColor
             }
             Row {
-                opacity: row.isHidden ? 0.6 : 1
+                opacity: (row.isHidden ? 0.6 : 1) * (row.isCut ? 0.5 : 1)
                 Item {
                     width: root.widths.name
                     height: root.rowHeight

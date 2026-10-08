@@ -44,10 +44,14 @@ QString errorMessage(KIO::Job *job)
 }
 }
 
+QSet<QString> FolderModel::s_cut;
+QList<FolderModel *> FolderModel::s_models;
+
 FolderModel::FolderModel(QObject *parent)
     : QAbstractListModel(parent)
     , m_lister(new KCoreDirLister(this))
 {
+    s_models.append(this);
     m_pool.setMaxThreadCount(1);
     m_lister->setDelayedMimeTypes(true);
     m_lister->setAutoErrorHandlingEnabled(false);
@@ -106,6 +110,7 @@ FolderModel::FolderModel(QObject *parent)
 
 FolderModel::~FolderModel()
 {
+    s_models.removeAll(this);
     m_lister->disconnect(this);
     m_pool.clear();
     m_pool.waitForDone();
@@ -128,7 +133,31 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {TypeTextRole, "typeText"},
         {PathTextRole, "pathText"},
         {ThumbnailSourceRole, "thumbnailSource"},
+        {IsCutRole, "isCut"},
     };
+}
+
+bool FolderModel::isCut(const KFileItem &item) const
+{
+    return !s_cut.isEmpty() && s_cut.contains(item.url().adjusted(QUrl::StripTrailingSlash).toString(QUrl::FullyEncoded));
+}
+
+// Rows whose "waiting to be moved" changed are drawn again.
+void FolderModel::setCutKeys(const QSet<QString> &keys)
+{
+    if (keys == s_cut) {
+        return;
+    }
+    const QSet<QString> changed = (keys - s_cut) + (s_cut - keys);
+    s_cut = keys;
+    for (FolderModel *m : std::as_const(s_models)) {
+        for (int i = 0; i < m->m_rows.size(); ++i) {
+            const QString k = m->m_rows.at(i).item.url().adjusted(QUrl::StripTrailingSlash).toString(QUrl::FullyEncoded);
+            if (changed.contains(k)) {
+                Q_EMIT m->dataChanged(m->index(i), m->index(i), {IsCutRole});
+            }
+        }
+    }
 }
 
 int FolderModel::rowCount(const QModelIndex &parent) const
@@ -189,6 +218,8 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         return e.item.isLink();
     case IsHiddenRole:
         return e.item.isHidden();
+    case IsCutRole:
+        return isCut(e.item);
     case SizeRole:
         return e.size;
     case ModifiedRole:

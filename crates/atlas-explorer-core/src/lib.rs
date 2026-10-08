@@ -3,12 +3,16 @@
 //! the app's C++ adapters through one bridge. See docs/DESIGN.md, "Layout".
 
 pub mod address;
+pub mod conflict;
 pub mod display;
+pub mod history;
 pub mod launch;
 pub mod legacy;
 pub mod location;
 pub mod names;
+pub mod optext;
 pub mod places;
+pub mod preflight;
 pub mod preview;
 pub mod queue;
 pub mod search;
