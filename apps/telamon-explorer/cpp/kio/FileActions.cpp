@@ -1,5 +1,6 @@
 #include "FileActions.h"
 
+#include "PlacesLogic.h"
 #include "RustBridge.h"
 
 #include <KConfigGroup>
@@ -345,6 +346,10 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
         if (!folders.isEmpty()) {
             add(QStringLiteral("tab-new"), folders.size() == 1 ? tr("Open in New Tab") : tr("Open in New Tabs"), [this, folders] { Q_EMIT openInNewTabRequested(folders); });
         }
+        if (single && folders.size() == 1) {
+            const QUrl folder = folders.first();
+            add(QStringLiteral("bookmark-new"), tr("Pin to Sidebar"), [folder] { PlacesLogic::instance()->pinFolder(folder); }, rustPlacesPinnable(folder.scheme()));
+        }
         auto *actions = new KFileItemActions(menu);
         actions->setItemListProperties(KFileItemListProperties(items));
         actions->insertOpenWithActionsTo(nullptr, menu, {});
@@ -363,6 +368,10 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
         add(QStringLiteral("edit-paste"), tr("Paste"), [this] { paste(); }, writable && canPaste());
         menu->addSeparator();
         add(QStringLiteral("utilities-terminal"), tr("Open Terminal Here"), [this] { openTerminal(); });
+        if (m_folder) {
+            const QUrl here = m_folder->url();
+            add(QStringLiteral("bookmark-new"), tr("Pin This Folder to Sidebar"), [here] { PlacesLogic::instance()->pinFolder(here); }, rustPlacesPinnable(here.scheme()));
+        }
         QAction *hidden = add(QStringLiteral("view-visible"), tr("Show Hidden Files"), [this] {
             if (m_folder) {
                 m_folder->setShowHidden(!m_folder->showHidden());

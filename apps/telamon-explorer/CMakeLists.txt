@@ -88,6 +88,7 @@ qt_add_qml_module(telamon-explorer-app
         qml/StatusLine.qml
         qml/DetailsView.qml
         qml/IconsView.qml
+        qml/PlaceItem.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
@@ -95,6 +96,8 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/FileActions.h cpp/kio/FileActions.cpp
         cpp/kio/TabLogic.h cpp/kio/TabLogic.cpp
         cpp/kio/LocationLogic.h cpp/kio/LocationLogic.cpp
+        cpp/kio/PlacesLogic.h cpp/kio/PlacesLogic.cpp
+        cpp/kio/PlacesModel.h cpp/kio/PlacesModel.cpp
         cpp/kio/RustBridge.h
 )
 
