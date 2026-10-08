@@ -602,13 +602,22 @@ Explorer replaces Dolphin completely.
   --ignore-submodules=all --no-renames -- .`) in the folder, with an emptied
   environment (no `GIT_*` of ours, no global or system configuration, no
   prompt, no lazy fetch), a 5 s timeout and at most 16 MiB of answer, and
-  reads the answer as untrusted bytes. A repository is **skipped, with no
+  reads the answer as untrusted bytes. Git is **pinned to the repository that
+  was checked** (`GIT_DIR` and `GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES=/`), so
+  a folder that merely looks like a git directory, between the folder shown and
+  the work tree, is never taken for the repository, and `git` is looked for in
+  the absolute entries of `PATH` only. A repository is **skipped, with no
   badge and no error**, when its work tree or its git directory belongs to
-  another user (git's `safe.directory` rule), or when its own configuration
-  has a `[filter ...]` section (`status` runs a filter's `clean` command for a
-  file the attributes name) or an `[include]` (it could pull one in). Hooks and
-  `core.fsmonitor` are switched off on the command line. A folder inside an
-  ignored folder shows every item ignored. Nothing is shown for search
+  another user (git's `safe.directory` rule), or when git itself lists a
+  `filter.*`, `include.*` or `includeIf.*` key in its configuration
+  (`git config --no-includes --list --name-only -z`, run first with the same
+  cleared environment: `status` runs a filter's `clean` command for a file the
+  attributes name, and an include could pull one in; git's own parser is used
+  because a header spelled `[core] [filter "x"]` hides from a text search; a
+  text search of the file is made as well). Hooks and `core.fsmonitor` are
+  switched off on the command line. A folder inside an
+  ignored folder shows every item ignored, one in an untracked folder every
+  item new. Nothing is shown for search
   results, the Trash, servers or Files' own pages, and no git is started when
   the setting is off.
 - **Accessibility (wave 16).** Every row of every view (Details, Icons,
@@ -625,8 +634,8 @@ Explorer replaces Dolphin completely.
   (`contentItem.keyNavigationEnabled = false`). Right to left: the layout
   mirrors (tested with `-reverse`: the sidebar, the path bar's order, the
   Details rows (an anchor, not an `x`), the compact list); under reduced
-  motion Files has no animation of its own (its parts come from Telamon.Ui,
-  which has none then); under high contrast a selected row is solid with the
+  motion the few animations of Files (the path bar's chevron, the operations
+  ring) use Telamon.Ui's durations, which are 0 then; under high contrast a selected row is solid with the
   selection's text colour, the focus ring is 3 px, separators are stronger and
   the Git badge has a border. The checks are scripted: AT-SPI dumps
   (`pyatspi`) of every state, a keyboard-only walk, a portal stand-in for high

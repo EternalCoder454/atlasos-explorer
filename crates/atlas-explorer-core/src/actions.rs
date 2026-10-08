@@ -421,11 +421,19 @@ pub fn resolve_program(program: &str, path_env: &str) -> Result<PathBuf, Problem
         }
         p.to_path_buf()
     } else {
-        path_env
+        // The first entry that has a program that can run: a file that merely
+        // exists and cannot be executed does not hide a good one further on.
+        let candidates: Vec<PathBuf> = path_env
             .split(':')
             .filter(|d| Path::new(d).is_absolute())
             .map(|d| Path::new(d).join(program))
-            .find(|p| p.exists())
+            .filter(|p| p.exists())
+            .collect();
+        candidates
+            .iter()
+            .find(|p| is_executable(p))
+            .or_else(|| candidates.first())
+            .cloned()
             .ok_or_else(|| Problem::ProgramMissing(program.to_string()))?
     };
     // A link to `bash` is `bash`.
@@ -1007,6 +1015,12 @@ mod tests {
             resolve_program("mytool", &path_env).unwrap(),
             d.join("mytool")
         );
+        // A file that is not executable earlier in PATH does not hide a good one later.
+        let d2 = tmp("prog2");
+        fs::write(d2.join("mytool"), "x").unwrap();
+        let both = format!("{}:{}", d2.display(), d.display());
+        assert_eq!(resolve_program("mytool", &both).unwrap(), d.join("mytool"));
+        let _ = fs::remove_dir_all(&d2);
         // A relative PATH entry is never used.
         assert!(matches!(
             resolve_program("mytool", "relative"),

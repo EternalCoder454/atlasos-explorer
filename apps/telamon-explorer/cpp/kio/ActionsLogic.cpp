@@ -95,9 +95,6 @@ QByteArray mimeNames(const KFileItem &it)
     if (t.isValid()) {
         names += t.allAncestors();
     }
-    if (!it.isDir()) {
-        names << QStringLiteral("application/octet-stream");
-    }
     return names.join(QLatin1Char('\n')).toUtf8();
 }
 
@@ -233,7 +230,9 @@ QString ActionsLogic::confirmText(int id, const QList<QUrl> &urls) const
 
 QString ActionsLogic::run(int id, const QList<QUrl> &urls)
 {
-    // Read again, so what is run is what the settings file says now.
+    // Read again, so what is run is what the settings file says now (a copy
+    // another process changed is read from the disk, not from the cache).
+    KSharedConfig::openConfig(QStringLiteral("telamon-explorerrc"))->reparseConfiguration();
     const QList<Parsed> list = parse(cleanedText());
     const Parsed *action = nullptr;
     for (const Parsed &p : list) {
@@ -271,15 +270,15 @@ QString ActionsLogic::run(int id, const QList<QUrl> &urls)
     }
     int started = 0;
     for (qsizetype i = 1; i < lines.size(); ++i) {
-        // The last line is empty (the text ends with a line break); a run with no arguments is an empty line too.
-        if (i == lines.size() - 1 && lines.at(i).isEmpty()) {
-            break;
+        // The last piece is empty (the text ends with a line break).
+        if (lines.at(i).isEmpty()) {
+            continue;
         }
+        // `r`, then a tab before each argument (no argument is `r` alone, an empty one `r` and a tab).
         QStringList argv;
-        if (!lines.at(i).isEmpty()) {
-            for (const QByteArray &a : lines.at(i).split('\t')) {
-                argv << QString::fromUtf8(QByteArray::fromPercentEncoding(a));
-            }
+        const QList<QByteArray> fields = lines.at(i).split('\t');
+        for (qsizetype f = 1; f < fields.size(); ++f) {
+            argv << QString::fromUtf8(QByteArray::fromPercentEncoding(fields.at(f)));
         }
         QProcess p;
         p.setProgram(resolved);

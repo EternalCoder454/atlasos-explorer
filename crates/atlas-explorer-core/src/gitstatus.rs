@@ -104,6 +104,9 @@ pub struct FolderBadges {
     pub items: BTreeMap<Vec<u8>, Badge>,
     /// The folder itself is ignored: every item in it is, unless listed.
     pub all_ignored: bool,
+    /// The folder itself is not in the repository yet (untracked): every item
+    /// in it is new, unless listed.
+    pub all_new: bool,
 }
 
 // ---- Reading the answer ----
@@ -207,6 +210,16 @@ pub fn badges_for(entries: &[(Vec<u8>, Badge)], prefix: &[u8]) -> FolderBadges {
             out.all_ignored = true;
             continue;
         }
+        // An untracked folder around this one: everything here is new.
+        if *badge == Badge::New
+            && (path == prefix
+                || (prefix.len() > path.len()
+                    && prefix.starts_with(path)
+                    && prefix[path.len()] == b'/'))
+        {
+            out.all_new = true;
+            continue;
+        }
         let rest = if prefix.is_empty() {
             path
         } else {
@@ -292,7 +305,7 @@ pub fn config_is_unsafe(text: &str) -> bool {
 /// Checks the work tree at `root` for the user `uid`: its top folder, its git
 /// directory (and the shared one of a linked work tree) are theirs, and the
 /// configuration is one git can read without running anything.
-pub fn check_repo(root: &Path, uid: u32) -> Result<(), Skip> {
+pub fn check_repo(root: &Path, uid: u32) -> Result<PathBuf, Skip> {
     let Some(dir) = git_dir(root) else {
         return Err(Skip::NotARepo);
     };
@@ -333,6 +346,36 @@ pub fn check_repo(root: &Path, uid: u32) -> Result<(), Skip> {
             }
         }
     }
+    Ok(dir)
+}
+
+/// Whether a key git lists (`git config --list --name-only`) names a command
+/// to run or a file to pull in.
+pub fn key_is_unsafe(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    k.starts_with("filter.") || k.starts_with("include.") || k.starts_with("includeif.")
+}
+
+/// Asks git itself which settings the repository holds (it reads them with the
+/// real parser, so no spelling of a section header can hide one from this
+/// check) and refuses a repository with a filter or an include. Runs nothing of
+/// the repository's.
+fn check_config_with_git(root: &Path, dir: &Path, path: &str) -> Result<(), Skip> {
+    let args = ["config", "--no-includes", "--list", "--name-only", "-z"];
+    let (out, st) = run_git(
+        &args,
+        &pinned_env(path, root, dir),
+        root,
+        Duration::from_secs(3),
+    )?;
+    if !st.success() {
+        return Err(Skip::Failed("git could not read the configuration".into()));
+    }
+    for key in out.split(|&b| b == 0).filter(|k| !k.is_empty()) {
+        if key_is_unsafe(&String::from_utf8_lossy(key)) {
+            return Err(Skip::UnsafeConfig);
+        }
+    }
     Ok(())
 }
 
@@ -362,18 +405,25 @@ pub fn status_args() -> Vec<&'static str> {
     ]
 }
 
+/// `PATH` for git: the absolute entries only (an empty or relative entry would
+/// make a file of the folder being browsed the program that runs).
+pub fn safe_path(path: &str) -> String {
+    let kept: Vec<&str> = path
+        .split(':')
+        .filter(|d| Path::new(d).is_absolute())
+        .collect();
+    if kept.is_empty() {
+        "/usr/local/bin:/usr/bin:/bin".to_string()
+    } else {
+        kept.join(":")
+    }
+}
+
 /// The environment `git` runs in: only what it needs, and nothing of the
 /// caller's `GIT_*` variables or configuration.
 pub fn status_env(path: &str) -> Vec<(&'static str, String)> {
     vec![
-        (
-            "PATH",
-            if path.is_empty() {
-                "/usr/local/bin:/usr/bin:/bin".to_string()
-            } else {
-                path.to_string()
-            },
-        ),
+        ("PATH", safe_path(path)),
         ("LC_ALL", "C".into()),
         ("HOME", "/nonexistent".into()),
         ("GIT_CONFIG_NOSYSTEM", "1".into()),
@@ -386,32 +436,48 @@ pub fn status_env(path: &str) -> Vec<(&'static str, String)> {
     ]
 }
 
+/// The same, pinned to the repository that was checked: git does not look for
+/// another one (a folder that merely looks like a git directory, between the
+/// folder shown and the work tree, would otherwise be used with a
+/// configuration nobody looked at).
+pub fn pinned_env(path: &str, root: &Path, dir: &Path) -> Vec<(&'static str, String)> {
+    let mut v = status_env(path);
+    v.push(("GIT_DIR", dir.to_string_lossy().into_owned()));
+    v.push(("GIT_WORK_TREE", root.to_string_lossy().into_owned()));
+    v.push(("GIT_CEILING_DIRECTORIES", "/".into()));
+    v
+}
+
 /// The work tree's folder relative to its top, with no slash at either end.
 fn relative(root: &Path, folder: &Path) -> Option<Vec<u8>> {
     let rel = folder.strip_prefix(root).ok()?;
     Some(rel.as_os_str().as_bytes().to_vec())
 }
 
-/// Runs `git status` for `folder` and gives the badges of its items. Does the
-/// checks above first; blocks for at most `timeout` (and reads at most
-/// [`MAX_OUTPUT`] bytes), so it belongs on a worker thread. `path` is the
-/// `PATH` to look for `git` in; `uid` the user the work tree must belong to.
-pub fn status(
-    folder: &Path,
-    uid: u32,
-    path: &str,
+/// Runs `git` with `args` (a list, never a shell) in `cwd` with exactly the
+/// environment `env`, for at most `timeout`, reading at most [`MAX_OUTPUT`]
+/// bytes. Gives its output and how it ended.
+fn run_git(
+    args: &[&str],
+    env: &[(&'static str, String)],
+    cwd: &Path,
     timeout: Duration,
-) -> Result<FolderBadges, Skip> {
-    // Links are followed once, here, so the relative path below is honest.
-    let folder = std::fs::canonicalize(folder).map_err(|_| Skip::NotARepo)?;
-    let root = find_repo(&folder).ok_or(Skip::NotARepo)?;
-    check_repo(&root, uid)?;
-    let prefix = relative(&root, &folder).ok_or(Skip::NotARepo)?;
-    let mut cmd = Command::new("git");
-    cmd.args(status_args())
-        .current_dir(&folder)
+) -> Result<(Vec<u8>, std::process::ExitStatus), Skip> {
+    // `git` is looked for in the PATH given (absolute entries), and run by its full path.
+    let git = env
+        .iter()
+        .find(|(k, _)| *k == "PATH")
+        .and_then(|(_, p)| {
+            p.split(':')
+                .map(|d| Path::new(d).join("git"))
+                .find(|g| g.is_file())
+        })
+        .ok_or(Skip::NoGit)?;
+    let mut cmd = Command::new(git);
+    cmd.args(args)
+        .current_dir(cwd)
         .env_clear()
-        .envs(status_env(path))
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -472,11 +538,38 @@ pub fn status(
     if big.load(Ordering::SeqCst) {
         return Err(Skip::Failed("too many changes to show".into()));
     }
-    let Some(status) = status else {
-        return Err(Skip::Timeout);
-    };
-    if !status.success() {
-        return Err(Skip::Failed(format!("git status ended with {status}")));
+    match status {
+        Some(st) => Ok((out, st)),
+        None => Err(Skip::Timeout),
+    }
+}
+
+/// Runs `git status` for `folder` and gives the badges of its items. Does the
+/// checks above first (ownership, the text of the configuration, then git's
+/// own list of the configuration's keys) and pins git to the work tree and git
+/// directory it checked; blocks for at most `timeout`, so it belongs on a
+/// worker thread. `path` is the `PATH` to look for `git` in (only its absolute
+/// entries are used); `uid` the user the work tree must belong to.
+pub fn status(
+    folder: &Path,
+    uid: u32,
+    path: &str,
+    timeout: Duration,
+) -> Result<FolderBadges, Skip> {
+    // Links are followed once, here, so the relative path below is honest.
+    let folder = std::fs::canonicalize(folder).map_err(|_| Skip::NotARepo)?;
+    let root = find_repo(&folder).ok_or(Skip::NotARepo)?;
+    let dir = check_repo(&root, uid)?;
+    let prefix = relative(&root, &folder).ok_or(Skip::NotARepo)?;
+    check_config_with_git(&root, &dir, path)?;
+    let (out, st) = run_git(
+        &status_args(),
+        &pinned_env(path, &root, &dir),
+        &folder,
+        timeout,
+    )?;
+    if !st.success() {
+        return Err(Skip::Failed(format!("git status ended with {st}")));
     }
     Ok(badges_for(&parse_porcelain_v2(&out), &prefix))
 }
@@ -901,6 +994,109 @@ X weird record\0";
         assert!(matches!(r, Err(Skip::Failed(_))), "{r:?}");
         let _ = fs::remove_dir_all(&d);
         let _ = fs::remove_dir_all(&bin);
+    }
+
+    #[test]
+    fn a_second_section_header_on_a_line_does_not_hide_a_filter() {
+        if !git_available() {
+            return;
+        }
+        let d = fixture("sameline");
+        let marker = d.join("PWNED");
+        let cfg = d.join(".git/config");
+        let mut text = fs::read_to_string(&cfg).unwrap();
+        // Git reads two headers on one line; a text scan for a line that starts with [filter does not.
+        text.push_str(&format!(
+            "[core] [filter \"x\"]\n\tclean = touch {}; cat\n",
+            marker.display()
+        ));
+        fs::write(&cfg, text).unwrap();
+        fs::write(d.join(".gitattributes"), "* filter=x\n").unwrap();
+        fs::write(d.join("changed.txt"), "touched\n").unwrap();
+        assert!(!config_is_unsafe(&fs::read_to_string(&cfg).unwrap()));
+        assert_eq!(
+            status(&d, me(), &path_env(), TIMEOUT).unwrap_err(),
+            Skip::UnsafeConfig
+        );
+        assert!(!marker.exists(), "the filter ran");
+        // The same for an include.
+        let mut text = fs::read_to_string(&cfg)
+            .unwrap()
+            .replace("[core] [filter", "[core] [x");
+        text.push_str("[core][include]\n\tpath = elsewhere\n");
+        fs::write(&cfg, text).unwrap();
+        assert_eq!(
+            status(&d, me(), &path_env(), TIMEOUT).unwrap_err(),
+            Skip::UnsafeConfig
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_folder_that_only_looks_like_a_git_directory_is_not_used() {
+        if !git_available() {
+            return;
+        }
+        // A real repository, and inside it an untrusted folder whose contents are laid out like a git
+        // directory (HEAD, objects, refs, config) with a filter of its own.
+        let d = fixture("lookalike");
+        let evil = d.join("evil2");
+        fs::create_dir_all(evil.join("objects")).unwrap();
+        fs::create_dir_all(evil.join("refs")).unwrap();
+        fs::write(evil.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let marker = d.join("PWNED2");
+        fs::write(
+            evil.join("config"),
+            format!(
+                "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n[filter \"x\"]\n\tclean = touch {}; cat\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        fs::write(evil.join(".gitattributes"), "* filter=x\n").unwrap();
+        fs::write(evil.join("file.txt"), "x\n").unwrap();
+        // The answer is the outer repository's, and nothing of the folder's own ran.
+        let r = status(&evil, me(), &path_env(), TIMEOUT);
+        assert!(!marker.exists(), "the look-alike's filter ran");
+        assert!(r.is_ok(), "{r:?}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn only_absolute_path_entries_are_used() {
+        assert_eq!(safe_path(":/usr/bin:.:rel:/bin"), "/usr/bin:/bin");
+        assert_eq!(safe_path(""), "/usr/local/bin:/usr/bin:/bin");
+        assert_eq!(safe_path("."), "/usr/local/bin:/usr/bin:/bin");
+        assert!(key_is_unsafe("filter.lfs.clean"));
+        assert!(key_is_unsafe("includeIf.gitdir:/x.path"));
+        assert!(key_is_unsafe("include.path"));
+        assert!(!key_is_unsafe("core.bare"));
+        // A git in the folder being browsed is never the one that runs.
+        let d = tmp("pathgit");
+        let evil = d.join("git");
+        fs::write(&evil, "#!/bin/sh\ntouch PWNED-HERE\nexit 0\n").unwrap();
+        fs::set_permissions(&evil, fs::Permissions::from_mode(0o755)).unwrap();
+        let r = run_git(
+            &["--version"],
+            &status_env(&format!(":{}:.", "")),
+            &d,
+            Duration::from_secs(5),
+        );
+        let _ = r;
+        assert!(!d.join("PWNED-HERE").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_untracked_folder_makes_everything_in_it_new() {
+        let e = vec![(b"fresh/".to_vec(), Badge::New)];
+        let inside = badges_for(&e, b"fresh");
+        assert!(inside.all_new && !inside.all_ignored);
+        let deeper = badges_for(&e, b"fresh/sub");
+        assert!(deeper.all_new);
+        let top = badges_for(&e, b"");
+        assert!(!top.all_new);
+        assert_eq!(top.items[&b"fresh"[..]], Badge::New);
     }
 
     #[test]

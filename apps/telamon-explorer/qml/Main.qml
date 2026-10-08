@@ -744,16 +744,21 @@ TelamonWindow {
     // The one place every setting is changed (Ctrl+, the View menu, the tab
     // menu). `page` is 0 General, 1 View, 2 Search, 3 Context Menu and Actions, 4 Trash.
     function openSettings(page) {
-        settingsDialog.showPage(page);
+        // Made the first time it is asked for: its pages hold a hundred controls.
+        settingsLoader.active = true;
+        settingsLoader.item.showPage(page);
     }
-    SettingsDialog {
-        id: settingsDialog
-        win: root
-        onEditActionRequested: id => actionEditor.openFor(id)
-        onRemoveActionRequested: id => {
-            removeActionDialog.actionId = id;
-            removeActionDialog.text = qsTr("The action \u201c%1\u201d is taken out of the menu. The program it runs is not touched.").arg(ActionsLogic.get(id).name ?? "");
-            removeActionDialog.open();
+    Loader {
+        id: settingsLoader
+        active: false
+        sourceComponent: SettingsDialog {
+            win: root
+            onEditActionRequested: id => actionEditor.openFor(id)
+            onRemoveActionRequested: id => {
+                removeActionDialog.actionId = id;
+                removeActionDialog.text = qsTr("The action \u201c%1\u201d is taken out of the menu. The program it runs is not touched.").arg(ActionsLogic.get(id).name ?? "");
+                removeActionDialog.open();
+            }
         }
     }
     ActionEditor {

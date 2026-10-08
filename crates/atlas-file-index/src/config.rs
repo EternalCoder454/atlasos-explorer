@@ -146,6 +146,10 @@ pub fn with_roots(text: &str, roots: &[String]) -> Result<String, String> {
         }
     }
     let line = format!("Roots={}", clean.join(";"));
+    // The service skips a line over 8192 bytes: a list that long would be written and then ignored.
+    if line.len() > 8192 {
+        return Err("too many folders, or paths too long, for one line".into());
+    }
     let mut out: Vec<String> = Vec::new();
     let (mut in_index, mut replaced, mut index_end) = (false, false, None);
     for l in text.lines() {
@@ -447,6 +451,10 @@ mod tests {
         ] {
             assert!(with_roots("", &[bad.to_string()]).is_err(), "{bad:?}");
         }
+        let long: Vec<String> = (0..10)
+            .map(|i| format!("/{}{i}", "x".repeat(1000)))
+            .collect();
+        assert!(with_roots("", &long).is_err());
         let many: Vec<String> = (0..300).map(|i| format!("/r{i}")).collect();
         assert!(with_roots("", &many).is_err());
     }

@@ -208,7 +208,7 @@ TelamonPreferencesDialog {
             title: qsTr("Searching")
             TelamonFormEntry {
                 label: qsTr("Use patterns by default")
-                help: qsTr("Treat the words typed in the search and filter fields as regular expressions, like .*\\.png$.")
+                help: qsTr("New tabs and panes treat the words typed in the search and filter fields as regular expressions, like .*\\.png$.")
                 TelamonSwitch {
                     checked: SettingsLogic.usePattern
                     onToggled: SettingsLogic.usePattern = checked
@@ -249,16 +249,25 @@ TelamonPreferencesDialog {
                 }
                 TelamonFormEntry {
                     label: qsTr("Add a folder")
-                    help: qsTr("Choose a folder to add to the index.")
+                    help: qsTr("Choose a folder, or type its path, then press Add.")
                     errorText: dlg.indexProblem
-                    TelamonFolderField {
-                        id: addFolder
-                        placeholderText: qsTr("Choose a folder")
-                        onEdited: {
-                            if (path.length > 0) {
-                                dlg.indexProblem = SettingsLogic.addIndexFolder(path);
+                    RowLayout {
+                        spacing: TelamonStyle.spacingLarge
+                        TelamonFolderField {
+                            id: addFolder
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("Choose a folder")
+                            Accessible.name: qsTr("Folder to add")
+                            onEdited: dlg.indexProblem = ""
+                        }
+                        TelamonButton {
+                            text: qsTr("Add")
+                            symbol: Symbols.Add
+                            enabled: addFolder.path.length > 0
+                            onClicked: {
+                                dlg.indexProblem = SettingsLogic.addIndexFolder(addFolder.path);
                                 if (dlg.indexProblem.length === 0) {
-                                    path = "";
+                                    addFolder.path = "";
                                 }
                             }
                         }

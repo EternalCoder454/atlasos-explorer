@@ -444,10 +444,15 @@ private:
     void scheduleGit();
     void runGit();
     void applyGit(quint64 serial, uint32_t status, const QByteArray &text);
+    void gitFinished(quint64 serial, uint32_t status, const QByteArray &text);
     void forgetGit();
     bool m_gitOn = false;
     QHash<QString, int> m_gitMap;
-    bool m_gitAll = false;
+    // What an item not listed shows: 0 nothing, 2 new (an untracked folder), 3 ignored.
+    int m_gitAll = 0;
+    // A git is running (one at a time per folder); a change meanwhile asks for one more run after it.
+    bool m_gitBusy = false;
+    bool m_gitAgain = false;
     quint64 m_gitSerial = 0;
     QTimer m_gitTimer;
 

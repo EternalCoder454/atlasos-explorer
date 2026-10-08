@@ -433,7 +433,7 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
     case SnippetRole:
         return e.snippet;
     case GitBadgeRole:
-        return m_gitOn && !m_searching ? m_gitMap.value(e.item.name(), m_gitAll ? 3 : 0) : 0;
+        return m_gitOn && !m_searching ? m_gitMap.value(e.item.name(), m_gitAll) : 0;
     case DimensionsRole:
     case DurationRole:
     case TakenRole:
@@ -2052,7 +2052,7 @@ void FolderModel::setGitBadges(bool on)
     if (on) {
         scheduleGit();
     } else {
-        const bool had = !m_gitMap.isEmpty() || m_gitAll;
+        const bool had = !m_gitMap.isEmpty() || m_gitAll != 0;
         forgetGit();
         if (had && !m_rows.isEmpty()) {
             Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {GitBadgeRole});
@@ -2067,7 +2067,7 @@ void FolderModel::forgetGit()
     ++m_gitSerial;
     m_gitTimer.stop();
     m_gitMap.clear();
-    m_gitAll = false;
+    m_gitAll = 0;
 }
 
 void FolderModel::scheduleGit()
@@ -2087,6 +2087,12 @@ void FolderModel::runGit()
     if (!m_gitOn || m_searching || !m_url.isLocalFile()) {
         return;
     }
+    // One git at a time: a change while it runs asks for one more run when it ends.
+    if (m_gitBusy) {
+        m_gitAgain = true;
+        return;
+    }
+    m_gitBusy = true;
     const quint64 serial = ++m_gitSerial;
     const QByteArray folder = m_url.toLocalFile().toUtf8();
     const QByteArray path = qgetenv("PATH");
@@ -2100,16 +2106,27 @@ void FolderModel::runGit()
     QPointer<FolderModel> self(this);
     pool.start([self, serial, folder, path] {
         uint32_t status = 6;
-        const QByteArray text = rustText([&](uint8_t *out, size_t cap) { return telamon_git_status(rustPtr(folder), size_t(folder.size()), rustPtr(path), size_t(path.size()), 5000, out, cap, &status); }, 4096);
+        // A buffer that holds almost any answer, so git is asked once (a second call would run it again).
+        const QByteArray text = rustText([&](uint8_t *out, size_t cap) { return telamon_git_status(rustPtr(folder), size_t(folder.size()), rustPtr(path), size_t(path.size()), 5000, out, cap, &status); }, 1 << 20);
         if (!self) {
             return;
         }
         QMetaObject::invokeMethod(self.data(), [self, serial, status, text] {
             if (self) {
-                self->applyGit(serial, status, text);
+                self->gitFinished(serial, status, text);
             }
         });
     });
+}
+
+void FolderModel::gitFinished(quint64 serial, uint32_t status, const QByteArray &text)
+{
+    m_gitBusy = false;
+    applyGit(serial, status, text);
+    if (m_gitAgain) {
+        m_gitAgain = false;
+        scheduleGit();
+    }
 }
 
 void FolderModel::applyGit(quint64 serial, uint32_t status, const QByteArray &text)
@@ -2118,10 +2135,13 @@ void FolderModel::applyGit(quint64 serial, uint32_t status, const QByteArray &te
         return;
     }
     QHash<QString, int> map;
-    bool all = false;
+    int all = 0;
     if (status == 0) {
         const QList<QByteArray> lines = text.split('\n');
-        all = !lines.isEmpty() && lines.first() == "all=1";
+        if (!lines.isEmpty() && lines.first().startsWith("all=")) {
+            const int v = lines.first().mid(4).toInt();
+            all = (v == 2 || v == 3) ? v : 0;
+        }
         for (qsizetype i = 1; i < lines.size(); ++i) {
             const qsizetype tab = lines.at(i).indexOf('\t');
             if (tab < 1) {

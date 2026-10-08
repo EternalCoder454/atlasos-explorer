@@ -48,6 +48,8 @@ public:
     bool known() const { return m_state != Unknown && m_state != Unavailable; }
     // How many items the index holds (0 until the service has said).
     quint64 entries() const { return m_entries; }
+    // Whether the service is running now (asking never starts it).
+    bool running() const;
     // Rescan now (Settings > Search, Rebuild the Index); starts the service if it isn't running.
     void rebuild();
     // The folders to index were changed in indexrc: the service reads it again

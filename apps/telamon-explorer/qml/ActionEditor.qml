@@ -85,7 +85,7 @@ TelamonDialog {
         TelamonTextField {
             id: argsField
             maximumLength: ActionsLogic.maxArgsLength
-            placeholderText: qsTr("-resize 50% %f")
+            placeholderText: qsTr("-resize 50%% %f")
             onAccepted: dlg.save()
         }
     }

@@ -122,7 +122,10 @@ void SettingsLogic::refreshIndex()
 {
     readFolders();
     Q_EMIT indexChanged();
-    SearchService::instance()->refreshStatus(this, [this] { Q_EMIT indexChanged(); });
+    // Opening Settings must not start the service (it scans the home folder when it starts): ask only if it runs.
+    if (SearchService::instance()->running()) {
+        SearchService::instance()->refreshStatus(this, [this] { Q_EMIT indexChanged(); });
+    }
 }
 
 void SettingsLogic::rebuildIndex()
@@ -135,6 +138,10 @@ void SettingsLogic::rebuildIndex()
 
 QString SettingsLogic::saveFolders(const QStringList &folders)
 {
+    // A file the service can't read as it is (too big) is not written over: its other lines would be lost.
+    if (QFileInfo(indexrcPath()).size() > MaxIndexrc) {
+        return tr("The settings file of the index is too big to change here.");
+    }
     const QByteArray text = readIndexrc();
     const QByteArray roots = folders.join(QLatin1Char('\n')).toUtf8();
     uint32_t status = 1;

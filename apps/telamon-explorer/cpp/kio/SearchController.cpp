@@ -150,6 +150,12 @@ void SearchService::apply(const QVariantMap &status)
     }
 }
 
+bool SearchService::running() const
+{
+    const QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
+    return bus && bus->isServiceRegistered(ServiceName);
+}
+
 void SearchService::rebuild()
 {
     const QDBusMessage msg = QDBusMessage::createMethodCall(ServiceName, ObjectPath, Interface, QStringLiteral("Refresh"));

@@ -236,7 +236,9 @@ pub unsafe extern "C" fn telamon_actions_resolve(
 /// `url`, tab-separated, each percent-encoded (an empty path: not on this
 /// computer). The text starts with a line, 0 when the action can run (then
 /// one line for each run, its arguments tab-separated and percent-encoded) or
-/// 1 (then a line with the reason). Returns the length of the text.
+/// 1 (then a line with the reason). Each run's line is `r` and then a tab
+/// before each argument (so no arguments is `r`, and one empty argument `r`
+/// and a tab). Returns the length of the text.
 ///
 /// # Safety
 /// Each pointer pair covers its length (or is null with 0); `out` points to
@@ -272,8 +274,11 @@ pub unsafe extern "C" fn telamon_actions_expand(
         Ok(runs) => {
             let mut s = String::from("0\n");
             for run in runs {
-                let enc: Vec<String> = run.iter().map(|a| pct(a.as_bytes())).collect();
-                s.push_str(&enc.join("\t"));
+                s.push('r');
+                for a in &run {
+                    s.push('\t');
+                    s.push_str(&pct(a.as_bytes()));
+                }
                 s.push('\n');
             }
             s
@@ -424,7 +429,7 @@ pub unsafe extern "C" fn telamon_menu_state_hiding(
 // ---- Git status badges ----
 
 /// The badges of the items of `folder` (a path on this computer). `*status`:
-/// 0 an answer (the text: a first line `all=1` or `all=0`, then a line for
+/// 0 an answer (the text: a first line `all=0`, `all=2` (the folder is untracked: new) or `all=3` (ignored), then a line for
 /// each marked item, `code` and `name` tab-separated, the name
 /// percent-encoded; code 1 modified, 2 new, 3 ignored, 4 conflict); 1 not in
 /// a git work tree; 2 the repository is another user's; 3 its configuration
@@ -451,7 +456,15 @@ pub unsafe extern "C" fn telamon_git_status(
     let timeout = Duration::from_millis(u64::from(timeout_ms.clamp(100, 60_000)));
     let (st, text) = match gitstatus::status(Path::new(&folder), uid, &path, timeout) {
         Ok(b) => {
-            let mut s = format!("all={}\n", u8::from(b.all_ignored));
+            // all=3: everything not listed is ignored; all=2: new; all=0: nothing is.
+            let all = if b.all_ignored {
+                3
+            } else if b.all_new {
+                2
+            } else {
+                0
+            };
+            let mut s = format!("all={all}\n");
             for (name, badge) in &b.items {
                 let _ = writeln!(s, "{}\t{}", badge.code(), pct(name));
             }
@@ -571,7 +584,11 @@ mod tests {
         let mut lines = t.lines();
         assert_eq!(lines.next(), Some("0"));
         let runs: Vec<Vec<Vec<u8>>> = lines
-            .map(|l| l.split('\t').map(|a| unpct(a).unwrap()).collect())
+            .map(|l| {
+                let mut f = l.split('\t');
+                assert_eq!(f.next(), Some("r"));
+                f.map(|a| unpct(a).unwrap()).collect()
+            })
             .collect();
         assert_eq!(runs.len(), 2);
         assert_eq!(
@@ -584,6 +601,17 @@ mod tests {
             ]
         );
         assert_eq!(runs[1][1], b"/tmp/-rf\nx".to_vec());
+        // One empty argument is not no argument.
+        let t = call(|o, c| unsafe {
+            let (a, i) = ("''", "x\ty\n");
+            telamon_actions_expand(a.as_ptr(), a.len(), i.as_ptr(), i.len(), o, c)
+        });
+        assert_eq!(t, "0\nr\t\n");
+        let t = call(|o, c| unsafe {
+            let (a, i) = ("", "");
+            telamon_actions_expand(a.as_ptr(), a.len(), i.as_ptr(), i.len(), o, c)
+        });
+        assert_eq!(t, "0\nr\n");
         // A refusal says why.
         let none = "";
         let t = call(|o, c| unsafe {
