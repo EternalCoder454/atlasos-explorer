@@ -112,6 +112,7 @@ TelamonWindow {
             }
         }
         onOpenLocationRequested: files => root.openFileLocation(files)
+        onNamePromptRequested: request => namePrompt.ask(request)
         onDeleteRequested: (urls, text) => {
             deleteDialog.urls = urls;
             deleteDialog.text = text;
@@ -198,6 +199,30 @@ TelamonWindow {
     }
     ProblemDialog {
         queue: fileActions.operations
+    }
+
+    // The name of a rename, new folder or new file.
+    NamePrompt {
+        id: namePrompt
+        actions: fileActions
+    }
+
+    // The context menus of the items and of the folder's empty space.
+    FileMenu {
+        id: fileMenu
+        actions: fileActions
+    }
+    BackgroundMenu {
+        id: backgroundMenu
+        actions: fileActions
+        win: root
+    }
+    function showContextMenu(urls, anchor, x, y) {
+        if (urls.length > 0) {
+            fileMenu.openFor(urls, anchor, x, y);
+        } else {
+            backgroundMenu.openFor(anchor, x, y);
+        }
     }
 
     Timer {
@@ -616,6 +641,7 @@ TelamonWindow {
         p.openInNewTab.connect(u => root.openInNewTab(u));
         p.openLocation.connect(urls => root.openFileLocation(urls));
         p.quickLookRequested.connect(() => root.showQuickLook(p));
+        p.contextMenuRequested.connect((urls, x, y) => root.showContextMenu(urls, p.view, x, y));
         p.navigated.connect(() => root.freshStart = false);
         p.titleChanged.connect(() => root.syncTab(p));
         p.toolTipChanged.connect(() => root.syncTab(p));
@@ -898,6 +924,7 @@ TelamonWindow {
     // address is being typed.
     Shortcut { sequence: "Ctrl+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copy(root.selected, false) }
     Shortcut { sequence: "Ctrl+X"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.copy(root.selected, true) }
+    Shortcut { sequence: "Ctrl+Shift+C"; enabled: !root.typing && root.hasSelection; onActivated: fileActions.copyPath(root.selected) }
     Shortcut { sequence: "Ctrl+V"; enabled: !root.typing && root.canWrite && !root.searching; onActivated: fileActions.paste() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !root.typing; onActivated: fileActions.redo() }
@@ -929,48 +956,14 @@ TelamonWindow {
     Shortcut { sequence: "Alt+8"; onActivated: root.jumpToTab(8) }
     Shortcut { sequence: "Alt+9"; onActivated: root.jumpToTab(9) }
 
-    ContextMenu {
+    ViewMenu {
         id: viewMenu
-        ContextMenuItem { text: qsTr("Details"); radio: true; checkable: true; checked: root.view?.viewMode === "details"; onTriggered: root.view.viewMode = "details" }
-        ContextMenuItem { text: qsTr("Icons"); radio: true; checkable: true; checked: root.view?.viewMode === "icons"; onTriggered: root.view.viewMode = "icons" }
-        ContextMenuItem { text: qsTr("Compact"); radio: true; checkable: true; checked: root.view?.viewMode === "compact"; onTriggered: root.view.viewMode = "compact" }
-        ContextMenuSeparator {}
-        ContextMenuItem { text: qsTr("Preview Pane"); shortcutText: "Alt+P"; checkable: true; checked: PreviewLogic.paneShown; onTriggered: PreviewLogic.paneShown = !PreviewLogic.paneShown }
-        ContextMenuSeparator {}
-        ContextMenuItem { text: qsTr("Zoom In"); shortcutText: "Ctrl++"; onTriggered: root.zoom(1) }
-        ContextMenuItem { text: qsTr("Zoom Out"); shortcutText: "Ctrl+-"; onTriggered: root.zoom(-1) }
-        ContextMenuItem { text: qsTr("Reset Zoom"); shortcutText: "Ctrl+0"; onTriggered: root.zoom(0) }
+        win: root
     }
 
-    ContextMenu {
+    SortMenu {
         id: sortMenu
-        ContextMenuItem {
-            text: qsTr("Best Match")
-            visible: root.searching
-            radio: true
-            checkable: true
-            checked: root.view?.folder.sortColumn === FolderModel.Relevance
-            onTriggered: root.view.folder.sortColumn = FolderModel.Relevance
-        }
-        Repeater {
-            model: [
-                { text: qsTr("Name"), column: FolderModel.Name },
-                { text: qsTr("Size"), column: FolderModel.Size },
-                { text: qsTr("Type"), column: FolderModel.Type },
-                { text: qsTr("Modified"), column: FolderModel.Modified }
-            ]
-            ContextMenuItem {
-                required property var modelData
-                text: modelData.text
-                radio: true
-                checkable: true
-                checked: root.view?.folder.sortColumn === modelData.column
-                onTriggered: root.view.folder.sortColumn = modelData.column
-            }
-        }
-        ContextMenuSeparator {}
-        ContextMenuItem { text: qsTr("Ascending"); enabled: !root.searching || root.view?.folder.sortColumn !== FolderModel.Relevance; radio: true; checkable: true; checked: !root.view?.folder.sortDescending; onTriggered: root.view.folder.sortDescending = false }
-        ContextMenuItem { text: qsTr("Descending"); enabled: !root.searching || root.view?.folder.sortColumn !== FolderModel.Relevance; radio: true; checkable: true; checked: root.view?.folder.sortDescending ?? false; onTriggered: root.view.folder.sortDescending = true }
+        win: root
     }
 
     // The places Back or Forward would go to: picking one jumps there.

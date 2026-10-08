@@ -37,7 +37,9 @@ FocusScope {
     }
 
     signal openRequested(var urls)
-    signal contextMenuRequested(var urls)
+    // The items to show a menu for (none: the background) and the point in
+    // this view's coordinates.
+    signal contextMenuRequested(var urls, real x, real y)
     signal navigateRequested(url target)
     // A folder to open in a new background tab (middle click, Ctrl+Enter).
     signal openInNewTabRequested(url target)
@@ -121,14 +123,32 @@ FocusScope {
         return true;
     }
 
-    // A right click on a row: the menu is for the selection, which first
-    // becomes this row when it wasn't part of it.
-    function rowMenu(row) {
+    // A right click on a row at (x, y) of this view: the menu is for the
+    // selection, which first becomes this row when it wasn't part of it.
+    function rowMenu(row, x, y) {
         forceActiveFocus();
         if (!isSelected(row, selRevision)) {
             chooseRow(row, 0, false);
         }
-        contextMenuRequested(selectedUrls);
+        contextMenuRequested(selectedUrls, x, y);
+    }
+
+    // The Menu key or Shift+F10: the menu of the selection at the row the
+    // keyboard is on (the item with the cursor when nothing is selected), else
+    // of the folder's background near the top left.
+    function keyboardMenu() {
+        if (selectedRows().length === 0 && currentRow >= 0 && currentRow < folderModel.count) {
+            chooseRow(currentRow, 0, false);
+        }
+        const rows = selectedRows();
+        if (rows.length === 0) {
+            contextMenuRequested([], Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 3);
+            return;
+        }
+        const row = rows.indexOf(currentRow) >= 0 ? currentRow : Math.min(...rows);
+        activeView.reveal(row);
+        const r = activeView.rowRect(row);
+        contextMenuRequested(selectedUrls, r.x + Math.min(r.width / 2, Kirigami.Units.gridUnit * 5), r.y + r.height);
     }
 
     function beginDrag() {
@@ -281,6 +301,17 @@ FocusScope {
             renameRequested();
             event.accepted = true;
             return;
+        case Qt.Key_Menu:
+            keyboardMenu();
+            event.accepted = true;
+            return;
+        case Qt.Key_F10:
+            if (mods & Qt.ShiftModifier) {
+                keyboardMenu();
+                event.accepted = true;
+                return;
+            }
+            break;
         case Qt.Key_Escape:
             if (folderModel.searching) {
                 searchCloseRequested();
@@ -332,7 +363,7 @@ FocusScope {
             }
             top.forceActiveFocus();
             sel.clearSelection();
-            top.contextMenuRequested([]);
+            top.contextMenuRequested([], point.position.x, point.position.y);
         }
     }
 

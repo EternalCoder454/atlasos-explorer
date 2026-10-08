@@ -27,6 +27,23 @@ Item {
         return grid.indexAt(x + grid.contentX, y + grid.contentY);
     }
 
+    // Where a row is, in the folder view's coordinates (the row may be off screen).
+    function rowRect(row) {
+        const item = grid.itemAtIndex(row);
+        if (item) {
+            const at = item.mapToItem(root.fv, 0, 0);
+            return Qt.rect(at.x, at.y, cellW, cellH);
+        }
+        // Not made yet: worked out from where the grid is.
+        const along = compact ? perColumn : perRow;
+        const line = Math.floor(row / along);
+        const place = row % along;
+        const column = compact ? line : place;
+        const rowInColumn = compact ? place : line;
+        const at = grid.mapToItem(root.fv, column * cellW - grid.contentX, rowInColumn * cellH - grid.contentY);
+        return Qt.rect(at.x, at.y, cellW, cellH);
+    }
+
     function neighbor(row, dir) {
         const page = compact ? perColumn * Math.max(1, Math.floor(grid.width / cellW) - 1) : perRow * Math.max(1, perColumn - 1);
         switch (dir) {
@@ -127,7 +144,8 @@ Item {
                 property bool dragged: false
                 onPressed: mouseEvent => {
                     if (mouseEvent.button === Qt.RightButton) {
-                        root.fv.rowMenu(cell.index);
+                        const at = mouse.mapToItem(root.fv, mouseEvent.x, mouseEvent.y);
+                        root.fv.rowMenu(cell.index, at.x, at.y);
                         return;
                     }
                     if (mouseEvent.button === Qt.MiddleButton) {

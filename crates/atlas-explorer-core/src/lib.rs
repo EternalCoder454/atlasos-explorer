@@ -9,6 +9,7 @@ pub mod history;
 pub mod launch;
 pub mod legacy;
 pub mod location;
+pub mod menu;
 pub mod names;
 pub mod optext;
 pub mod places;

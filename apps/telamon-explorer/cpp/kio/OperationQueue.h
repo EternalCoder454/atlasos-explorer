@@ -105,6 +105,12 @@ public:
     void deleteForGood(const QList<QUrl> &urls);
     void rename(const QUrl &url, const QString &newName);
     void makeFolder(const QUrl &folder, const QString &name);
+    // A new file named `name` in `folder`: empty, or a copy of `templateFile`.
+    // Undone like a copy (the new file goes to the Trash).
+    void makeFile(const QUrl &folder, const QString &name, const QUrl &templateFile = {});
+    // Lists the items (all in one folder on this computer) in that folder's
+    // `.hidden` file, or takes them out of it. Not undoable.
+    void setHidden(const QList<QUrl> &urls, bool hide, std::function<void(bool)> done = {});
     // Pastes text or an image from the clipboard as a file (KIO asks for the name).
     void pasteData(const QMimeData *data, const QUrl &destination);
     void emptyTrash();

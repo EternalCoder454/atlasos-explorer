@@ -46,6 +46,9 @@ FocusScope {
     signal openLocation(var urls)
     // Space in the view: Quick Look for the selected file.
     signal quickLookRequested
+    // A right click or the Menu key: the items (none: the folder's background)
+    // and where, in the view's coordinates.
+    signal contextMenuRequested(var urls, real x, real y)
 
     function load() {
         if (loaded) {
@@ -194,6 +197,6 @@ FocusScope {
                 page.actions.rename(view.selectedUrls[0]);
             }
         }
-        onContextMenuRequested: urls => page.actions.contextMenu(urls)
+        onContextMenuRequested: (urls, x, y) => page.contextMenuRequested(urls, x, y)
     }
 }

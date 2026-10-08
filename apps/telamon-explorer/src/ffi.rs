@@ -4,7 +4,7 @@
 
 use atlas_explorer_core::display_name;
 use atlas_explorer_core::sort::{Column, SortRow, name_key, sort_permutation};
-use atlas_explorer_core::{address, location, names, places, tabs};
+use atlas_explorer_core::{address, location, menu, names, places, tabs};
 
 /// One row for `telamon_sort_permutation`; the C++ twin is in FolderModel.cpp.
 #[repr(C)]
@@ -514,6 +514,156 @@ pub unsafe extern "C" fn telamon_places_text(
     unsafe { put(text.as_bytes(), out, cap) }
 }
 
+/// What a context menu offers. `kind` 0 is the menu of `count` items (`folders`
+/// of them folders), 1 the menu of the background; `flags` are the `menu::F_*`
+/// bits. The text has one line per entry: its key and `+` (enabled) or `-`
+/// (disabled); entries that don't apply are left out. Returns the length of
+/// the text; more than `cap` means it did not fit (nothing was written).
+///
+/// # Safety
+/// `out` points to `cap` writable bytes (or is null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_menu_state(
+    kind: u32,
+    count: usize,
+    folders: usize,
+    flags: u32,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    let entries = if kind == 0 {
+        menu::item_menu(count, folders, flags)
+    } else {
+        menu::background_menu(flags)
+    };
+    let text = menu::state_text(&entries);
+    // SAFETY: `out` as promised above.
+    unsafe { put(text.as_bytes(), out, cap) }
+}
+
+/// Whether Paste in the menu of items pastes into the one folder selected.
+#[unsafe(no_mangle)]
+pub extern "C" fn telamon_menu_paste_into_folder(count: usize, folders: usize) -> bool {
+    menu::paste_into_selected_folder(count, folders)
+}
+
+/// Texts of "New". `which`: 0 the label of the template named `a`, 1 the name
+/// proposed for a file made from template `a`, 2 the templates to list out of
+/// the file names in `a` (separated by NUL), in order (separated by NUL),
+/// 3 the proposed name of a new text file, 4 the proposed name of a new
+/// folder, 5 the desktop file IDs of Telamon Archive (one per line).
+///
+/// # Safety
+/// `a` points to `a_len` readable bytes (or is null with length 0); `out`
+/// points to `cap` writable bytes (or is null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_menu_text(
+    which: u32,
+    a: *const u8,
+    a_len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: forwarded from this function's contract.
+    let a = String::from_utf8_lossy(unsafe { bytes(a, a_len) }).into_owned();
+    let text = match which {
+        0 => menu::template_label(&a),
+        1 => menu::new_file_name(&a),
+        2 => {
+            let names: Vec<String> = a
+                .split('\0')
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .collect();
+            menu::pick_templates(&names).join("\0")
+        }
+        3 => menu::NEW_TEXT_FILE.to_string(),
+        4 => menu::NEW_FOLDER.to_string(),
+        5 => menu::ARCHIVE_DESKTOP_IDS.join("\n"),
+        _ => String::new(),
+    };
+    // SAFETY: `out` as promised above.
+    unsafe { put(text.as_bytes(), out, cap) }
+}
+
+/// The first free name out of `wanted`, "wanted (2)"...: `exists(ctx, name,
+/// len)` says whether a name is taken. The name is written to `out`; the
+/// return value is its length (more than `cap`: it did not fit).
+///
+/// # Safety
+/// `wanted` points to `wanted_len` readable bytes (or is null with length 0);
+/// `exists` is a valid function that can be called with `ctx` and a name; `out`
+/// points to `cap` writable bytes (or is null).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_menu_free_name(
+    wanted: *const u8,
+    wanted_len: usize,
+    exists: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const u8, usize) -> bool>,
+    ctx: *mut std::ffi::c_void,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    // SAFETY: forwarded from this function's contract.
+    let wanted = String::from_utf8_lossy(unsafe { bytes(wanted, wanted_len) }).into_owned();
+    let free = match exists {
+        // SAFETY: the callback is valid for `ctx` and any name, as promised.
+        Some(f) => menu::free_name(&wanted, |n| unsafe { f(ctx, n.as_ptr(), n.len()) }),
+        None => wanted,
+    };
+    // SAFETY: `out` as promised above.
+    unsafe { put(free.as_bytes(), out, cap) }
+}
+
+/// Adds (`add`) or removes the NUL-separated `names` in the text of a
+/// `.hidden` file. Returns 0 with the new text in `out` (its length in
+/// `*text_len`), 1 when nothing changes, 2 when refused with the reason in
+/// plain words in `out`.
+///
+/// # Safety
+/// Each pointer pair covers its length (or is null with length 0); `out`
+/// points to `cap` writable bytes (or is null); `text_len` is writable.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_menu_hidden(
+    add: bool,
+    content: *const u8,
+    content_len: usize,
+    names: *const u8,
+    names_len: usize,
+    out: *mut u8,
+    cap: usize,
+    text_len: *mut usize,
+) -> i32 {
+    if text_len.is_null() {
+        return 2;
+    }
+    // SAFETY: forwarded from this function's contract.
+    let (content, names) = unsafe {
+        (
+            String::from_utf8_lossy(bytes(content, content_len)).into_owned(),
+            String::from_utf8_lossy(bytes(names, names_len)).into_owned(),
+        )
+    };
+    let names: Vec<String> = names
+        .split('\0')
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .collect();
+    let result = if add {
+        menu::hidden_add(&content, &names)
+    } else {
+        menu::hidden_remove(&content, &names)
+    };
+    let (code, text) = match result {
+        Ok(Some(t)) => (0, t),
+        Ok(None) => (1, String::new()),
+        Err(e) => (2, e.describe().to_string()),
+    };
+    // SAFETY: `out` and `text_len` as promised above.
+    unsafe { *text_len = put(text.as_bytes(), out, cap) };
+    code
+}
+
 /// The disk usage percentage at which a drive is shown as nearly full.
 #[unsafe(no_mangle)]
 pub extern "C" fn telamon_places_nearly_full() -> i32 {
@@ -1011,5 +1161,142 @@ mod tests {
             )
         };
         assert_eq!(n, 0);
+    }
+
+    fn text_of(f: impl Fn(*mut u8, usize) -> usize) -> String {
+        let mut buf = vec![0u8; 16];
+        let n = f(buf.as_mut_ptr(), buf.len());
+        if n > buf.len() {
+            buf = vec![0u8; n];
+            assert_eq!(f(buf.as_mut_ptr(), buf.len()), n);
+        }
+        String::from_utf8(buf[..n].to_vec()).unwrap()
+    }
+
+    #[test]
+    fn menu_state_reports_through_the_abi() {
+        // Items: a file in a writable folder on this computer.
+        let flags = menu::F_WRITABLE | menu::F_LOCAL | menu::F_TERMINAL | menu::F_HIDEABLE;
+        let t = text_of(|o, c| unsafe { telamon_menu_state(0, 1, 0, flags, o, c) });
+        assert!(t.lines().any(|l| l == "open+"), "{t}");
+        assert!(t.lines().any(|l| l == "rename+"), "{t}");
+        assert!(t.lines().any(|l| l == "paste-"), "{t}");
+        assert!(t.lines().any(|l| l == "openWith-"), "{t}");
+        // The background.
+        let t = text_of(|o, c| unsafe { telamon_menu_state(1, 0, 0, menu::F_WRITABLE, o, c) });
+        assert!(t.lines().any(|l| l == "new+"), "{t}");
+        assert!(t.lines().any(|l| l == "undo-"), "{t}");
+        // A short buffer reports the size and writes nothing.
+        let mut one = [0u8; 1];
+        let n = unsafe { telamon_menu_state(1, 0, 0, menu::F_WRITABLE, one.as_mut_ptr(), 1) };
+        assert!(n > 1 && one[0] == 0);
+        assert!(telamon_menu_paste_into_folder(1, 1));
+        assert!(!telamon_menu_paste_into_folder(2, 2));
+    }
+
+    #[test]
+    fn menu_texts_and_hidden_report_through_the_abi() {
+        let t = text_of(|o, c| unsafe { telamon_menu_text(0, b"Sheet.ods".as_ptr(), 9, o, c) });
+        assert_eq!(t, "Sheet");
+        let t = text_of(|o, c| unsafe { telamon_menu_text(1, b"Sheet.ods".as_ptr(), 9, o, c) });
+        assert_eq!(t, "New Sheet.ods");
+        let list = b"b.txt\0.hidden\0A.odt\0x~";
+        let t = text_of(|o, c| unsafe { telamon_menu_text(2, list.as_ptr(), list.len(), o, c) });
+        assert_eq!(t, "A.odt\0b.txt");
+        assert_eq!(
+            text_of(|o, c| unsafe { telamon_menu_text(3, std::ptr::null(), 0, o, c) }),
+            "New Text File.txt"
+        );
+        assert!(
+            text_of(|o, c| unsafe { telamon_menu_text(5, std::ptr::null(), 0, o, c) })
+                .contains("archive.desktop")
+        );
+
+        let mut buf = [0u8; 64];
+        let mut n = 0usize;
+        let names = b"a\0b\0";
+        let rc = unsafe {
+            telamon_menu_hidden(
+                true,
+                b"x\n".as_ptr(),
+                2,
+                names.as_ptr(),
+                names.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut n,
+            )
+        };
+        assert_eq!((rc, &buf[..n]), (0, &b"x\na\nb\n"[..]));
+        let rc = unsafe {
+            telamon_menu_hidden(
+                true,
+                b"a\nb\n".as_ptr(),
+                4,
+                names.as_ptr(),
+                names.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, 1);
+        let bad = b"a/b\0";
+        let rc = unsafe {
+            telamon_menu_hidden(
+                true,
+                std::ptr::null(),
+                0,
+                bad.as_ptr(),
+                bad.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, 2);
+        assert!(n > 0);
+        let rc = unsafe {
+            telamon_menu_hidden(
+                true,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 2);
+    }
+
+    unsafe extern "C" fn taken_if_new(
+        _ctx: *mut std::ffi::c_void,
+        name: *const u8,
+        len: usize,
+    ) -> bool {
+        // SAFETY: the caller passes `len` readable bytes.
+        let n = unsafe { std::slice::from_raw_parts(name, len) };
+        n == b"New Folder" || n == b"New Folder (2)"
+    }
+
+    #[test]
+    fn free_name_asks_the_callback() {
+        let t = text_of(|o, c| unsafe {
+            telamon_menu_free_name(
+                b"New Folder".as_ptr(),
+                10,
+                Some(taken_if_new),
+                std::ptr::null_mut(),
+                o,
+                c,
+            )
+        });
+        assert_eq!(t, "New Folder (3)");
+        let t = text_of(|o, c| unsafe {
+            telamon_menu_free_name(b"Other".as_ptr(), 5, None, std::ptr::null_mut(), o, c)
+        });
+        assert_eq!(t, "Other");
     }
 }

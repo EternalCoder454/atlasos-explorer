@@ -97,6 +97,13 @@ qt_add_qml_module(telamon-explorer-app
         qml/OperationsButton.qml
         qml/ConflictDialog.qml
         qml/ProblemDialog.qml
+        qml/ActionMenu.qml
+        qml/IconRowItem.qml
+        qml/FileMenu.qml
+        qml/BackgroundMenu.qml
+        qml/ViewMenu.qml
+        qml/SortMenu.qml
+        qml/NamePrompt.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
