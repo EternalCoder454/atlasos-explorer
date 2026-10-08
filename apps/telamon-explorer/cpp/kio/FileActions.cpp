@@ -1,25 +1,15 @@
 #include "FileActions.h"
 
+#include "OpsBridge.h"
 #include "PlacesLogic.h"
 #include "RustBridge.h"
 
 #include <KConfigGroup>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
-#include <KIO/CopyJob>
-#include <KIO/DeleteJob>
-#include <KIO/DropJob>
-#include <KIO/FileUndoManager>
-#include <KIO/Job>
-#include <KIO/JobTracker>
 #include <KIO/JobUiDelegateFactory>
-#include <KIO/MkdirJob>
 #include <KIO/OpenUrlJob>
 #include <KIO/Paste>
-#include <KIO/PasteJob>
-#include <KIO/SimpleJob>
-#include <KIO/WidgetsAskUserActionHandler>
-#include <KJobTrackerInterface>
 #include <KJobWindows>
 #include <KPropertiesDialog>
 #include <KSharedConfig>
@@ -67,9 +57,30 @@ bool dropIsPointless(const QList<QUrl> &urls, const QUrl &destination)
 
 FileActions::FileActions(QObject *parent)
     : QObject(parent)
+    , m_ops(new OperationQueue(this))
 {
-    m_ask = new KIO::WidgetsAskUserActionHandler(this);
     connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &FileActions::canPasteChanged);
+    connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &FileActions::clipboardChanged);
+    connect(m_ops, &OperationQueue::jobFinished, this, &FileActions::jobFinished);
+    clipboardChanged();
+}
+
+// The items cut (here or in another app) are dimmed in every folder until they
+// are pasted or the clipboard holds something else.
+void FileActions::clipboardChanged()
+{
+    QSet<QString> keys;
+    const QMimeData *md = QApplication::clipboard()->mimeData();
+    if (md && md->hasUrls() && KIO::isClipboardDataCut(md)) {
+        for (const QUrl &u : KUrlMimeData::urlsFromMimeData(md)) {
+            keys.insert(u.adjusted(QUrl::StripTrailingSlash).toString(QUrl::FullyEncoded));
+        }
+    }
+    FolderModel::setCutKeys(keys);
+    if (m_cutCount != int(keys.size())) {
+        m_cutCount = int(keys.size());
+        Q_EMIT cutChanged();
+    }
 }
 
 void FileActions::setFolder(FolderModel *f)
@@ -92,18 +103,6 @@ bool FileActions::canPaste() const
 {
     const QMimeData *md = QApplication::clipboard()->mimeData();
     return md && (md->hasUrls() || md->hasText() || md->hasImage());
-}
-
-// Every job gets KIO's delegate (conflict and error dialogs), its window, and
-// Plasma's job tracker (progress, pause, cancel).
-void FileActions::setup(KJob *job)
-{
-    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
-    if (m_window) {
-        KJobWindows::setWindow(job, m_window);
-    }
-    KIO::getJobTracker()->registerJob(job);
-    connect(job, &KJob::result, this, &FileActions::jobFinished);
 }
 
 // Dialogs are top-level widgets; this makes them belong to the window.
@@ -154,33 +153,27 @@ void FileActions::paste(const QUrl &destination)
     const QList<QUrl> urls = KUrlMimeData::urlsFromMimeData(md);
     if (!urls.isEmpty()) {
         const bool cut = KIO::isClipboardDataCut(md);
-        KIO::CopyJob *job = cut ? KIO::move(urls, dest) : KIO::copy(urls, dest);
-        setup(job);
-        KIO::FileUndoManager::self()->recordCopyJob(job);
-        if (cut) {
-            // The files are moving: a second paste would find them gone.
-            connect(job, &KJob::result, this, [](KJob *j) {
-                if (!j->error()) {
-                    QApplication::clipboard()->clear();
-                }
-            });
+        if (!cut) {
+            m_ops->transfer(OperationQueue::Copy, urls, dest);
+            return;
         }
+        // Nothing is taken off the clipboard until the move has happened: a
+        // refused or cancelled paste leaves the items waiting.
+        m_ops->transfer(OperationQueue::Move, urls, dest, [urls](bool ok) {
+            const QMimeData *now = QApplication::clipboard()->mimeData();
+            if (ok && now && KIO::isClipboardDataCut(now) && KUrlMimeData::urlsFromMimeData(now) == urls) {
+                QApplication::clipboard()->clear();
+            }
+        });
         return;
     }
     // Text or an image: KIO asks for a file name and writes it.
-    if (KIO::PasteJob *job = KIO::paste(md, dest)) {
-        setup(job);
-    }
+    m_ops->pasteData(md, dest);
 }
 
 void FileActions::trash(const QList<QUrl> &urls)
 {
-    if (urls.isEmpty()) {
-        return;
-    }
-    KIO::Job *job = KIO::trash(urls);
-    setup(job);
-    KIO::FileUndoManager::self()->recordJob(KIO::FileUndoManager::Trash, urls, QUrl(QStringLiteral("trash:/")), job);
+    m_ops->trash(urls);
 }
 
 void FileActions::deleteForGood(const QList<QUrl> &urls)
@@ -188,19 +181,19 @@ void FileActions::deleteForGood(const QList<QUrl> &urls)
     if (urls.isEmpty()) {
         return;
     }
-    // One-shot: the answer comes back through the handler's signal.
-    auto *conn = new QMetaObject::Connection;
-    *conn = connect(m_ask, &KIO::AskUserActionInterface::askUserDeleteResult, this, [this, conn, urls](bool allow, const QList<QUrl> &asked, auto, QWidget *) {
-        if (asked != urls) {
-            return;
-        }
-        disconnect(*conn);
-        delete conn;
-        if (allow) {
-            setup(KIO::del(urls));
-        }
-    });
-    m_ask->askUserDelete(urls, KIO::AskUserActionInterface::Delete, KIO::AskUserActionInterface::ForceConfirmation, nullptr);
+    const QString what = urls.size() == 1 ? tr("\"%1\"").arg(rustDisplayName(urls.first().adjusted(QUrl::StripTrailingSlash).fileName().toUtf8()))
+                                          : tr("these %1 items").arg(urls.size());
+    Q_EMIT deleteRequested(urls, tr("Delete %1 for good? This can't be undone.").arg(what));
+}
+
+void FileActions::confirmDelete(const QList<QUrl> &urls)
+{
+    m_ops->deleteForGood(urls);
+}
+
+void FileActions::emptyTrash()
+{
+    m_ops->emptyTrash();
 }
 
 // Asks for a name and checks it with the core; refusals are shown and asked
@@ -245,11 +238,7 @@ void FileActions::rename(const QUrl &url)
         if (name == url.fileName()) {
             return;
         }
-        const QUrl target = childUrl(url.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash), name);
-        // A move job, not KIO::rename: the undo manager records only copy jobs.
-        KIO::CopyJob *job = KIO::moveAs(url, target, KIO::HideProgressInfo);
-        setup(job);
-        KIO::FileUndoManager::self()->recordJob(KIO::FileUndoManager::Rename, {url}, target, job);
+        m_ops->rename(url, name);
     });
 }
 
@@ -259,21 +248,17 @@ void FileActions::newFolder()
         return;
     }
     const QUrl dir = m_folder->url();
-    askName(tr("New Folder"), tr("Folder name:"), tr("New Folder"), [this, dir](const QString &name) {
-        const QUrl target = childUrl(dir, name);
-        KIO::SimpleJob *job = KIO::mkdir(target);
-        setup(job);
-        KIO::FileUndoManager::self()->recordJob(KIO::FileUndoManager::Mkdir, {}, target, job);
-    });
+    askName(tr("New Folder"), tr("Folder name:"), tr("New Folder"), [this, dir](const QString &name) { m_ops->makeFolder(dir, name); });
 }
 
 void FileActions::undo()
 {
-    // v0.1 uses KIO's undo manager; the core's own record comes later.
-    auto *um = KIO::FileUndoManager::self();
-    if (um->isUndoAvailable()) {
-        um->undo();
-    }
+    m_ops->undo();
+}
+
+void FileActions::redo()
+{
+    m_ops->redo();
 }
 
 void FileActions::showProperties(const QList<QUrl> &urls)
@@ -377,6 +362,11 @@ void FileActions::contextMenu(const QList<QUrl> &urls)
         add(QStringLiteral("folder-new"), tr("New Folder"), [this] { newFolder(); }, here);
         add(QStringLiteral("edit-paste"), tr("Paste"), [this] { paste(); }, here && canPaste());
         menu->addSeparator();
+        // What Undo and Redo would do, by name; "&" is a mnemonic in a menu.
+        auto named = [](const QString &verb, const QString &what) { return what.isEmpty() ? verb : verb + QLatin1Char(' ') + QString(what).replace(QLatin1Char('&'), QStringLiteral("&&")); };
+        add(QStringLiteral("edit-undo"), named(tr("Undo"), m_ops->undoText()), [this] { undo(); }, m_ops->canUndo());
+        add(QStringLiteral("edit-redo"), named(tr("Redo"), m_ops->redoText()), [this] { redo(); }, m_ops->canRedo());
+        menu->addSeparator();
         add(QStringLiteral("utilities-terminal"), tr("Open Terminal Here"), [this] { openTerminal(); });
         if (m_folder) {
             const QUrl here = m_folder->url();
@@ -420,26 +410,32 @@ void FileActions::drop(const QList<QUrl> &urls, const QUrl &destination)
     if (dropIsPointless(urls, destination)) {
         return;
     }
-    // The drop event is rebuilt: Qt Quick's DropArea doesn't hand out its own.
-    // The mime data lives as long as the job's menu does.
-    auto *md = new QMimeData;
-    KUrlMimeData::setUrls(urls, urls, md);
+    // A key held decides; otherwise the user chooses (Move Here, Copy Here, Link Here).
     const Qt::KeyboardModifiers mods = QGuiApplication::queryKeyboardModifiers();
-    auto *event = new QDropEvent(QPointF(), Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, md, Qt::LeftButton, mods);
-    KIO::DropJob *job = KIO::drop(event, destination);
-    if (!job) {
-        delete event;
-        delete md;
+    if (mods.testFlag(Qt::ControlModifier) && mods.testFlag(Qt::ShiftModifier)) {
+        dropWith(urls, destination, QStringLiteral("link"));
+    } else if (mods.testFlag(Qt::ControlModifier)) {
+        dropWith(urls, destination, QStringLiteral("copy"));
+    } else if (mods.testFlag(Qt::ShiftModifier)) {
+        dropWith(urls, destination, QStringLiteral("move"));
+    } else {
+        const QPoint at = m_window ? m_window->mapFromGlobal(QCursor::pos()) : QPoint();
+        Q_EMIT dropMenuRequested(urls, destination, at.x(), at.y());
+    }
+}
+
+void FileActions::dropWith(const QList<QUrl> &urls, const QUrl &destination, const QString &action)
+{
+    if (urls.isEmpty() || destination.isEmpty() || dropIsPointless(urls, destination)) {
         return;
     }
-    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
-    if (m_window) {
-        KJobWindows::setWindow(job, m_window);
+    const auto kind = action == QLatin1String("copy") ? OperationQueue::Copy : (action == QLatin1String("link") ? OperationQueue::Link : OperationQueue::Move);
+    // Files dropped on the Trash are trashed, whatever the key.
+    if (destination.scheme() == QLatin1String("trash")) {
+        m_ops->trash(urls);
+        return;
     }
-    connect(job, &KJob::result, md, [event, md] {
-        delete event;
-        delete md;
-    });
+    m_ops->transfer(kind, urls, destination);
 }
 
 void FileActions::dropTo(const QList<QUrl> &urls, const QUrl &destination, bool copy)
@@ -447,9 +443,7 @@ void FileActions::dropTo(const QList<QUrl> &urls, const QUrl &destination, bool 
     if (urls.isEmpty() || destination.isEmpty() || dropIsPointless(urls, destination)) {
         return;
     }
-    KIO::CopyJob *job = copy ? KIO::copy(urls, destination) : KIO::move(urls, destination);
-    setup(job);
-    KIO::FileUndoManager::self()->recordCopyJob(job);
+    m_ops->transfer(copy ? OperationQueue::Copy : OperationQueue::Move, urls, destination);
 }
 
 bool FileActions::copyKeyHeld() const

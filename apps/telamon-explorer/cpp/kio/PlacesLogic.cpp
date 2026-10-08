@@ -877,21 +877,3 @@ void PlacesLogic::requestEmptyTrash()
         emit self->emptyTrashAsk(count, rustPlacesText(4, size, QString(), quint64(count)));
     });
 }
-
-void PlacesLogic::emptyTrash()
-{
-    KIO::SimpleJob *job = KIO::emptyTrash();
-    QPointer<PlacesLogic> self(this);
-    connect(job, &KJob::result, this, [self, job] {
-        if (!self) {
-            return;
-        }
-        if (job->error()) {
-            emit self->message(tr("Couldn't empty the Trash."));
-        } else {
-            emit self->message(tr("Trash emptied."));
-        }
-        // The lister follows the folder; a reload makes sure of the number.
-        self->m_trash->openUrl(QUrl(QStringLiteral("trash:/")), KCoreDirLister::Reload);
-    });
-}

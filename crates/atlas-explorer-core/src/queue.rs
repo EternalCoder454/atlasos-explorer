@@ -199,6 +199,24 @@ impl Queue {
             .map(|o| o.id)
     }
 
+    /// Takes a finished op out of the list; anything else stays.
+    pub fn dismiss(&mut self, id: OpId) -> bool {
+        match self.ops.iter().position(|o| o.id == id) {
+            Some(i) if self.ops[i].state.is_finished() => {
+                self.ops.remove(i);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Takes every finished op out of the list; returns how many went.
+    pub fn clear_finished(&mut self) -> usize {
+        let before = self.ops.len();
+        self.ops.retain(|o| !o.state.is_finished());
+        before - self.ops.len()
+    }
+
     fn op_mut(&mut self, id: OpId) -> Option<&mut Op> {
         self.ops.iter_mut().find(|o| o.id == id)
     }
@@ -668,6 +686,25 @@ mod tests {
         q.finished(a, t(2));
         let o = q.get(a).unwrap();
         assert_eq!((o.bytes_done, o.items_done), (100, 4));
+    }
+
+    #[test]
+    fn finished_ops_can_be_dismissed_but_running_ones_cannot() {
+        let mut q = Queue::new();
+        let (a, _) = q.add(Kind::Copy, "a", t(0));
+        let (b, _) = q.add(Kind::Copy, "b", t(0));
+        let (c, _) = q.add(Kind::Rename, "c", t(0));
+        q.finished(c, t(1));
+        assert!(!q.dismiss(a));
+        assert!(!q.dismiss(b));
+        assert!(q.dismiss(c));
+        assert!(!q.dismiss(c));
+        q.cancel(b, t(2));
+        q.failed(a, "x", t(2));
+        assert_eq!(q.clear_finished(), 2);
+        assert!(q.ops().is_empty());
+        // The record of the last finished op goes with them.
+        assert_eq!(q.last_done(), None);
     }
 
     #[test]

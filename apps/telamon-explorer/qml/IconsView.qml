@@ -65,6 +65,7 @@ Item {
             required property string name
             required property string iconName
             required property bool isHidden
+            required property bool isCut
             required property string thumbnailSource
             width: root.cellW
             height: root.cellH
@@ -85,7 +86,7 @@ Item {
                 y: root.compact ? (parent.height - height) / 2 : Kirigami.Units.smallSpacing * 2
                 width: root.icon
                 height: root.icon
-                opacity: cell.isHidden ? 0.6 : 1
+                opacity: (cell.isHidden ? 0.6 : 1) * (cell.isCut ? 0.5 : 1)
                 Kirigami.Icon {
                     anchors.fill: parent
                     source: cell.iconName

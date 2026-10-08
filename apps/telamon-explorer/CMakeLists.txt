@@ -94,11 +94,17 @@ qt_add_qml_module(telamon-explorer-app
         qml/PreviewBody.qml
         qml/PreviewPane.qml
         qml/MediaControls.qml
+        qml/OperationsButton.qml
+        qml/ConflictDialog.qml
+        qml/ProblemDialog.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
         cpp/kio/ThumbnailProvider.h cpp/kio/ThumbnailProvider.cpp
         cpp/kio/FileActions.h cpp/kio/FileActions.cpp
+        cpp/kio/OperationQueue.h cpp/kio/OperationQueue.cpp
+        cpp/kio/OperationAsker.h cpp/kio/OperationAsker.cpp
+        cpp/kio/OpsBridge.h
         cpp/kio/TabLogic.h cpp/kio/TabLogic.cpp
         cpp/kio/LocationLogic.h cpp/kio/LocationLogic.cpp
         cpp/kio/PlacesLogic.h cpp/kio/PlacesLogic.cpp

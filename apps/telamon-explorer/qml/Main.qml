@@ -112,6 +112,17 @@ TelamonWindow {
             }
         }
         onOpenLocationRequested: files => root.openFileLocation(files)
+        onDeleteRequested: (urls, text) => {
+            deleteDialog.urls = urls;
+            deleteDialog.text = text;
+            deleteDialog.open();
+        }
+        // A drop with no key held asks what to do with the files.
+        onDropMenuRequested: (urls, destination, x, y) => {
+            dropMenu.urls = urls;
+            dropMenu.destination = destination;
+            Qt.callLater(() => dropMenu.popup(root.contentItem, x, y));
+        }
         // Files in the results were trashed, moved or renamed: drop the ones
         // that are gone now, and look again once the index has caught up.
         onJobFinished: {
@@ -125,6 +136,70 @@ TelamonWindow {
             }
         }
     }
+    // What the operation queue says in a line, and what it refuses.
+    Connections {
+        target: fileActions.operations
+        function onMessage(text) {
+            root.toast(text);
+        }
+        function onRefused(title, text) {
+            refusedDialog.title = title;
+            refusedDialog.text = text;
+            refusedDialog.open();
+        }
+    }
+
+    // Delete for good asks first, and says it can't be undone. Cancel is the default.
+    ConfirmDialog {
+        id: deleteDialog
+        property var urls: []
+        title: qsTr("Delete for Good?")
+        acceptText: qsTr("Delete")
+        rejectText: qsTr("Cancel")
+        destructive: true
+        defaultButton: "reject"
+        focusReject: true
+        onAccepted: fileActions.confirmDelete(urls)
+    }
+
+    // A copy or move that was refused up front, with the reason.
+    ConfirmDialog {
+        id: refusedDialog
+        acceptText: qsTr("OK")
+        showReject: false
+    }
+
+    // Move Here, Copy Here, Link Here for files dropped without a key held.
+    ContextMenu {
+        id: dropMenu
+        property var urls: []
+        property url destination
+        ContextMenuItem {
+            text: qsTr("Move Here")
+            onTriggered: fileActions.dropWith(dropMenu.urls, dropMenu.destination, "move")
+        }
+        ContextMenuItem {
+            text: qsTr("Copy Here")
+            onTriggered: fileActions.dropWith(dropMenu.urls, dropMenu.destination, "copy")
+        }
+        ContextMenuItem {
+            text: qsTr("Link Here")
+            onTriggered: fileActions.dropWith(dropMenu.urls, dropMenu.destination, "link")
+        }
+        ContextMenuSeparator {}
+        ContextMenuItem {
+            text: qsTr("Cancel")
+        }
+    }
+
+    // Name conflicts, and what else a job asks, in the Telamon look.
+    ConflictDialog {
+        queue: fileActions.operations
+    }
+    ProblemDialog {
+        queue: fileActions.operations
+    }
+
     Timer {
         id: searchAgain
         interval: 900
@@ -351,7 +426,7 @@ TelamonWindow {
         destructive: true
         defaultButton: "reject"
         focusReject: true
-        onAccepted: PlacesLogic.emptyTrash()
+        onAccepted: fileActions.emptyTrash()
     }
 
     // ---- Address ----
@@ -825,6 +900,7 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+X"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.copy(root.selected, true) }
     Shortcut { sequence: "Ctrl+V"; enabled: !root.typing && root.canWrite && !root.searching; onActivated: fileActions.paste() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !root.typing; onActivated: fileActions.redo() }
     Shortcut { sequence: "Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.trash(root.selected) }
     Shortcut { sequence: "Shift+Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.deleteForGood(root.selected) }
     Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching && !quickLook.opened; onActivated: fileActions.newFolder() }
@@ -1307,8 +1383,23 @@ TelamonWindow {
                     focusable: true
                     onClicked: fileActions.trash(root.selected)
                 }
+                // Cut, and not pasted yet.
+                Text {
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    visible: fileActions.cutCount > 0
+                    text: fileActions.cutCount === 1 ? qsTr("1 item waiting to move") : qsTr("%1 items waiting to move").arg(fileActions.cutCount)
+                    font.family: TelamonStyle.fontFamily
+                    font.pointSize: TelamonStyle.fontSizeBody
+                    color: TelamonStyle.textMuted
+                    textFormat: Text.PlainText
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: text
+                }
                 Item {
                     Layout.fillWidth: true
+                }
+                OperationsButton {
+                    queue: fileActions.operations
                 }
                 ToolbarButton {
                     symbol: Symbols.ViewList

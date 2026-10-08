@@ -11,6 +11,7 @@
 #include <QItemSelection>
 #include <QMimeDatabase>
 #include <QQmlEngine>
+#include <QSet>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
@@ -59,6 +60,7 @@ public:
         SizeTextRole,
         ModifiedTextRole,
         PathTextRole,
+        IsCutRole,
     };
 
     // One search result: a lossless URL, the name made safe to show, and what
@@ -73,6 +75,11 @@ public:
 
     explicit FolderModel(QObject *parent = nullptr);
     ~FolderModel() override;
+
+    // The items waiting to be moved (Cut, not yet pasted): their rows are
+    // dimmed in every folder shown. Keys are percent-encoded URLs without a
+    // trailing slash.
+    static void setCutKeys(const QSet<QString> &keys);
 
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -200,6 +207,10 @@ private:
     void applySort(SortResult r);
     void updateCounts();
     void recountHidden();
+
+    static QSet<QString> s_cut;
+    static QList<FolderModel *> s_models;
+    bool isCut(const KFileItem &item) const;
 
     KCoreDirLister *m_lister;
     mutable QList<Entry> m_rows;
