@@ -10,6 +10,7 @@ mod image_ffi;
 mod ops_ffi;
 mod preview_ffi;
 mod props_ffi;
+mod saved_ffi;
 mod search_ffi;
 mod trash_ffi;
 mod views_ffi;

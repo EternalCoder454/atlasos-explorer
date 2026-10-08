@@ -84,6 +84,9 @@ FocusScope {
     signal openLocationRequested(var urls)
     // Escape while the rows are search results: end the search.
     signal searchCloseRequested()
+    // Escape while the folder filter is narrowing the items, or Clear Filter
+    // on the empty view: end the filter.
+    signal filterCloseRequested()
     // Space: Quick Look for the selected file.
     signal quickLookRequested()
     // In the columns: go to `target` (a folder) with the items selected there,
@@ -685,6 +688,8 @@ FocusScope {
         case Qt.Key_Escape:
             if (folderModel.searching) {
                 searchCloseRequested();
+            } else if (folderModel.filterActive || folderModel.filterError.length > 0) {
+                filterCloseRequested();
             } else {
                 sel.clearSelection();
             }
@@ -942,9 +947,14 @@ FocusScope {
     TelamonEmptyState {
         anchors.centerIn: parent
         visible: !top.connecting && (folderModel.searching ? (folderModel.count === 0 && !(top.search && top.search.pending)) : (folderModel.errorText.length > 0 || folderModel.count === 0))
+        // The filter holds every item back: the folder is not empty.
+        readonly property bool filteredOut: !folderModel.searching && folderModel.filterActive && folderModel.count === 0 && folderModel.filterTotal > 0
         symbol: {
             if (folderModel.searching) {
                 return folderModel.loading ? Symbols.HourglassEmpty : Symbols.SearchOff;
+            }
+            if (filteredOut) {
+                return Symbols.SearchOff;
             }
             if (folderModel.unreachable) {
                 return Symbols.Lan;
@@ -957,6 +967,9 @@ FocusScope {
                     return top.search.failureTitle;
                 }
                 return folderModel.loading ? qsTr("Searching…") : qsTr("No Results");
+            }
+            if (filteredOut) {
+                return qsTr("Nothing Matches the Filter");
             }
             if (folderModel.unreachable) {
                 return qsTr("Can't Reach the Server");
@@ -976,13 +989,22 @@ FocusScope {
                 }
                 return top.search && top.search.chipLevel === 2 && !top.search.live ? qsTr("Nothing matches so far. The search index is still updating, so results may be missing.") : qsTr("Nothing here matches. Try other words, or another scope or filter.");
             }
+            if (filteredOut) {
+                return qsTr("None of the %1 items here match. Change the filter or clear it.").arg(folderModel.filterTotal);
+            }
             if (folderModel.errorText.length === 0 && folderModel.stopped) {
                 return qsTr("Listing this folder was stopped.");
             }
             return folderModel.errorText;
         }
-        actionText: folderModel.searching ? (top.search && top.search.failureTitle.length > 0 ? qsTr("Try Again") : "") : (folderModel.errorText.length > 0 || folderModel.stopped ? qsTr("Retry") : "")
-        onTriggered: folderModel.refresh()
+        actionText: filteredOut ? qsTr("Clear Filter") : (folderModel.searching ? (top.search && top.search.failureTitle.length > 0 ? qsTr("Try Again") : "") : (folderModel.errorText.length > 0 || folderModel.stopped ? qsTr("Retry") : ""))
+        onTriggered: {
+            if (filteredOut) {
+                top.filterCloseRequested();
+            } else {
+                folderModel.refresh();
+            }
+        }
     }
 
     // A listing from a server under way (or stopped half way): Stop, or Retry.

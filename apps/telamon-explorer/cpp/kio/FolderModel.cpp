@@ -189,6 +189,9 @@ FolderModel::FolderModel(QObject *parent)
 FolderModel::~FolderModel()
 {
     s_models.removeAll(this);
+    if (m_filter) {
+        telamon_namefilter_free(m_filter);
+    }
     m_lister->disconnect(this);
     m_pool.clear();
     m_pool.waitForDone();
@@ -222,6 +225,7 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {DimensionsRole, "dimensionsText"},
         {DurationRole, "durationText"},
         {TakenRole, "takenText"},
+        {SnippetRole, "snippetText"},
     };
 }
 
@@ -421,6 +425,8 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         }
         return shown.join(QStringLiteral(", "));
     }
+    case SnippetRole:
+        return e.snippet;
     case DimensionsRole:
     case DurationRole:
     case TakenRole:
@@ -643,6 +649,9 @@ void FolderModel::setWantMeta(bool on)
                 e.metaState = 0;
             }
         }
+        for (Entry &e : m_held) {
+            e.metaState = e.metaState == 1 ? 0 : e.metaState;
+        }
         if (!m_rows.isEmpty()) {
             Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {DimensionsRole, DurationRole, TakenRole});
         }
@@ -652,6 +661,9 @@ void FolderModel::setWantMeta(bool on)
             if (e.metaState == 1) {
                 e.metaState = 0;
             }
+        }
+        for (Entry &e : m_held) {
+            e.metaState = e.metaState == 1 ? 0 : e.metaState;
         }
     }
     Q_EMIT wantMetaChanged();
@@ -685,6 +697,11 @@ void FolderModel::invalidateAttributes(const QList<QUrl> &urls)
                 Q_EMIT m->dataChanged(m->index(i), m->index(i), {TagsRole, TagColoursRole, TagsTextRole});
             }
         }
+        for (Entry &e : m->m_held) {
+            if (wanted.contains(e.item.url().adjusted(QUrl::StripTrailingSlash))) {
+                e.tagState = 0;
+            }
+        }
     }
 }
 
@@ -709,6 +726,12 @@ void FolderModel::open(const QUrl &url, const QString &notice)
     m_url = url;
     if (urlDiffers && !m_collapsed.isEmpty()) {
         m_collapsed.clear();
+    }
+    // The filter is the folder's: another folder starts with none.
+    if (urlDiffers && !m_filterText.isEmpty()) {
+        m_filterText.clear();
+        rebuildFilter();
+        Q_EMIT filterChanged();
     }
     resetRows();
     if (m_notice != notice) {
@@ -770,6 +793,9 @@ void FolderModel::refresh()
     // Tags are not part of what the lister watches: another program may have
     // changed them, so a refresh reads them again.
     for (Entry &e : m_rows) {
+        e.tagState = 0;
+    }
+    for (Entry &e : m_held) {
         e.tagState = 0;
     }
     if (!m_rows.isEmpty()) {
@@ -875,7 +901,13 @@ void FolderModel::onUnreachable()
 
 void FolderModel::resetRows()
 {
+    // Held entries belong to the listing that is being replaced.
+    const bool heldAny = !m_held.isEmpty();
+    m_held.clear();
     if (m_rows.isEmpty()) {
+        if (heldAny) {
+            Q_EMIT countChanged();
+        }
         return;
     }
     ++m_structGen;
@@ -913,7 +945,7 @@ void FolderModel::updateCounts()
 // rows is what is hidden.
 void FolderModel::recountHidden()
 {
-    const int hidden = m_showHidden || m_searching ? 0 : qMax(0, int(m_lister->items(KCoreDirLister::AllItems).size()) - int(m_rows.size()));
+    const int hidden = m_showHidden || m_searching ? 0 : qMax(0, int(m_lister->items(KCoreDirLister::AllItems).size()) - int(m_rows.size()) - int(m_held.size()));
     if (hidden != m_hidden) {
         m_hidden = hidden;
         Q_EMIT hiddenCountChanged();
@@ -931,8 +963,17 @@ void FolderModel::addItems(const KFileItemList &items)
     batch.reserve(items.size());
     int dirs = 0;
     for (const KFileItem &it : items) {
-        batch.append(makeEntry(it));
-        dirs += batch.last().isDir;
+        Entry e = makeEntry(it);
+        if (!keeps(e)) {
+            m_held.append(std::move(e));
+            continue;
+        }
+        dirs += e.isDir;
+        batch.append(std::move(e));
+    }
+    if (batch.isEmpty()) {
+        updateCounts();
+        return;
     }
     const int first = int(m_rows.size());
     beginInsertRows({}, first, first + int(batch.size()) - 1);
@@ -953,6 +994,15 @@ void FolderModel::removeItems(const KFileItemList &items)
         }
         names.insert(it.name(), it.url());
     }
+    // Entries the filter holds back are not rows: they just go.
+    bool heldGone = false;
+    for (int i = int(m_held.size()) - 1; i >= 0; --i) {
+        const auto found = names.constFind(m_held[i].item.name());
+        if (found != names.cend() && *found == m_held[i].item.url()) {
+            m_held.removeAt(i);
+            heldGone = true;
+        }
+    }
     // Rows to remove, found with one pass; removed in ranges from the end.
     QList<int> rows;
     for (int i = 0; i < m_rows.size(); ++i) {
@@ -962,6 +1012,9 @@ void FolderModel::removeItems(const KFileItemList &items)
         }
     }
     if (rows.isEmpty()) {
+        if (heldGone) {
+            updateCounts();
+        }
         return;
     }
     ++m_structGen;
@@ -991,6 +1044,7 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
         names.insert(p.first.name(), p.second);
     }
     bool any = false;
+    QList<int> drop;
     for (int i = 0; i < m_rows.size(); ++i) {
         const auto found = names.constFind(m_rows[i].item.name());
         if (found == names.cend()) {
@@ -1003,11 +1057,73 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
         m_folders += m_rows[i].isDir;
         Q_EMIT dataChanged(index(i), index(i));
         any = true;
+        // A change that makes the name stop matching sends the row to the held ones.
+        if (!keeps(m_rows[i])) {
+            drop.append(i);
+        }
+    }
+    // Held entries are replaced too, and may now match.
+    QList<Entry> freed;
+    for (int i = int(m_held.size()) - 1; i >= 0; --i) {
+        const auto found = names.constFind(m_held[i].item.name());
+        if (found == names.cend()) {
+            continue;
+        }
+        m_held[i] = makeEntry(*found);
+        any = true;
+        if (keeps(m_held[i])) {
+            freed.prepend(std::move(m_held[i]));
+            m_held.removeAt(i);
+        }
+    }
+    if (!drop.isEmpty()) {
+        takeRows(drop, &m_held);
+    }
+    if (!freed.isEmpty()) {
+        int dirs = 0;
+        for (const Entry &e : std::as_const(freed)) {
+            dirs += e.isDir;
+        }
+        const int first = int(m_rows.size());
+        beginInsertRows({}, first, first + int(freed.size()) - 1);
+        m_rows.append(std::move(freed));
+        m_folders += dirs;
+        endInsertRows();
     }
     if (any) {
         ++m_structGen;
         updateCounts();
         scheduleSort();
+    }
+}
+
+// Takes the rows out, in ranges from the end; the entries go to `into` when given.
+void FolderModel::takeRows(const QList<int> &rows, QList<Entry> *into)
+{
+    if (rows.isEmpty()) {
+        return;
+    }
+    ++m_structGen;
+    for (int k = int(rows.size()) - 1; k >= 0;) {
+        int hi = rows[k];
+        int j = k;
+        while (j > 0 && rows[j - 1] == rows[j] - 1) {
+            --j;
+        }
+        const int lo = rows[j];
+        beginRemoveRows({}, lo, hi);
+        for (int r = hi; r >= lo; --r) {
+            m_folders -= m_rows[r].isDir;
+            if (into) {
+                Entry &e = m_rows[r];
+                e.tagState = e.tagState == 1 ? 0 : e.tagState;
+                e.metaState = e.metaState == 1 ? 0 : e.metaState;
+                into->append(std::move(e));
+            }
+            m_rows.removeAt(r);
+        }
+        endRemoveRows();
+        k = j - 1;
     }
 }
 
@@ -1556,6 +1672,124 @@ KFileItem FolderModel::fileItemOf(const QUrl &url) const
     return row >= 0 ? m_rows.at(row).item : KFileItem();
 }
 
+// ---- The folder filter ----
+
+bool FolderModel::keeps(const Entry &e) const
+{
+    if (!m_filter || m_searching) {
+        return true;
+    }
+    const QByteArray name = shownName(e.item).toUtf8();
+    return telamon_namefilter_test(m_filter, reinterpret_cast<const uint8_t *>(name.constData()), size_t(name.size()));
+}
+
+void FolderModel::setFilterText(const QString &text)
+{
+    if (text == m_filterText) {
+        return;
+    }
+    m_filterText = text;
+    rebuildFilter();
+    applyFilter();
+    Q_EMIT filterChanged();
+}
+
+void FolderModel::setFilterPattern(bool on)
+{
+    if (on == m_filterPattern) {
+        return;
+    }
+    m_filterPattern = on;
+    rebuildFilter();
+    applyFilter();
+    Q_EMIT filterChanged();
+}
+
+// The matcher for the text as it is now; an invalid pattern gives none (every
+// item stays) and an error line.
+void FolderModel::rebuildFilter()
+{
+    if (m_filter) {
+        telamon_namefilter_free(m_filter);
+        m_filter = nullptr;
+    }
+    m_filterError.clear();
+    const QByteArray text = m_filterText.toUtf8();
+    QByteArray err(256, 0);
+    size_t errLen = 0;
+    m_filter = telamon_namefilter_new(reinterpret_cast<const uint8_t *>(text.constData()), size_t(text.size()), m_filterPattern, reinterpret_cast<uint8_t *>(err.data()),
+                                      size_t(err.size()), &errLen);
+    if (!m_filter) {
+        m_filterError = QString::fromUtf8(err.constData(), qsizetype(qMin(errLen, size_t(err.size()))));
+        return;
+    }
+    if (telamon_namefilter_is_all(m_filter)) {
+        // Nothing typed: no matcher needed.
+        telamon_namefilter_free(m_filter);
+        m_filter = nullptr;
+    }
+}
+
+// Sorts the entries into the rows that stay and the ones held back. The rows
+// that stay keep their order; entries that come back are sorted in.
+void FolderModel::applyFilter()
+{
+    if (m_searching) {
+        return;
+    }
+    QList<Entry> keep, hold;
+    keep.reserve(m_rows.size());
+    bool released = false, moved = false;
+    for (Entry &e : m_rows) {
+        if (keeps(e)) {
+            keep.append(std::move(e));
+        } else {
+            // Worker answers are applied to rows only: ask again when it comes back.
+            e.tagState = e.tagState == 1 ? 0 : e.tagState;
+            e.metaState = e.metaState == 1 ? 0 : e.metaState;
+            hold.append(std::move(e));
+            moved = true;
+        }
+    }
+    for (Entry &e : m_held) {
+        if (keeps(e)) {
+            keep.append(std::move(e));
+            released = true;
+        } else {
+            hold.append(std::move(e));
+        }
+    }
+    if (!moved && !released) {
+        m_rows = std::move(keep);
+        m_held = std::move(hold);
+        Q_EMIT countChanged();
+        return;
+    }
+    ++m_structGen;
+    beginResetModel();
+    m_rows = std::move(keep);
+    m_held = std::move(hold);
+    m_folders = 0;
+    for (const Entry &e : std::as_const(m_rows)) {
+        m_folders += e.isDir;
+    }
+    endResetModel();
+    Q_EMIT countChanged();
+    m_hiddenTimer.start();
+    // Sorted again when entries came back, and when only some left (the group
+    // headers' counts are made by the sort).
+    m_sortDirty = true;
+    m_sortTimer.start(0);
+}
+
+void FolderModel::setSnippets(bool on)
+{
+    if (m_hasSnippets != on) {
+        m_hasSnippets = on;
+        Q_EMIT snippetsChanged();
+    }
+}
+
 // ---- Search results ----
 
 FolderModel::Entry FolderModel::makeSearchEntry(const SearchHit &hit, quint32 rank)
@@ -1574,6 +1808,10 @@ FolderModel::Entry FolderModel::makeSearchEntry(const SearchHit &hit, quint32 ra
     }
     Entry e = makeEntry(KFileItem(u, hit.url));
     e.rank = rank;
+    if (!hit.snippet.isEmpty()) {
+        // "12: the line" and, when more lines match, how many.
+        e.snippet = hit.more > 0 ? tr("%1: %2  (+%3 more)").arg(hit.line).arg(hit.snippet).arg(hit.more) : tr("%1: %2").arg(hit.line).arg(hit.snippet);
+    }
     return e;
 }
 
@@ -1593,7 +1831,17 @@ void FolderModel::beginSearch()
     m_folderSortDescending = m_descending;
     m_sortColumn = Relevance;
     m_descending = false;
+    // A search is the filter's bigger sibling: the filter ends.
+    if (!m_filterText.isEmpty()) {
+        m_filterText.clear();
+        rebuildFilter();
+        Q_EMIT filterChanged();
+    }
     resetRows();
+    if (m_hasSnippets) {
+        m_hasSnippets = false;
+        Q_EMIT snippetsChanged();
+    }
     m_nextRank = 0;
     if (!m_notice.isEmpty()) {
         m_notice.clear();
@@ -1619,6 +1867,10 @@ void FolderModel::beginSearch()
 void FolderModel::leaveSearch()
 {
     m_searching = false;
+    if (m_hasSnippets) {
+        m_hasSnippets = false;
+        Q_EMIT snippetsChanged();
+    }
     ++m_structGen;
     m_sortDirty = false;
     m_sortTimer.stop();

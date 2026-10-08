@@ -48,7 +48,9 @@ TelamonWindow {
     property string addressError
     readonly property bool editingAddress: activePathBar.editing
     // A text field has the keyboard.
-    readonly property bool inTextField: activePathBar.editing || searchField.activeFocus || searchBar.activeFocus || (view ? view.renaming : false)
+    readonly property bool inTextField: activePathBar.editing || searchField.activeFocus || searchBar.activeFocus || filterFocused || (view ? view.renaming : false)
+    // The active pane's folder filter has the keyboard.
+    readonly property bool filterFocused: page && page.pane ? page.pane.filterBar.editing : false
     // Keys that mean something to a text field, or to Quick Look (which shows
     // a file and must not act on it), are not the window's.
     readonly property bool typing: inTextField || quickLook.opened
@@ -368,6 +370,13 @@ TelamonWindow {
         onMenuRequested: pos => root.showPlaceMenu(me, me.mapToItem(sidebar, pos.x, pos.y))
     }
 
+    component SidebarSaved: SavedItem {
+        id: me
+        Layout.fillWidth: true
+        onChosen: id => root.runSaved(id)
+        onMenuRequested: pos => root.showSavedMenu(me, me.mapToItem(sidebar, pos.x, pos.y))
+    }
+
     component SectionLabel: Text {
         Layout.fillWidth: true
         Layout.topMargin: Kirigami.Units.smallSpacing
@@ -534,6 +543,120 @@ TelamonWindow {
             Layout.fillWidth: true
             maximumLength: 80
             onAccepted: renameDialog.commit()
+        }
+    }
+
+    // The menu of a saved search (right click, or the Menu key on it).
+    ContextMenu {
+        id: savedMenu
+        property int savedId: 0
+        Component.onCompleted: contentItem.keyNavigationEnabled = false
+        ContextMenuItem {
+            text: qsTr("Run Search")
+            onTriggered: root.runSaved(savedMenu.savedId)
+        }
+        ContextMenuSeparator {}
+        ContextMenuItem {
+            text: qsTr("Rename\u2026")
+            onTriggered: savedDialog.openRename(savedMenu.savedId)
+        }
+        ContextMenuItem {
+            text: qsTr("Remove from Sidebar")
+            destructive: true
+            onTriggered: {
+                const name = SavedLogic.nameOf(savedMenu.savedId);
+                SavedLogic.remove(savedMenu.savedId);
+                root.toast(qsTr("Removed the saved search \u201c%1\u201d").arg(name));
+            }
+        }
+    }
+
+    // Save Search (the search row's button) and Rename (a saved search's menu).
+    TelamonDialog {
+        id: savedDialog
+        property bool renaming: false
+        property int savedId: 0
+        property var snapshot: ({})
+        property string problem
+        title: renaming ? qsTr("Rename Saved Search") : qsTr("Save Search")
+        preferredWidth: Kirigami.Units.gridUnit * 24
+        function openSave() {
+            if (!root.search || !root.search.canSave) {
+                return;
+            }
+            renaming = false;
+            snapshot = root.search.snapshot();
+            problem = "";
+            savedField.text = SavedLogic.suggestName(snapshot);
+            open();
+        }
+        function openRename(id) {
+            renaming = true;
+            savedId = id;
+            problem = "";
+            savedField.text = SavedLogic.nameOf(id);
+            open();
+        }
+        function commit() {
+            const name = savedField.text.trim();
+            if (name.length === 0) {
+                return;
+            }
+            const r = renaming ? SavedLogic.rename(savedId, name) : SavedLogic.save(name, snapshot);
+            if (r === 0) {
+                close();
+                root.toast(renaming ? qsTr("Renamed the saved search") : qsTr("Saved the search \u201c%1\u201d").arg(name));
+            } else if (r === 2) {
+                problem = qsTr("There are too many saved searches. Remove one first.");
+            } else if (r === 3) {
+                close();
+            } else {
+                problem = renaming ? qsTr("Type a name.") : qsTr("There is nothing to save: type some words or choose a filter.");
+            }
+        }
+        onOpened: {
+            savedField.forceActiveFocus();
+            savedField.selectAll();
+        }
+        footerContent: [
+            SecondaryButton {
+                text: qsTr("Cancel")
+                onClicked: savedDialog.close()
+            },
+            PrimaryButton {
+                text: savedDialog.renaming ? qsTr("Rename") : qsTr("Save")
+                enabled: savedField.text.trim().length > 0
+                onClicked: savedDialog.commit()
+            }
+        ]
+        TelamonTextField {
+            id: savedField
+            Layout.fillWidth: true
+            maximumLength: SavedLogic.maxNameLength
+            Accessible.name: qsTr("Name")
+            onAccepted: savedDialog.commit()
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: !savedDialog.renaming
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: qsTr("Keeps the words, where to look and the filters, in the sidebar. The results are not saved: the search runs again when you click it.")
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeCaption
+            color: TelamonStyle.textMuted
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: savedDialog.problem.length > 0
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: savedDialog.problem
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeBody
+            color: Kirigami.Theme.negativeTextColor
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
         }
     }
 
@@ -786,6 +909,45 @@ TelamonWindow {
         activePathBar.endEdit();
         searchField.forceActiveFocus(Qt.ShortcutFocusReason);
         searchField.selectAll();
+    }
+    // Ctrl+F: the filter row of the pane with the keyboard. Where there is
+    // nothing to filter (a page of Files' own, search results) it is the search
+    // field that takes the keyboard, as it does for Ctrl+E.
+    function openFilter() {
+        activePathBar.endEdit();
+        if (!page || !page.pane || !page.pane.openFilter()) {
+            focusSearch();
+        }
+    }
+    // ---- Saved searches ----
+    // A saved search runs again in the tab shown: its folder is shown first
+    // (for This Folder), then the words, filters and switches are put back.
+    function runSaved(id) {
+        const s = SavedLogic.get(id);
+        if (!page || !s.id) {
+            return;
+        }
+        if (s.scope === 0 && s.folder.length > 0) {
+            page.navigate(Qt.url(s.folder));
+        } else {
+            page.search.clear();
+        }
+        page.search.applySaved(s);
+        page.focusContent();
+    }
+    // The Menu key on a sidebar entry: a saved search's menu, or a place's.
+    function showSidebarMenu(entry, pos) {
+        if (entry.savedId !== undefined) {
+            showSavedMenu(entry, pos);
+        } else {
+            showPlaceMenu(entry, pos);
+        }
+    }
+    function showSavedMenu(entry, pos) {
+        savedMenu.savedId = entry.savedId;
+        // After the click that asked for it is over: a popup opened while its
+        // own button release is delivered closes with it.
+        Qt.callLater(() => savedMenu.popup(sidebar, pos.x, pos.y));
     }
     // Open File Location on search results: the folder they are in is shown in
     // this tab with them selected, replacing the search; results in other
@@ -1304,7 +1466,9 @@ TelamonWindow {
     Shortcut { sequence: "F3"; enabled: !quickLook.opened && !root.typing; onActivated: root.toggleSplit() }
     // Split: the keyboard goes to the other pane.
     Shortcut { sequence: "Ctrl+Shift+O"; enabled: root.split && !quickLook.opened; onActivated: root.switchPane() }
-    Shortcut { sequences: ["Ctrl+F", "Ctrl+E"]; onActivated: root.focusSearch() }
+    // Ctrl+F filters the folder shown; Ctrl+E (or the field in the toolbar) is the search.
+    Shortcut { sequence: "Ctrl+F"; onActivated: root.openFilter() }
+    Shortcut { sequence: "Ctrl+E"; onActivated: root.focusSearch() }
     Shortcut { sequence: "Alt+P"; enabled: !quickLook.opened; onActivated: PreviewLogic.paneShown = !PreviewLogic.paneShown }
     Shortcut { sequences: ["Ctrl++", "Ctrl+=", "Ctrl+Plus"]; enabled: !root.typing; onActivated: root.zoom(1) }
     Shortcut { sequences: ["Ctrl+-", "Ctrl+Minus"]; enabled: !root.typing; onActivated: root.zoom(-1) }
@@ -1402,7 +1566,7 @@ TelamonWindow {
             padding: Kirigami.Units.largeSpacing
             spacing: 2
             dropEnabled: true
-            onContextMenuRequested: (entry, pos) => root.showPlaceMenu(entry, pos)
+            onContextMenuRequested: (entry, pos) => root.showSidebarMenu(entry, pos)
             onDropped: (entry, drop) => root.dropOnPlace(entry, drop)
 
             Repeater {
@@ -1449,6 +1613,16 @@ TelamonWindow {
                     current: root.search ? root.search.tag : ""
                     onChosen: name => root.showTag(name)
                 }
+            }
+
+            // Saved searches: a click runs one again.
+            SectionLabel {
+                visible: SavedLogic.count > 0
+                text: qsTr("Saved Searches")
+            }
+            Repeater {
+                model: SavedLogic.items
+                delegate: SidebarSaved {}
             }
 
             // Places that were hidden come back from here.
@@ -1653,7 +1827,7 @@ TelamonWindow {
                         }
                     }
                 }
-                // Search: type to see the best matches at once (Ctrl+F or Ctrl+E).
+                // Search: type to see the best matches at once (Ctrl+E). Ctrl+F filters the folder.
                 SearchField {
                     id: searchField
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 16
@@ -1703,6 +1877,7 @@ TelamonWindow {
                 Layout.fillWidth: true
                 search: root.search
                 field: searchField
+                onSaveRequested: savedDialog.openSave()
                 onCloseRequested: {
                     if (root.search) {
                         root.search.clear();

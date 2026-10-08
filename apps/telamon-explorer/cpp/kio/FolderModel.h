@@ -74,6 +74,21 @@ class FolderModel : public QAbstractListModel
     // The Details view shows the Dimensions, Duration or Date Taken column:
     // only then are those read (off the GUI thread, local files only).
     Q_PROPERTY(bool wantMeta READ wantMeta WRITE setWantMeta NOTIFY wantMetaChanged)
+    // The folder filter (Ctrl+F): only the items whose names match the text
+    // are rows; the others are held aside and come back when the text goes.
+    // The words are matched the way the search matches names; with
+    // `filterPattern` the text is a regular expression. An invalid pattern
+    // filters nothing and says why in `filterError`. The filter is the
+    // folder's own: another folder, or a search, ends it.
+    Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterChanged)
+    Q_PROPERTY(bool filterPattern READ filterPattern WRITE setFilterPattern NOTIFY filterChanged)
+    Q_PROPERTY(QString filterError READ filterError NOTIFY filterChanged)
+    // Items are being held back (the text is set and usable).
+    Q_PROPERTY(bool filterActive READ filterActive NOTIFY filterChanged)
+    // Items in the folder with the filter off: the rows plus the held ones.
+    Q_PROPERTY(int filterTotal READ filterTotal NOTIFY countChanged)
+    // The results carry a matching line each (a search inside files).
+    Q_PROPERTY(bool hasSnippets READ hasSnippets NOTIFY snippetsChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
@@ -114,6 +129,8 @@ public:
         DimensionsRole,
         DurationRole,
         TakenRole,
+        // The matching line of a result of a search inside files.
+        SnippetRole,
     };
 
     // A run of rows in one group (the groups are together): the group's
@@ -133,6 +150,11 @@ public:
         bool isDir = false;
         quint64 size = 0;
         qint64 mtime = 0;
+        // A search inside files: the first matching line (made safe to show),
+        // its number and how many more lines match; empty/0 for a name hit.
+        QString snippet;
+        quint32 line = 0;
+        quint32 more = 0;
     };
 
     explicit FolderModel(QObject *parent = nullptr);
@@ -152,6 +174,19 @@ public:
     static void invalidateAttributes(const QList<QUrl> &urls);
     bool wantMeta() const { return m_wantMeta; }
     void setWantMeta(bool on);
+
+    QString filterText() const { return m_filterText; }
+    void setFilterText(const QString &text);
+    bool filterPattern() const { return m_filterPattern; }
+    void setFilterPattern(bool on);
+    QString filterError() const { return m_filterError; }
+    bool filterActive() const { return m_filter && !m_searching; }
+    int filterTotal() const { return int(m_rows.size() + m_held.size()); }
+    bool hasSnippets() const { return m_hasSnippets; }
+    // The results show a matching line each (the Match column); set by the
+    // search when it looks inside files, and ended with the search.
+    void setSnippets(bool on);
+    Q_INVOKABLE void clearFilter() { setFilterText(QString()); }
 
     // The items waiting to be moved (Cut, not yet pasted): their rows are
     // dimmed in every folder shown. Keys are percent-encoded URLs without a
@@ -279,6 +314,8 @@ Q_SIGNALS:
     void pageChanged();
     void trashChanged();
     void wantMetaChanged();
+    void filterChanged();
+    void snippetsChanged();
 
 private:
     struct Entry {
@@ -314,6 +351,8 @@ private:
         QString duration;
         QString taken;
         quint8 metaState = 0;
+        // A search inside files: the matching line, shown after its number.
+        QString snippet;
     };
     struct SortRowIn {
         QString name;
@@ -340,6 +379,13 @@ private:
     static Entry makeEntry(const KFileItem &item);
     static Entry makeSearchEntry(const SearchHit &hit, quint32 rank);
     void leaveSearch();
+    // The folder filter: whether the entry stays a row, the filter built
+    // again for the text, rows moved between `m_rows` and `m_held`.
+    bool keeps(const Entry &e) const;
+    void rebuildFilter();
+    void applyFilter();
+    // Takes the rows (ascending numbers) out of the list, into `into` when given.
+    void takeRows(const QList<int> &rows, QList<Entry> *into);
     void removeSearchRows(const QSet<QUrl> &gone);
     void fillType(Entry &e) const;
     void open(const QUrl &url, const QString &notice);
@@ -383,6 +429,14 @@ private:
 
     KCoreDirLister *m_lister;
     mutable QList<Entry> m_rows;
+    // Entries the filter holds back (not rows; no signals for them).
+    QList<Entry> m_held;
+    QString m_filterText;
+    bool m_filterPattern = false;
+    QString m_filterError;
+    // The Rust matcher for the text (null: every entry stays).
+    void *m_filter = nullptr;
+    bool m_hasSnippets = false;
     mutable QMimeDatabase m_mime;
     QUrl m_url;
     QString m_error;

@@ -96,6 +96,9 @@ qt_add_qml_module(telamon-explorer-app
         qml/IconsView.qml
         qml/PlaceItem.qml
         qml/SearchBar.qml
+        qml/FilterBar.qml
+        qml/FiltersPopover.qml
+        qml/SavedItem.qml
         qml/QuickLook.qml
         qml/PreviewBody.qml
         qml/PreviewPane.qml
@@ -143,6 +146,7 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/PlacesLogic.h cpp/kio/PlacesLogic.cpp
         cpp/kio/PlacesModel.h cpp/kio/PlacesModel.cpp
         cpp/kio/SearchController.h cpp/kio/SearchController.cpp
+        cpp/kio/SavedLogic.h cpp/kio/SavedLogic.cpp
         cpp/kio/PreviewLogic.h cpp/kio/PreviewLogic.cpp
         cpp/kio/PreviewLoader.h cpp/kio/PreviewLoader.cpp
         cpp/kio/ViewMemory.h cpp/kio/ViewMemory.cpp

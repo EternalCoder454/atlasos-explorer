@@ -78,6 +78,8 @@ Requires:       kf6-kfilemetadata
 Recommends:     kio-extras
 Recommends:     kdegraphics-thumbnailers
 Recommends:     ffmpegthumbs
+# Search inside files reads PDFs through pdftotext (they are left out without it)
+Recommends:     poppler-utils
 
 %description
 Files is the file manager of Telamon OS. It has tabs, a sidebar of your places
