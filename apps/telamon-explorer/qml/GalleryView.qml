@@ -189,7 +189,7 @@ Item {
                 width: root.thumbSide
                 height: root.thumbSide
                 opacity: (cell.isHidden ? 0.6 : 1) * (cell.isCut ? 0.5 : 1)
-                Kirigami.Icon {
+                FileIcon {
                     anchors.fill: parent
                     source: cell.iconName
                     visible: !thumb.visible

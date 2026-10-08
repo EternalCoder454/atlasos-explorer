@@ -133,7 +133,7 @@ Item {
                 width: Math.min(parent.width - Kirigami.Units.gridUnit, Kirigami.Units.gridUnit * 24)
                 visible: !body.pictureReady && !loader.busy && !surface.visible && thumb.status !== Image.Loading
                 spacing: Kirigami.Units.largeSpacing
-                Kirigami.Icon {
+                FileIcon {
                     Layout.alignment: Qt.AlignHCenter
                     Layout.preferredWidth: body.iconSide
                     Layout.preferredHeight: body.iconSide

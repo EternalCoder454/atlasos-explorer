@@ -112,7 +112,7 @@ TelamonDialog {
                 Layout.alignment: Qt.AlignHCenter
                 implicitWidth: Kirigami.Units.gridUnit * 5
                 implicitHeight: Kirigami.Units.gridUnit * 5
-                Kirigami.Icon {
+                FileIcon {
                     anchors.fill: parent
                     source: card.info.icon ? card.info.icon : ""
                     // A file with no thumbnail comes back 1x1: the icon stays.

@@ -37,7 +37,7 @@ FocusScope {
     visible: false
     z: 100
     // Drawn as one layer: without it the software renderer paints the icons
-    // of the rows behind (Kirigami.Icon) over the card.
+    // of the rows behind over the card (FileIcon fixes that for the icons).
     layer.enabled: true
     Accessible.role: Accessible.Dialog
     Accessible.name: qsTr("Quick Look")
@@ -257,7 +257,7 @@ FocusScope {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.largeSpacing
-                Kirigami.Icon {
+                FileIcon {
                     Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
                     Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
                     source: ql.info.iconName ?? ""

@@ -146,7 +146,7 @@ Item {
                 anchors.rightMargin: Kirigami.Units.largeSpacing
                 spacing: Kirigami.Units.largeSpacing
                 opacity: (row.isHidden ? 0.6 : 1) * (row.isCut ? 0.5 : 1)
-                Kirigami.Icon {
+                FileIcon {
                     id: icon
                     anchors.verticalCenter: parent.verticalCenter
                     width: col.iconSide

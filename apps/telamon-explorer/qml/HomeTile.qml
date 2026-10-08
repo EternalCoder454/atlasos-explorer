@@ -56,7 +56,7 @@ T.AbstractButton {
     }
     contentItem: RowLayout {
         spacing: TelamonStyle.spacingLarge
-        Kirigami.Icon {
+        FileIcon {
             Layout.preferredWidth: Kirigami.Units.iconSizes.medium
             Layout.preferredHeight: Kirigami.Units.iconSizes.medium
             source: tile.iconName

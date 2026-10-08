@@ -327,7 +327,7 @@ Item {
                 Item {
                     width: root.widths.name
                     height: root.rowHeight
-                    Kirigami.Icon {
+                    FileIcon {
                         id: icon
                         // An anchor, not an x: it follows a right-to-left layout.
                         anchors.left: parent.left
