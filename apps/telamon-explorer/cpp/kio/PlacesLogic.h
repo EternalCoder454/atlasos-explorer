@@ -106,6 +106,10 @@ public:
     Q_INVOKABLE void requestEmptyTrash();
     // Pin to Sidebar in menus: pins `url` once KIO says it is a folder.
     Q_INVOKABLE void pinFolder(const QUrl &url);
+    // Connect to Server's "Add to Sidebar": `url` (a server address; its
+    // password, if it had one, is dropped) becomes a place under Network. One
+    // that is a place already is not added twice (a hidden one comes back).
+    Q_INVOKABLE void pinServer(const QUrl &url);
 
 Q_SIGNALS:
     void entriesChanged();
@@ -131,6 +135,7 @@ private:
     void refreshUsage();
     void updateTrashCount();
     int rowOf(const QString &key) const;
+    bool isHomeFolder(const QUrl &u) const;
     bool quietAfterError() const;
     QModelIndex indexOf(const PlaceEntry &e) const;
     QString keyAt(int sourceRow) const;

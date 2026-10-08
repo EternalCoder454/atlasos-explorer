@@ -17,6 +17,9 @@ QUrl StandardPlaces::place(const QString &key) const
     if (key == QLatin1String("recent")) {
         return QUrl(QStringLiteral("recentlyused:/"));
     }
+    if (key == QLatin1String("homepage")) {
+        return QUrl(QStringLiteral("home:/"));
+    }
     if (key == QLatin1String("network")) {
         return QUrl(QStringLiteral("network:/"));
     }
@@ -79,6 +82,12 @@ QString StandardPlaces::displayLocation(const QUrl &url) const
     if (url.scheme() == QLatin1String("recentlyused")) {
         return tr("Recent");
     }
+    if (url.scheme() == QLatin1String("home")) {
+        return tr("Home");
+    }
+    if (url.scheme() == QLatin1String("network") && url.path().size() <= 1) {
+        return tr("Network");
+    }
     QString out;
     // An archive's contents are shown by where the archive is: /home/me/a.zip/folder.
     if (!url.isLocalFile() && !rustArchiveScheme(url.scheme())) {
@@ -104,6 +113,9 @@ QString StandardPlaces::tabTitle(const QUrl &url) const
     }
     if (url.scheme() == QLatin1String("network") && url.path().size() <= 1) {
         return tr("Network");
+    }
+    if (url.scheme() == QLatin1String("home")) {
+        return tr("Home");
     }
     if (url.isLocalFile() && QDir::cleanPath(url.path()) == QDir::cleanPath(QDir::homePath())) {
         return tr("Home");

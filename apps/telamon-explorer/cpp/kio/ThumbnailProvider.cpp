@@ -1,4 +1,5 @@
 #include "ThumbnailProvider.h"
+#include "ServerLogic.h"
 
 #include <KFileItem>
 #include <KIO/PreviewJob>
@@ -23,7 +24,9 @@ public:
         const QByteArray raw = QByteArray::fromBase64(id.section(QLatin1Char('/'), 0, 0).toLatin1(), QByteArray::Base64UrlEncoding);
         const QUrl url = QUrl::fromEncoded(raw);
         const int side = requested.isValid() ? std::clamp(std::max(requested.width(), requested.height()), 32, 1024) : 128;
-        if (!url.isValid() || !url.isLocalFile()) {
+        // Files on this computer; those on a server only if the Settings switch is on.
+        const bool allowed = url.isLocalFile() || (ServerLogic::previewRemoteEnabled() && ServerLogic::isServerScheme(url.scheme()));
+        if (!url.isValid() || !allowed) {
             QTimer::singleShot(0, this, [this] { finish(QImage()); });
             return;
         }

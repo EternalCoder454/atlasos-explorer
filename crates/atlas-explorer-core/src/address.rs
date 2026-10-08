@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 pub const MAX_COMPLETIONS: usize = 50;
 
 /// Schemes that are written without `//`.
-const BARE_SCHEMES: [&str; 3] = ["trash", "recent", "network"];
+const BARE_SCHEMES: [&str; 4] = ["trash", "recent", "network", "home"];
 
 /// A refusal, in plain words.
 pub type Refused = &'static str;
@@ -29,7 +29,7 @@ fn check_text(text: &str) -> Result<(), Refused> {
 }
 
 /// The scheme when `text` is a URL we keep as given: `scheme://...`, or
-/// `trash:`, `recent:`, `network:`.
+/// `trash:`, `recent:`, `network:`, `home:`.
 fn url_scheme(text: &str) -> Option<&str> {
     let scheme = scheme_of(text)?;
     let rest = &text[scheme.len() + 1..];
@@ -252,6 +252,8 @@ mod tests {
         assert_eq!(p("trash:").unwrap(), "trash:");
         assert_eq!(p("recent:/").unwrap(), "recent:/");
         assert_eq!(p("network:/").unwrap(), "network:/");
+        assert_eq!(p("home:/").unwrap(), "home:/");
+        assert_eq!(p("home:").unwrap(), "home:");
         assert_eq!(p("smb://nas/share").unwrap(), "smb://nas/share");
         assert_eq!(p("file:///etc").unwrap(), "file:///etc");
         assert!(p("file://evil/etc").is_err());

@@ -26,6 +26,8 @@ ContextMenu {
     ContextMenuSeparator {}
     ContextMenuItem { text: qsTr("Show Hidden Files"); shortcutText: "Ctrl+H"; checkable: true; checked: menu.win.view?.folder.showHidden ?? false; onTriggered: menu.win.toggleHidden() }
     ContextMenuItem { text: qsTr("Preview Pane"); shortcutText: "Alt+P"; checkable: true; checked: PreviewLogic.paneShown; onTriggered: PreviewLogic.paneShown = !PreviewLogic.paneShown }
+    // Thumbnails and previews of files on a server download them, so they are off until asked for.
+    ContextMenuItem { text: qsTr("Preview Files on Servers"); checkable: true; checked: ServerLogic.previewRemote; onTriggered: menu.win.setPreviewRemote(!ServerLogic.previewRemote) }
     ContextMenuSeparator {}
     ContextMenuItem { text: qsTr("Zoom In"); shortcutText: "Ctrl++"; onTriggered: menu.win.zoom(1) }
     ContextMenuItem { text: qsTr("Zoom Out"); shortcutText: "Ctrl+-"; onTriggered: menu.win.zoom(-1) }

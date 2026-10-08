@@ -147,6 +147,28 @@ int32_t telamon_zoom_clamp(uint32_t kind, int32_t value);
 int32_t telamon_zoom_step(uint32_t kind, int32_t current, int32_t steps);
 int32_t telamon_zoom_default(uint32_t kind, int32_t defaultRow);
 int32_t telamon_zoom_wheel(int32_t pending, int32_t delta, int32_t *rest);
+
+// ---- The Home page and Connect to Server (src/home_ffi.rs) ----
+bool telamon_home_is_home(const uint8_t *url, size_t len);
+size_t telamon_home_key(const uint8_t *input, size_t len, uint8_t *out, size_t cap);
+size_t telamon_home_visit(const uint8_t *saved, size_t savedLen, const uint8_t *key, size_t keyLen, int64_t now, uint8_t *out, size_t cap);
+size_t telamon_home_forget(const uint8_t *saved, size_t savedLen, const uint8_t *key, size_t keyLen, uint8_t *out, size_t cap);
+size_t telamon_home_top(const uint8_t *saved, size_t savedLen, size_t n, uint8_t *out, size_t cap);
+size_t telamon_home_limit(uint32_t which);
+size_t telamon_home_recent_files(const uint8_t *path, size_t pathLen, size_t n, uint8_t *out, size_t cap);
+size_t telamon_servers_protocol_count();
+size_t telamon_servers_protocol(uint32_t code, uint32_t which, uint8_t *out, size_t cap);
+uint32_t telamon_servers_protocol_port(uint32_t code);
+bool telamon_servers_protocol_encrypted(uint32_t code);
+int32_t telamon_servers_protocol_code(const uint8_t *scheme, size_t len);
+size_t telamon_servers_build(const uint8_t *input, size_t len, uint8_t *out, size_t cap);
+size_t telamon_servers_note(const uint8_t *url, size_t len, uint8_t *out, size_t cap);
+size_t telamon_servers_parse(const uint8_t *url, size_t len, uint8_t *out, size_t cap);
+size_t telamon_servers_clean(const uint8_t *url, size_t len, uint8_t *out, size_t cap);
+size_t telamon_servers_label(const uint8_t *url, size_t len, uint8_t *out, size_t cap);
+size_t telamon_servers_recent_clean(const uint8_t *saved, size_t savedLen, uint8_t *out, size_t cap);
+size_t telamon_servers_recent_push(const uint8_t *saved, size_t savedLen, const uint8_t *url, size_t urlLen, uint8_t *out, size_t cap);
+size_t telamon_servers_recent_remove(const uint8_t *saved, size_t savedLen, const uint8_t *url, size_t urlLen, uint8_t *out, size_t cap);
 }
 
 using RustFn = size_t (*)(const uint8_t *, size_t, uint8_t *, size_t);
@@ -159,6 +181,23 @@ inline QByteArray rustBytes(RustFn fn, const QByteArray &name)
     if (need > size_t(buf.size())) {
         buf.resize(qsizetype(need));
         need = fn(in, size_t(name.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    }
+    buf.truncate(qsizetype(need));
+    return buf;
+}
+
+using RustFn2 = size_t (*)(const uint8_t *, size_t, const uint8_t *, size_t, uint8_t *, size_t);
+
+// A core call with two text inputs.
+inline QByteArray rustBytes2(RustFn2 fn, const QByteArray &a, const QByteArray &b)
+{
+    QByteArray buf(512, 0);
+    const auto *pa = reinterpret_cast<const uint8_t *>(a.constData());
+    const auto *pb = reinterpret_cast<const uint8_t *>(b.constData());
+    size_t need = fn(pa, size_t(a.size()), pb, size_t(b.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    if (need > size_t(buf.size())) {
+        buf.resize(qsizetype(need));
+        need = fn(pa, size_t(a.size()), pb, size_t(b.size()), reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
     }
     buf.truncate(qsizetype(need));
     return buf;

@@ -256,6 +256,18 @@ TelamonWindow {
         id: batchRename
         actions: fileActions
     }
+    // Connect to Server (Ctrl+Shift+K, and in the sidebar's Network section).
+    ConnectDialog {
+        id: connectDialog
+        onConnectRequested: target => {
+            ServerLogic.remember(target);
+            root.navigate(target);
+        }
+        onAddToSidebarRequested: target => {
+            ServerLogic.remember(target);
+            PlacesLogic.pinServer(target);
+        }
+    }
 
     // The context menus of the items and of the folder's empty space.
     FileMenu {
@@ -510,7 +522,10 @@ TelamonWindow {
         if (r.ok) {
             addressError = "";
             launchText = "";
-            navigate(Qt.url(r.text));
+            const target = Qt.url(r.text);
+            // A server typed here is one of the recent servers too (never with a password).
+            ServerLogic.remember(target);
+            navigate(target);
             pathBar.endEdit();
         } else {
             addressError = r.text;
@@ -540,6 +555,14 @@ TelamonWindow {
     function zoom(steps) {
         if (view) {
             view.zoom(steps);
+        }
+    }
+    // The Settings switch for thumbnails of files on servers (the Settings
+    // window of a later wave takes it over): every tab asks for its thumbnails again.
+    function setPreviewRemote(on) {
+        ServerLogic.previewRemote = on;
+        for (const id in pages) {
+            pages[id].view.folder.thumbnailsChanged();
         }
     }
     // "Use the Same View for Every Folder" on or off: the view shown stays.
@@ -664,7 +687,7 @@ TelamonWindow {
         tabsModel.setProperty(i, "modified", false);
         openerId = -1;
         pathBar.endEdit();
-        p.view.forceActiveFocus();
+        p.focusContent();
         markSession();
     }
 
@@ -699,6 +722,9 @@ TelamonWindow {
         p.quickLookRequested.connect(() => root.showQuickLook(p));
         p.contextMenuRequested.connect((urls, x, y) => root.showContextMenu(urls, p.view, x, y));
         p.navigated.connect(() => root.freshStart = false);
+        // A folder the user went to is counted for Home's Frequent Folders.
+        p.navigated.connect(() => HomeLogic.visited(p.location));
+        p.connectRequested.connect(() => connectDialog.ask());
         p.titleChanged.connect(() => root.syncTab(p));
         p.toolTipChanged.connect(() => root.syncTab(p));
         p.locationChanged.connect(() => root.markSession());
@@ -742,7 +768,7 @@ TelamonWindow {
     }
     function newTab() {
         freshStart = false;
-        addTab(StandardPlaces.place("home"), {});
+        addTab(StandardPlaces.place("homepage"), {});
     }
     function duplicateTab(i) {
         const p = pageAt(i);
@@ -972,7 +998,7 @@ TelamonWindow {
             selectTab(saved.current);
             freshStart = false;
         } else {
-            addTab(StandardPlaces.place("home"), {});
+            addTab(StandardPlaces.place("homepage"), {});
         }
     }
 
@@ -997,6 +1023,8 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+0"; enabled: !root.typing; onActivated: root.zoom(0) }
     Shortcut { sequence: "Alt+Left"; enabled: !root.typing; onActivated: root.goBack() }
     Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
+    Shortcut { sequences: ["F5", "Ctrl+R"]; enabled: !root.typing; onActivated: { if (root.view) root.view.folder.refresh(); } }
+    Shortcut { sequence: "Ctrl+Shift+K"; enabled: !quickLook.opened && !connectDialog.opened; onActivated: connectDialog.ask() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
     Shortcut { sequence: "Ctrl+W"; onActivated: root.closeTab(root.currentIndex) }
     Shortcut { sequence: "Ctrl+Shift+T"; onActivated: root.reopenClosedTab() }
@@ -1104,13 +1132,19 @@ TelamonWindow {
             }
 
             SectionLabel {
-                visible: networkRepeater.count > 0
                 text: qsTr("Network")
             }
             Repeater {
                 id: networkRepeater
                 model: networkModel
                 delegate: SidebarPlace {}
+            }
+            SidebarItem {
+                Layout.fillWidth: true
+                text: qsTr("Connect to Server…")
+                symbol: Symbols.AddLink
+                Accessible.description: "Ctrl+Shift+K"
+                onClicked: connectDialog.ask()
             }
 
             // Places that were hidden come back from here.
@@ -1300,8 +1334,8 @@ TelamonWindow {
                     onAddressEdited: root.addressError = ""
                     onEditEnded: {
                         root.addressError = "";
-                        if (root.view) {
-                            root.view.forceActiveFocus();
+                        if (root.page) {
+                            root.page.focusContent();
                         }
                     }
                 }
@@ -1310,7 +1344,7 @@ TelamonWindow {
                     id: searchField
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 16
                     Layout.minimumWidth: Kirigami.Units.gridUnit * 8
-                    enabled: root.page !== null
+                    enabled: root.page !== null && root.page.pageKind !== "network"
                     placeholderText: root.search && root.search.scope === 1 ? qsTr("Search Everywhere") : qsTr("Search %1").arg(root.page ? root.page.title : "")
                     text: root.search ? root.search.text : ""
                     Accessible.name: qsTr("Search")
@@ -1331,8 +1365,8 @@ TelamonWindow {
                             if (root.search) {
                                 root.search.clear();
                             }
-                            if (root.view) {
-                                root.view.forceActiveFocus();
+                            if (root.page) {
+                                root.page.focusContent();
                             }
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -1359,10 +1393,18 @@ TelamonWindow {
                     if (root.search) {
                         root.search.clear();
                     }
-                    if (root.view) {
-                        root.view.forceActiveFocus();
+                    if (root.page) {
+                        root.page.focusContent();
                     }
                 }
+            }
+
+            // A folder on FTP, plain WebDAV or NFS: what it carries can be read on the way.
+            InfoBanner {
+                Layout.fillWidth: true
+                type: "warning"
+                shown: root.view ? root.view.folder.securityNote.length > 0 : false
+                text: qsTr("%1. What you open or copy on this server can be read by others on the network.").arg(root.view ? root.view.folder.securityNote : "")
             }
 
             Text {

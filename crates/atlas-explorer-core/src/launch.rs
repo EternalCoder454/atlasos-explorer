@@ -113,6 +113,7 @@ pub const LAUNCH_SCHEMES: &[&str] = &[
     "trash",
     "recentlyused",
     "network",
+    "home",
     "remote",
     "desktop",
     "mtp",
@@ -275,6 +276,13 @@ mod tests {
         assert_eq!(l.locations, vec!["SFTP://host/x".to_string()]);
         assert_eq!(l.refused.len(), 2);
         assert_eq!(l.refused[0].reason, "not a kind of location Files opens");
+    }
+
+    #[test]
+    fn files_own_pages_can_be_launched() {
+        let l = p(&["home:/", "network:/", "home:"], "/x");
+        assert_eq!(l.locations, ["home:/", "network:/", "home:"]);
+        assert!(l.refused.is_empty());
     }
 
     #[test]

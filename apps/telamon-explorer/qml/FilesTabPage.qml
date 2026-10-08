@@ -50,6 +50,22 @@ FocusScope {
     // A right click or the Menu key: the items (none: the folder's background)
     // and where, in the view's coordinates.
     signal contextMenuRequested(var urls, real x, real y)
+    // "Connect to Server…" was chosen on the Network page.
+    signal connectRequested
+
+    // Home and Network are pages Files draws itself: this one shows while the
+    // tab is there, and the folder view stays out of sight.
+    readonly property string pageKind: view.folder.pageKind
+    // The keyboard goes to what the tab shows: its folder, or its page.
+    function focusContent() {
+        if (pageKind.length > 0) {
+            if (pageLoader.item) {
+                pageLoader.item.forceActiveFocus();
+            }
+        } else {
+            view.forceActiveFocus();
+        }
+    }
 
     function load() {
         if (loaded) {
@@ -183,6 +199,49 @@ FocusScope {
     SearchController {
         id: tabSearch
         folder: view.folder
+    }
+
+    // F5 on a page reads it again.
+    Connections {
+        target: view.folder
+        function onPageRefreshRequested() {
+            if (pageLoader.item) {
+                pageLoader.item.refresh();
+            }
+        }
+    }
+
+    // Leaving a page for a folder: the folder has the keyboard.
+    onPageKindChanged: {
+        if (pageKind.length === 0 && visible && page.activeFocus === false && view.visible) {
+            Qt.callLater(() => view.forceActiveFocus());
+        }
+    }
+
+    Loader {
+        id: pageLoader
+        anchors.fill: parent
+        active: page.pageKind.length > 0
+        sourceComponent: page.pageKind === "network" ? networkPage : homePage
+        onLoaded: {
+            if (page.visible) {
+                page.focusContent();
+            }
+        }
+    }
+    Component {
+        id: homePage
+        HomePage {
+            actions: page.actions
+            onNavigateRequested: (target, newTab) => newTab ? page.openInNewTab(target) : page.navigate(target)
+        }
+    }
+    Component {
+        id: networkPage
+        NetworkPage {
+            onNavigateRequested: (target, newTab) => newTab ? page.openInNewTab(target) : page.navigate(target)
+            onConnectRequested: page.connectRequested()
+        }
     }
 
     FolderView {

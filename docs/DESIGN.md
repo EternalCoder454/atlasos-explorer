@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 10 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made)
+0.2.0 plus waves 1 to 11 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made; the Home page, Connect to Server, the Network page and the handling of servers that don't answer)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -53,6 +53,8 @@ Explorer replaces Dolphin completely.
   the operation queue's state machine (order, pause, speed and time left,
   conflict policy), the operation journal (crash recovery), launch and D-Bus
   argument parsing, address-bar parsing and completion ranking, checksums,
+  Frequent folders' counter (`home`), server addresses and recent servers
+  (`servers`),
   the search filters' meaning, where a search runs, and the search texts
   (`search`). The live search walker is in `atlas-file-index` (`walk`), beside
   the matcher it shares with the index.
@@ -72,6 +74,12 @@ Explorer replaces Dolphin completely.
     Heavy or pure logic is called from these through a `cxx` bridge into the
     core crate, never written twice. `SearchController` is the search of one
     tab and `SearchService` the client of the index service.
+  - `cpp/kio/HomeLogic.*` (the Home page's lists: Pinned, Recent files and
+    Frequent folders), `cpp/kio/ServerLogic.*` (Connect to Server: the
+    protocol list, the address from the dialog's fields, recent servers, the
+    "Not encrypted" note, the switch for previews on servers) and
+    `cpp/kio/NetworkModel.*` (the computers of the Network page, from Avahi over
+    QtDBus and the SMB worker's browsing).
   - `cpp/kio/ArchiveClient.*` (Archive1 over D-Bus and `ArchiveJob`),
     `cpp/kio/ArchiveGuard.*` (what Files checks before KIO copies out of an
     archive).
@@ -83,6 +91,10 @@ Explorer replaces Dolphin completely.
 - `apps/telamon-explorer-search`: the index CLI.
 - `tests/archive-standin`: a stand-in for Telamon Archive's `Archive1` D-Bus
   API, for smoke tests (see "Archives"). Not installed.
+- `tests/avahi-standin`: a stand-in for the part of the Avahi daemon the
+  Network page asks (`ServiceBrowserNew`, `ResolveService`, `Free`), for
+  smoke tests on a private "system" bus in a container with no multicast
+  network. Not installed.
 
 ## Window
 
@@ -412,7 +424,7 @@ Explorer replaces Dolphin completely.
   favourites (`user-places.xbel`, drag to pin and reorder), Desktop,
   Documents, Downloads, Pictures, Music, Videos, then Drives (Solid: internal
   partitions, USB, phones over MTP, with eject buttons and usage bars), then
-  Network (`network:/`, saved servers, "Connect to Server…"), then Trash
+  Network (Files' own Network page, saved servers, "Connect to Server…"), then Trash
   (with its item count). The sidebar shares `user-places.xbel` with every KDE
   file dialog, so pins show in Open and Save dialogs too.
 
@@ -462,6 +474,106 @@ Explorer replaces Dolphin completely.
     `ShowDevice(udisks path)` on the session bus (`net.eterneon.telamon.disks`,
     then the `atlas` name; assumed names, to be agreed with Disks) and starts
     the program if nobody answers.
+- **Home, Connect to Server and Network** (waves 3 and 11).
+
+  **Built (wave 11):**
+  - **The Home page** is the address `home:/`, one of Files' own pages: nothing
+    is listed by KIO, `FolderModel.pageKind` says "home" and `FilesTabPage`
+    draws `qml/HomePage.qml` in place of the folder view (which is hidden, so
+    the keyboard goes to the page). A new tab, the first tab of a start with
+    nothing to open and the sidebar's Home place show it; the Home *folder* is
+    the first tile, "Home Folder", and is also reached by the path bar, `~`
+    and Up. The sidebar's Home place counts as selected on both. Three
+    sections, each folded by a click on its header and remembered
+    (`[Home] Folded=` in `telamon-explorerrc`), and nothing recommended,
+    nothing from the cloud:
+    - *Pinned*: the folders of the sidebar's own list (the standard ones and
+      the user's pins, `PlacesLogic`), hidden places left out.
+    - *Recent Files*: at most 10. The Recent place's own source comes first
+      (KActivities, through KIO's `recentlyused:/files` worker, asked in the
+      background with a 5 s limit; where there is no activity service it
+      answers nothing and changes nothing), then the freedesktop list
+      `$XDG_DATA_HOME/recently-used.xbel`, read by the index crate's reader
+      (size and entry limits, untrusted text), newest first. Only files that
+      are still there (a stat each, on a worker), only on this computer, one
+      line each: name, folder, "Used <date>". Nothing here is cleared by
+      Files: the lists are the system's.
+    - *Frequent Folders*: Files' own count of the folders the user went to
+      (`home::Frequent`, in `[Home] Frequent=`): a count and the time of the
+      last visit per folder. Bounded: 200 folders (the least visited, longest
+      unused goes), a count stops at 1,000, a folder not visited for 180 days
+      is forgotten, and a folder is listed from its second visit, 8 at most. What counts: a
+      folder the user moved a tab to (path bar, sidebar, a tile, Back or
+      Forward), on this computer or on a server, never with a password, query
+      or fragment, never the home folder or `/`, never the Trash, Recent, the
+      Network page, archives or the Home page itself. A folder that is gone is
+      forgotten when the page notices. Nothing leaves this computer; **Clear**
+      forgets every count at once and deletes the key from the file.
+  - **Connect to Server** (Ctrl+Shift+K, the sidebar's "Connect to Server…" and
+    the Network page's button): protocol (SFTP, Windows Share (SMB), FTP, WebDAV
+    (Secure), WebDAV, NFS; those KIO has a worker for), server (`name`,
+    `name:port`, an IPv4 address, `[IPv6]` or `[IPv6]:port`), folder and user.
+    There is no password field: KIO asks when the server wants one (its own
+    prompt and password service), and Files never reads, keeps or logs it.
+    The address is built by the core (`servers::build`) from the checked fields,
+    each percent-encoded: a field can't add a user, password, port, query,
+    fragment or another host (`user:pw@host`, `host/path`, `a@b`, `?`, `#`,
+    `%`, spaces, control and bidi characters, `..` out of the folder, a name
+    over 253 bytes, bad ports are refused in words and the button stays off).
+    The core also takes an address apart again (to fill the dialog from a
+    recent server) and cleans every saved line, so a hand-edited settings
+    file can't put anything but our own addresses, and no password, in the
+    list. **Connect** goes to the server (and remembers it), **Add to Sidebar**
+    adds a place to the Network section (`KFilePlacesModel::addPlace`, so
+    Open and Save dialogs show it too; the address without a password).
+    *Recent servers* (10, `[Servers] Recent=`) are listed in the dialog and on
+    the Network page; a server typed in the path bar joins them. FTP and plain
+    WebDAV (and NFS) say **Not encrypted** in the dialog and, while the folder
+    is shown, in a banner under the toolbar (the core's `security_note`); SFTP,
+    WebDAV over TLS and SMB don't.
+  - **The Network page** is the address `network:/` (KIO has no worker for it
+    in the image, so Files lists the computers itself, `NetworkModel`): Avahi's
+    `ServiceBrowserNew` for `_smb`, `_sftp-ssh`, `_ssh`, `_ftp`, `_webdav(s)` and
+    `_nfs` over QtDBus on the system bus, each found service resolved
+    (`ResolveService`) and turned into an address by the core (a name that
+    isn't a host name is dropped), and a KIO list job on `smb:/` (the SMB
+    worker's own DNS-SD, WS-Discovery and NetBIOS browsing; never a password
+    dialog). Both are asynchronous on the GUI thread. A scan shows a spinner
+    and **Stop**, ends by itself after 10 s, and the Avahi side keeps listening
+    while the page is open so a computer that switches on later is added; the
+    same computer found twice (`nas` and `nas.local`) is one row; at most 500.
+    With nothing found the page says so and points to Connect to Server; with
+    no Avahi on the system bus it says Files can't look for computers. The
+    recent servers are listed under the computers. Search is off on this page.
+  - **Slow and dead servers** (a folder on `smb`, `sftp`, `fish`, `ftp(s)`,
+    `webdav(s)` or `nfs`): while KIO has not answered, the view shows a spinner,
+    "Connecting to <server>…" and **Stop** (`FolderModel.stop`); with items
+    already listed, a small "Loading… Stop" bar. At the same time
+    `FolderModel` makes an asynchronous TCP connection to the server's port
+    (`QTcpSocket`, the URL's port or the protocol's own) with a 10 s limit. If
+    that is refused, has no route, doesn't resolve or doesn't complete in 10 s,
+    the listing stops and the page says **Can't Reach the Server** ("Can't
+    reach the server. Check the address and that it is on.") with **Retry**.
+    Once the server accepts the connection the test is over and only KIO's
+    job is waited for, so a password prompt or a slow listing is never cut off
+    (Stop ends it). The test is skipped when a proxy is set in KIO's settings, and for SFTP and fish unless the URL names a port and an address (ssh's own configuration may rename or redirect a host name)
+    (`kioslaverc`), and for SMB only the 10 s limit is a verdict (the server may
+    answer on another port or be named only through NetBIOS, which the SMB worker
+    knows; what the worker itself reports shows the same page). KIO's own errors for the same causes
+    (cannot connect, unknown host, timeout, connection broken) show the same
+    page; a wrong password and a cancelled prompt have their own words.
+    Nothing here waits on the GUI thread, so the window and the other tabs
+    stay usable (tried: one tab on a port that never answers, another one
+    browsed meanwhile); closing the tab frees the model, which stops the job
+    and the test.
+  - **Servers show icons only.** A file on a server gets no thumbnail, and its
+    type comes from its name (KIO's `MatchExtension`; nothing is read to find
+    it), and no folder size is worked out, unless the switch **Preview Files on
+    Servers** in the View menu is on (`[Remote] PreviewFiles`, off by default;
+    the Settings window of wave 16 will hold it). With it on, thumbnails of
+    files up to 5 MB on a server are asked of KIO's thumbnailers (which download
+    the file), `PreviewSettings/MaximumRemoteSize` being set for that. Quick Look
+    and the preview pane stay local-only.
 - **Views**, per tab, remembered per folder (in the settings file, not in
   hidden files dropped into folders):
   - Icons (sizes 48 to 256, thumbnails), List (compact, multi-column
@@ -1157,8 +1269,15 @@ Untrusted input, checked where it enters:
 - **Drops** from other apps: URL lists are validated; raw data (text,
   images) is saved only after the user names the file.
 - **Remote servers:** credentials go through KIO's password server
-  (kiod, KWallet); Explorer never stores or logs them. URLs shown or logged
-  have the user name and password removed.
+  (kiod, KWallet); Explorer never stores or logs them. Connect to Server has
+  no password field, builds its address from checked fields (hostile input is
+  refused, see "Home, Connect to Server and Network"), and the recent servers,
+  the sidebar place, Frequent Folders, the restored tabs and the per-folder
+  views keep addresses without a password. URLs shown or logged have the
+  user name's password removed. A name found on the network (Avahi, SMB) is
+  untrusted text: it is shown through the core's display names, and the
+  address Files opens for it is the core's. FTP, plain WebDAV and NFS are
+  marked "Not encrypted".
 - **The index** holds only names the user can already read, in the user's
   own cache (0700/0600); Search1 answers only processes in the same session
   bus.
@@ -1177,6 +1296,11 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Folder can't be read | Empty state with the error in plain words and Retry |
 | Folder removed while open | The tab goes to the nearest existing parent with a message |
 | Slow or dead server | Listing shows a spinner and Stop; the window stays responsive; KIO's timeouts end it |
+| Server doesn't answer in 10 s, refuses, has no route or doesn't resolve | "Can't Reach the Server" with Retry; the listing is stopped; other tabs are unaffected |
+| Server accepts the connection and then says nothing | The spinner and Stop stay (KIO's own timeouts end it); a password prompt is never cut off |
+| Wrong password, prompt cancelled | "Couldn't sign in. Check the user name and password." / "The connection was canceled." with Retry |
+| No Avahi on the system bus | The Network page says Files can't look for computers (the SMB worker still looks); Connect to Server works |
+| No activity service (Recent) | Home's Recent files are the freedesktop list only |
 | Thumbnailer crashes or hangs | That file falls back to its icon; PreviewJob's timeout |
 | A file can't be previewed (no thumbnailer, binary, unreadable, special, gone) | The icon and one plain line saying why; Quick Look and the pane stay usable |
 | Media can't be played | The player says "This file can't be played."; nothing else changes |

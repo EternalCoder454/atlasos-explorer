@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtQuick.Layouts
 import QtQml.Models
 import org.kde.kirigami as Kirigami
 import Telamon.Ui
@@ -12,6 +13,13 @@ import Telamon.Ui
 // tab goes to it.
 FocusScope {
     id: top
+
+    // One of Files' own pages (Home, Network) is shown in place of the
+    // folder: the window draws it, and this view stays out of the way.
+    readonly property bool showsPage: folderModel.pageKind !== ""
+    visible: !showsPage
+    // Waiting for a server's first answer (a spinner and Stop show instead of the empty folder).
+    readonly property bool connecting: folderModel.loading && folderModel.onServer && !folderModel.searching && folderModel.count === 0 && folderModel.errorText.length === 0
 
     // "details", "icons", "compact", "columns" or "gallery"
     property string viewMode: "details"
@@ -836,14 +844,43 @@ FocusScope {
         fv: top
     }
 
+    // A server that has not answered yet: a spinner, and Stop.
+    ColumnLayout {
+        anchors.centerIn: parent
+        visible: top.connecting
+        spacing: Kirigami.Units.largeSpacing
+        TelamonSpinner {
+            Layout.alignment: Qt.AlignHCenter
+            running: top.connecting
+        }
+        Text {
+            Layout.alignment: Qt.AlignHCenter
+            textFormat: Text.PlainText
+            text: qsTr("Connecting to %1…").arg(StandardPlaces.tabTitle(folderModel.url))
+            font.family: TelamonStyle.fontFamily
+            font.pointSize: TelamonStyle.fontSizeBody
+            color: TelamonStyle.textMuted
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+        SecondaryButton {
+            Layout.alignment: Qt.AlignHCenter
+            text: qsTr("Stop")
+            onClicked: folderModel.stop()
+        }
+    }
+
     TelamonEmptyState {
         anchors.centerIn: parent
-        visible: folderModel.searching ? (folderModel.count === 0 && !(top.search && top.search.pending)) : (folderModel.errorText.length > 0 || folderModel.count === 0)
+        visible: !top.connecting && (folderModel.searching ? (folderModel.count === 0 && !(top.search && top.search.pending)) : (folderModel.errorText.length > 0 || folderModel.count === 0))
         symbol: {
             if (folderModel.searching) {
                 return folderModel.loading ? Symbols.HourglassEmpty : Symbols.SearchOff;
             }
-            return folderModel.errorText.length > 0 ? Symbols.FolderOff : (folderModel.loading ? Symbols.HourglassEmpty : Symbols.FolderOpen);
+            if (folderModel.unreachable) {
+                return Symbols.Lan;
+            }
+            return folderModel.errorText.length > 0 ? Symbols.FolderOff : (folderModel.loading ? Symbols.HourglassEmpty : (folderModel.stopped ? Symbols.FolderOff : Symbols.FolderOpen));
         }
         title: {
             if (folderModel.searching) {
@@ -852,7 +889,13 @@ FocusScope {
                 }
                 return folderModel.loading ? qsTr("Searching…") : qsTr("No Results");
             }
-            return folderModel.errorText.length > 0 ? (folderModel.inArchive ? qsTr("Can't Open This Archive") : qsTr("Can't Open This Folder")) : (folderModel.loading ? qsTr("Loading…") : qsTr("This Folder Is Empty"));
+            if (folderModel.unreachable) {
+                return qsTr("Can't Reach the Server");
+            }
+            if (folderModel.errorText.length > 0) {
+                return folderModel.inArchive ? qsTr("Can't Open This Archive") : qsTr("Can't Open This Folder");
+            }
+            return folderModel.loading ? qsTr("Loading…") : (folderModel.stopped ? qsTr("Stopped") : qsTr("This Folder Is Empty"));
         }
         text: {
             if (folderModel.searching) {
@@ -864,10 +907,50 @@ FocusScope {
                 }
                 return top.search && top.search.chipLevel === 2 && !top.search.live ? qsTr("Nothing matches so far. The search index is still updating, so results may be missing.") : qsTr("Nothing here matches. Try other words, or another scope or filter.");
             }
+            if (folderModel.errorText.length === 0 && folderModel.stopped) {
+                return qsTr("Listing this folder was stopped.");
+            }
             return folderModel.errorText;
         }
-        actionText: folderModel.searching ? (top.search && top.search.failureTitle.length > 0 ? qsTr("Try Again") : "") : (folderModel.errorText.length > 0 ? qsTr("Retry") : "")
+        actionText: folderModel.searching ? (top.search && top.search.failureTitle.length > 0 ? qsTr("Try Again") : "") : (folderModel.errorText.length > 0 || folderModel.stopped ? qsTr("Retry") : "")
         onTriggered: folderModel.refresh()
+    }
+
+    // A listing from a server under way (or stopped half way): Stop, or Retry.
+    Rectangle {
+        visible: !top.connecting && !folderModel.searching && folderModel.onServer && folderModel.count > 0 && (folderModel.loading || folderModel.stopped)
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: Kirigami.Units.largeSpacing
+        radius: TelamonStyle.radius
+        color: Kirigami.Theme.backgroundColor
+        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.2)
+        implicitWidth: pillRow.implicitWidth + Kirigami.Units.gridUnit
+        implicitHeight: pillRow.implicitHeight + Kirigami.Units.smallSpacing * 2
+        width: implicitWidth
+        height: implicitHeight
+        RowLayout {
+            id: pillRow
+            anchors.centerIn: parent
+            spacing: Kirigami.Units.smallSpacing
+            TelamonSpinner {
+                running: folderModel.loading
+                visible: folderModel.loading
+                implicitWidth: Kirigami.Units.iconSizes.small
+                implicitHeight: implicitWidth
+            }
+            Text {
+                textFormat: Text.PlainText
+                text: folderModel.loading ? qsTr("Loading…") : qsTr("Stopped. Some items may be missing.")
+                font.family: TelamonStyle.fontFamily
+                font.pointSize: TelamonStyle.fontSizeBody
+                color: Kirigami.Theme.textColor
+            }
+            TextButton {
+                text: folderModel.loading ? qsTr("Stop") : qsTr("Retry")
+                onClicked: folderModel.loading ? folderModel.stop() : folderModel.refresh()
+            }
+        }
     }
 
     // Shown when the folder went away and its parent took its place.

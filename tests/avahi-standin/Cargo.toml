@@ -1,0 +1,12 @@
+[package]
+name = "telamon-avahi-standin"
+description = "A stand-in for the Avahi daemon's browse API, for Files' Network page smoke tests (not installed)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+zbus.workspace = true

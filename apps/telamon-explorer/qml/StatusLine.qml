@@ -24,7 +24,7 @@ StatusBar {
 
     readonly property int selectedCount: selection.files + selection.folders
     readonly property string summary: {
-        if (!folder || folder.errorText.length > 0) {
+        if (!folder || folder.errorText.length > 0 || folder.pageKind.length > 0) {
             return "";
         }
         const parts = [];

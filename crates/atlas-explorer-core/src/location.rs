@@ -111,6 +111,7 @@ pub fn segments(url: &str, home: &str) -> Vec<Segment> {
             "trash" => "Trash".to_string(),
             "recentlyused" => "Recent".to_string(),
             "network" => "Network".to_string(),
+            "home" => "Home".to_string(),
             _ => display_name(scheme),
         };
         (format!("{scheme}:"), label)
@@ -243,6 +244,8 @@ mod tests {
         );
         assert_eq!(crumbs("recentlyused:/"), [pair("Recent", "recentlyused:/")]);
         assert_eq!(crumbs("network:/"), [pair("Network", "network:/")]);
+        assert_eq!(crumbs("home:/"), [pair("Home", "home:/")]);
+        assert_eq!(crumbs("home:"), [pair("Home", "home:/")]);
         assert_eq!(crumbs("trash:"), [pair("Trash", "trash:/")]);
     }
 
