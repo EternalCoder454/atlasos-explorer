@@ -124,21 +124,17 @@ void GroupLines::rebuild()
     if (oldMid == 0 && newMid == 0) {
         return;
     }
-    const int both = std::min(oldMid, newMid);
-    // The lines that are in both places change in place.
-    if (both > 0) {
-        for (int i = 0; i < both; ++i) {
-            m_lines[prefix + i] = next.at(prefix + i);
-        }
-        Q_EMIT dataChanged(index(prefix), index(prefix + both - 1));
-    }
-    if (oldMid > both) {
-        beginRemoveRows({}, prefix + both, prefix + oldMid - 1);
-        m_lines.remove(prefix + both, oldMid - both);
+    // The lines in between are taken out and the new ones put in (not changed
+    // in place: a line that becomes a header changes its height, which the list
+    // does not follow well).
+    if (oldMid > 0) {
+        beginRemoveRows({}, prefix, prefix + oldMid - 1);
+        m_lines.remove(prefix, oldMid);
         endRemoveRows();
-    } else if (newMid > both) {
-        beginInsertRows({}, prefix + both, prefix + newMid - 1);
-        for (int i = both; i < newMid; ++i) {
+    }
+    if (newMid > 0) {
+        beginInsertRows({}, prefix, prefix + newMid - 1);
+        for (int i = 0; i < newMid; ++i) {
             m_lines.insert(prefix + i, next.at(prefix + i));
         }
         endInsertRows();

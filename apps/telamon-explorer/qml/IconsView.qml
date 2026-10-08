@@ -124,8 +124,8 @@ Item {
         id: list
         anchors.fill: parent
         visible: root.grouped
-        model: root.grouped ? lines : null
-        reuseItems: true
+        // The lines are empty while the folder isn't grouped.
+        model: lines
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         cacheBuffer: root.cellH * 4

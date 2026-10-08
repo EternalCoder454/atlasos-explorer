@@ -15,13 +15,13 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 7 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts)
+0.2.0 plus waves 1 to 8 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view)
 only these parts of the sections below exist: a tab strip with one folder per
-tab (Details, Icons and Compact views), a breadcrumb path bar that becomes a
+tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
 shows the index's answer (or a live walk) as a Details view with a Path column, a status line, the command bar's New Folder, Cut, Copy, Paste, Rename and Move to Trash
 with View and Sort menus, a sidebar of KIO places (pins, drives, phones, the Trash), KIO jobs run by one operation queue (ring and popover, conflict dialog, undo and redo), `FileManager1`, the launch parser and the index service. Everything
-else (the details pane, Columns and Gallery views, split view) is design,
+else (the details pane, split view) is design,
 not behaviour. Sections that
 have been built say so in a "Built" line.
 
@@ -422,6 +422,71 @@ Explorer replaces Dolphin completely.
   - All views are virtualized (`ListView`, `GridView`, `TableView` with
     fixed delegate sizes and `reuseItems`), so a 100k-item folder creates
     only the delegates on screen.
+
+  **Built (wave 8):** the views are `qml/DetailsView.qml`, `IconsView.qml`
+  (Icons and, with `compact`, Compact; the cell is `IconCell.qml`),
+  `ColumnsView.qml` (with `ColumnList.qml`) and `GalleryView.qml`, all drawing
+  the rows of the tab's one `FolderView`, which keeps the selection, the
+  keyboard and the drag and drop (a view only says where a row is: `reveal`,
+  `rowAt`, `rowRect`, `neighbor`). Search results are always the Details view.
+  - **Columns:** the strip is the folders on the way from the first column to
+    the tab's folder (each a `ColumnList` over its own `FolderModel`, sorted
+    and hiding as the tab's does), the tab's own column (the tab's
+    `FolderModel`, with the selection), and then what the selected item is: a
+    folder's items as one more column, or a file's preview (`PreviewPane`).
+    The tab's location is the folder of the column with the keyboard, so
+    Back, Forward, the path bar, the status line and every operation work as
+    in the other views. Right arrow (or Enter, or a double click) on a folder
+    goes into it and selects its first item; Left (and Backspace, Alt+Up)
+    goes to the folder it is in, with it selected; both keep the view
+    (`FolderView.keepView`: the next folder's remembered view is not brought
+    back). A click or a right click on an item in another column goes to that
+    column's folder with the item selected (`columnNavigateRequested`, the page
+    does it with its history and `showItems`), then the menu is shown for the
+    item; a drop on one goes into the folder under it. The first column
+    starts at the folder shown when the view was chosen, and moves up when
+    Left goes above it.
+  - **Gallery:** `PreviewBody` (the preview pane's) shows the row the
+    keyboard is on, over a filmstrip of the folder's thumbnails
+    (`image://thumb/`, a cell is 5 grid units); Left and Up are the one
+    before, Right and Down the one after, Page keys a screenful; the view
+    starts on the first item. A player stops while Quick Look is open or the
+    tab is not shown.
+  - **Group by** (Sort menu: None, Name, Type, Date Modified; Details and Icons
+    only): the core (`group`) says what group a row is in (its order key and
+    its label: the first letter, "0-9" and "#"; the kind; Today, Yesterday,
+    Earlier This Week, Last Week, Earlier This Month, Last Month, Earlier This
+    Year, A Long Time Ago, from the calendar day in the local zone and the
+    locale's first weekday), and the sort puts the groups first
+    (`telamon_sort_permutation` takes each row's group key and whether the
+    groups run backwards). Groups follow the sort's direction only when the
+    rows are sorted by what they are grouped by; otherwise names and kinds
+    run A to Z and dates newest first. `FolderModel` has the label per row
+    (`groupKey`), the count per group and the folded groups (forgotten when
+    another folder or another grouping is shown); the Details view uses the
+    list's `section` (the property stays `groupKey`: with no grouping every
+    row's key is empty and the header takes no room), the Icons view a list
+    of lines made by `GroupLines` (a header, or a line of cells; `RowSlice`
+    is one line's cells) because a grid can't have a header across its width.
+    A folded group's items are still rows of the model: they are deselected
+    when it folds, the arrow keys, Home, End, type-ahead, Shift-range and
+    Select All go past them, and they come back when it opens.
+  - **Per-folder memory:** `ViewMemory` keeps, in `telamon-explorerrc`,
+    `[FolderViews] List` (one line per folder, the 500 changed last: view,
+    sort column, direction, icon size, grouping and the folder's URL without
+    password, query or end slash; the core's `views` module reads, bounds and
+    writes it, bringing anything out of range back) and, in `[View]`, the
+    view that folders without a line of their own have (`Mode`, `SortColumn`,
+    `SortDescending`, `IconSize`, `GroupBy`; Details, Name, 96 px and no
+    groups until changed). A tab that goes to a folder shows it the way it
+    remembers (`FolderView.applyRemembered`), and a change of view, sort,
+    icon size or grouping is kept for the folder it was made in (not while
+    searching, and only when it differs from what the folder has, so looking
+    at a folder never adds one). The list is written 0.4 s after the last
+    change and at exit; nothing is written into a folder. View > "Use the
+    Same View for Every Folder" makes the shared view the one every folder
+    has (the folder shown gives it), and the folders' own lines wait for the
+    switch to be turned off; "Reset This Folder's View" forgets the line.
 - **Panes:** a preview pane (Alt+P: a large thumbnail, or text, or a media
   player) and a details pane (Alt+Shift+P: name, kind, size, dates,
   dimensions or duration from KFileMetaData's extractors run in a worker,
@@ -471,11 +536,13 @@ Explorer replaces Dolphin completely.
     details pane (Alt+Shift+P) and a pane that can be resized are not built.
   - Zoom: Ctrl+scroll, Ctrl+plus, Ctrl+minus change the icons' size in the
     Icons view (48 to 256 px, steps of 16, default 96) and the rows' height in
-    Details and Compact (24 to 64 px, steps of 4, default two grid units);
-    Ctrl+0 resets the one in use. Both are kept in `[View] IconSize` and
-    `RowHeight` (anything out of range in the file is brought back by the
-    core), shared by every tab, and the View menu has Zoom In, Zoom Out and
-    Reset Zoom.
+    Details, Compact and Columns (24 to 64 px, steps of 4, default two grid
+    units); Ctrl+0 resets the one in use. The rows' height is kept in
+    `[View] RowHeight` (anything out of range in the file is brought back by
+    the core) and shared by every tab; the icons' size is each folder's own
+    (wave 8, see per-folder memory) and Ctrl+0 returns it to the shared
+    view's. The View menu has Zoom In, Zoom Out and Reset Zoom; the gallery
+    has neither size.
 - **Status line** (in the details pane footer when it is shown, at the
   bottom otherwise): item count, selection size, free space.
 
