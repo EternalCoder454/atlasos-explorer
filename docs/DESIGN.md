@@ -817,6 +817,16 @@ Search(s query, u limit, a{sv} options) -> (a(sssssxtd) hits)
     "size_min"        t
     "size_max"        t
     "match"           s   "name" (default) | "path"
+    "tag"             s   only files and folders with this tag (see Tags
+                          below), ignoring case; a tag alone is a search,
+                          like a filter
+
+Tags() -> (a(su))
+  (name, count) of every tag in use: count = files and folders that carry
+  it. Names that differ only in case (or accents) are one tag, named by its
+  most common spelling (ties: the one that sorts first). Most used first,
+  then by name; at most 500. Hidden entries and the indexed roots
+  themselves are not counted, as a Search does not list them either.
 
 Status() -> (a{sv})
   "state"     s  "ready" | "scanning" | "stale" | "disabled" | "error"
@@ -831,6 +841,25 @@ Refresh()                 rescan now (the Settings "Rebuild" button)
 signal StatusChanged(a{sv} status)
 ```
 
+- **Tags:** the service records the freedesktop/Baloo tags of every file
+  and folder it lists: the extended attribute `user.xdg.tags`, a UTF-8
+  comma-separated list (`Red,Work,Taxes 2025`), read with `lgetxattr` (a
+  symlink's own attribute, never its target's; any error means no tags; at
+  most 4096 bytes). Cleaning is one routine (`tags.rs`) shared by the index
+  and the live walk: names are split on `,` and trimmed; empty names, names
+  with a control character and names over 64 characters are dropped;
+  repeats (ignoring case) are dropped, keeping the first; at most 32 per
+  entry; invalid UTF-8 is read lossily. They are kept in a side table (entry
+  id, offset, length) and a text arena, so a record stays the same size and
+  an index with no tags costs nothing. `Search` with `"tag"` matches an entry
+  when one of its tags equals the option ignoring case and accents (the
+  folding of names), and combines with every other option, including no
+  words: `Search("", 500, {"tag": "Red"})` lists the tagged entries, newest
+  first. The live walk of folders the index does not hold (`walk`) reads
+  `user.xdg.tags` of each candidate with the same parser, so a tag search
+  means the same there. There is no signal for a tag change: a caller
+  re-calls `Tags()` when `StatusChanged` arrives. Tags are the only extended
+  attribute the service reads.
 - **Matching:** case- and diacritic-insensitive (NFKD, combining marks
   dropped, Unicode case folding). The query is split on spaces; every word
   must match. Classes, best first: whole basename, basename prefix, word
@@ -868,22 +897,44 @@ signal StatusChanged(a{sv} status)
   folders that changed, run at idle priority while the query is answered
   from the current index. On start it loads the last snapshot (answering at
   once) and does the same mtime walk.
-- **Storage:** a snapshot file at `~/.cache/telamon-explorer/index/v1.idx`
+  **Tag changes.** Setting a tag does not change a folder's mtime (it is an
+  `IN_ATTRIB` on the entry), so the mtime walks cannot see it. A tag change
+  on an entry of a watched folder reaches the service as the watch's
+  `IN_ATTRIB` event, which lists that folder again; listing a folder reads the
+  tags of every entry in it, including its subfolders' own tags (a kept
+  subtree keeps its contents, but the subfolder's own tags are read again).
+  `NotifyChanged` for a file or folder lists the deepest indexed folder on
+  its path again, which does the same. In folders past the watch budget, and
+  after a restart (the start-up reconcile compares mtimes only), a tag change
+  made while no event or hint reached the service stays unseen until the
+  folder is listed again for another reason, or `Refresh()` (a full rescan).
+  A caller that sets tags (Files, once it does) sends `NotifyChanged` for the
+  entries it changed.
+- **Storage:** a snapshot file at `~/.cache/telamon-explorer/index/v2.idx`
   (folder 0700, file 0600, written atomically), a documented flat format:
-  header with version, checksum and counts, then a string arena and fixed-size
-  records. It is read into memory and decoded (not mapped), checked as
-  untrusted input, and must load within the 100 ms cold-start budget. It also
-  records the exclusion rules it was made under: changed rules mean a rescan.
-  It is a cache: deleting it only costs a rescan. No private data
+  header with version, checksums and counts, then fixed-size records, the
+  string arena, the tag entries (12 bytes: entry id, offset, length, reserved
+  zero) and the tag text arena (the counts of both are in the header; a
+  snapshot without tags has none). Version 2 added the tags; a `v1.idx` of the
+  version before is not read and is deleted when a snapshot is written. The
+  header checksum covers the header's fields (the version is checked before
+  it, so an older file is named as such). It is read into memory and decoded
+  (not mapped), checked as untrusted input (the tag entries too: ids ascending
+  and inside the index, text inside its arena, not overlapping, valid UTF-8 in
+  the cleaned form), and must load within the 100 ms cold-start budget. It
+  also records the exclusion rules it was made under: changed rules mean a
+  rescan. It is a cache: deleting it only costs a rescan. No private data
   leaves the user's cache folder.
 - **CLI:** `telamon-explorer-search [--kind K] [--in DIR] [--modified 7d]
-  [--larger 10M] [--smaller 1G] [--limit N] [--json] QUERY`, a thin client of
-  the D-Bus API.
+  [--larger 10M] [--smaller 1G] [--tag NAME] [--limit N] [--json] QUERY`, a
+  thin client of the D-Bus API.
 - **Service unit:** a systemd user unit, `Type=dbus`, `Nice=19`,
   `CPUSchedulingPolicy=idle`, `IOSchedulingClass=idle`, `MemoryHigh=96M`,
   `NoNewPrivileges=yes`, `PrivateNetwork=yes`, `ProtectSystem=strict`,
   `CacheDirectory=telamon-explorer` (0700; the service reads `$CACHE_DIRECTORY`),
-  `RestrictAddressFamilies=AF_UNIX`, a system-call filter, `TasksMax` and `MemoryMax`,
+  `RestrictAddressFamilies=AF_UNIX`, a system-call filter (`@system-service`
+  without `@privileged`; `lgetxattr`, which reads tags, is in `@file-system`,
+  which `@system-service` includes), `TasksMax` and `MemoryMax`,
   `Restart=on-failure` with backoff. Not started at login; the first query
   starts it, and it stays to keep the watches.
 
