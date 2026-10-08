@@ -818,7 +818,8 @@ pub unsafe extern "C" fn telamon_is_inside(
     preflight::is_inside(&string(source, source_len), &string(dest, dest_len))
 }
 
-/// The refusal for a folder into itself, in plain words. `transfer` 0 copy, 1 move.
+/// The refusal for a folder into itself, in plain words. `transfer` 0 copy,
+/// 1 move; `same` when the destination is the folder itself.
 ///
 /// # Safety
 /// The pointers cover their lengths (or are null with length 0); `out` has
@@ -830,6 +831,7 @@ pub unsafe extern "C" fn telamon_into_itself_text(
     folder_len: usize,
     dest: *const u8,
     dest_len: usize,
+    same: bool,
     out: *mut u8,
     cap: usize,
 ) -> usize {
@@ -838,7 +840,12 @@ pub unsafe extern "C" fn telamon_into_itself_text(
     } else {
         Transfer::Move
     };
-    let text = preflight::into_itself_text(t, &string(folder, folder_len), &string(dest, dest_len));
+    let text = preflight::into_itself_text(
+        t,
+        &string(folder, folder_len),
+        &string(dest, dest_len),
+        same,
+    );
     // SAFETY: `out` as promised.
     unsafe { put(text.as_bytes(), out, cap) }
 }

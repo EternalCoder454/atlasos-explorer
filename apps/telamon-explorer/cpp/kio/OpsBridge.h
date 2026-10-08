@@ -55,7 +55,8 @@ uint32_t telamon_conflict_newer(bool hasSource, int64_t source, bool hasDest, in
 bool telamon_conflict_endangers(uint32_t answer);
 size_t telamon_keep_both(const uint8_t *dir, size_t dirLen, const uint8_t *name, size_t nameLen, uint8_t *out, size_t cap);
 bool telamon_is_inside(const uint8_t *source, size_t sourceLen, const uint8_t *dest, size_t destLen);
-size_t telamon_into_itself_text(uint32_t transfer, const uint8_t *folder, size_t folderLen, const uint8_t *dest, size_t destLen, uint8_t *out, size_t cap);
+size_t telamon_into_itself_text(uint32_t transfer, const uint8_t *folder, size_t folderLen, const uint8_t *dest, size_t destLen, bool same, uint8_t *out,
+                              size_t cap);
 int32_t telamon_preflight(uint32_t transfer, const uint8_t *sources, size_t sourcesLen, const uint8_t *dest, size_t destLen, int64_t freeOverride, uint8_t *out,
                         size_t cap, size_t *len);
 }

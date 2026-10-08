@@ -47,14 +47,30 @@ pub fn is_inside(source: &str, dest: &str) -> bool {
             && dest.as_bytes()[source.len()] == b'/')
 }
 
-/// The message for a folder that would go into itself.
-pub fn into_itself_text(transfer: Transfer, folder_name: &str, dest_name: &str) -> String {
-    format!(
-        "Can't {} \"{}\" into itself. The folder you chose, \"{}\", is the same folder or inside it.",
-        transfer.verb(),
-        short_name(folder_name),
-        short_name(dest_name)
-    )
+/// The message for a folder that would go into itself: the destination is
+/// the folder (`same`) or a folder inside it.
+pub fn into_itself_text(
+    transfer: Transfer,
+    folder_name: &str,
+    dest_name: &str,
+    same: bool,
+) -> String {
+    if same {
+        format!(
+            "Can't {} \"{}\" into itself. Choose a different folder.",
+            transfer.verb(),
+            short_name(folder_name)
+        )
+    } else {
+        format!(
+            "Can't {} \"{}\" into \"{}\", because \"{}\" is inside it. Choose a folder outside \"{}\".",
+            transfer.verb(),
+            short_name(folder_name),
+            short_name(dest_name),
+            short_name(dest_name),
+            short_name(folder_name)
+        )
+    }
 }
 
 /// The message for a destination without room, with the numbers.
@@ -151,7 +167,12 @@ pub fn check_local(
         if let Ok(real) = std::fs::canonicalize(s)
             && real_dest.starts_with(&real)
         {
-            return Err(into_itself_text(transfer, &name_of(s), &dest_name));
+            return Err(into_itself_text(
+                transfer,
+                &name_of(s),
+                &dest_name,
+                real_dest == real,
+            ));
         }
     }
     // Room: a move on the same disk is a rename and needs none.
@@ -231,6 +252,13 @@ mod tests {
             assert!(e.contains("\"Projects\""), "{e}");
             assert!(e.starts_with("Can't move"), "{e}");
         }
+        let e = check_local(Transfer::Move, std::slice::from_ref(&a), &a, None).unwrap_err();
+        assert_eq!(e, "Can't move \"Projects\" into itself. Choose a different folder.");
+        let e = check_local(Transfer::Move, std::slice::from_ref(&a), &old, None).unwrap_err();
+        assert_eq!(
+            e,
+            "Can't move \"Projects\" into \"Old\", because \"Old\" is inside it. Choose a folder outside \"Projects\"."
+        );
         let e = check_local(Transfer::Copy, std::slice::from_ref(&a), &old, None).unwrap_err();
         assert!(e.starts_with("Can't copy"), "{e}");
         // A sibling is fine, and so is a file next to a folder of the same prefix.

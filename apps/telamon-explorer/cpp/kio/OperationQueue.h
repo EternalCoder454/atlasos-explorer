@@ -157,7 +157,7 @@ private:
     void attach(Work &w, KJob *job);
     void stepDone(quint64 id, KJob *job);
     void finishOp(quint64 id);
-    void failOp(quint64 id, const QString &why);
+    void failOp(quint64 id, const QString &why, bool say = true);
     void endOp(quint64 id, bool ok = false);
     void refresh();
     void refreshRows();

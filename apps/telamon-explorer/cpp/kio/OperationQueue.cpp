@@ -612,8 +612,9 @@ void OperationQueue::startOp(quint64 id)
             if (rc == 0) {
                 self->runStep(id);
             } else {
+                // The dialog says it; the list keeps the row, the toast stays quiet.
                 Q_EMIT self->refused(title, why);
-                self->failOp(id, why);
+                self->failOp(id, why, false);
             }
         });
     });
@@ -712,7 +713,7 @@ void OperationQueue::finishOp(quint64 id)
     Q_EMIT jobFinished();
 }
 
-void OperationQueue::failOp(quint64 id, const QString &why)
+void OperationQueue::failOp(quint64 id, const QString &why, bool say)
 {
     if (!m_work.contains(id)) {
         return;
@@ -729,7 +730,7 @@ void OperationQueue::failOp(quint64 id, const QString &why)
         telamon_hist_drop(m_engine, uint32_t(w.side));
         refreshHistory();
         Q_EMIT message(tr("Couldn't %1 \"%2\": %3").arg(w.side == 0 ? tr("undo") : tr("redo"), w.title, why));
-    } else {
+    } else if (say) {
         Q_EMIT message(tr("%1 didn't finish: %2").arg(w.title, why));
     }
     endOp(id, false);
@@ -1064,7 +1065,8 @@ void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUr
                 const QByteArray name = rustDisplayName(u.adjusted(QUrl::StripTrailingSlash).fileName().toUtf8()).toUtf8();
                 const QByteArray dest = folderName(destination).toUtf8();
                 const QString text = OpsBridge::textOf([&](uint8_t *o, size_t c) {
-                    return telamon_into_itself_text(kind == Copy ? 0 : 1, OpsBridge::p(name), OpsBridge::n(name), OpsBridge::p(dest), OpsBridge::n(dest), o, c);
+                    return telamon_into_itself_text(kind == Copy ? 0 : 1, OpsBridge::p(name), OpsBridge::n(name), OpsBridge::p(dest), OpsBridge::n(dest),
+                                                    s == d, o, c);
                 });
                 Q_EMIT refused(kind == Copy ? tr("Can't Copy") : tr("Can't Move"), text);
                 if (done) {
