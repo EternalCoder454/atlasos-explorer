@@ -637,33 +637,72 @@ pub unsafe extern "C" fn telamon_archive_check(
     code
 }
 
-/// Where the central directory of a zip is, from the last bytes of the file
-/// (`tail`) and its length. On success writes offset, size and entry count to
-/// `out` (three u64s) and returns true; false when it isn't a zip (or is one
-/// whose directory can't be found this way).
+/// What the last bytes of a file (`tail`, of a file `file_len` long) say about
+/// it being a zip: 0 not a zip, 1 a zip whose central directory is described
+/// by `out` (offset, size, entries and where the end record is: four u64s),
+/// 2 a zip64 one whose own record is at `out[0]`, 3 a zip that can't be
+/// placed. -1 on bad arguments.
 ///
 /// # Safety
 /// `tail` points to `len` readable bytes (or is null with length 0); `out`
-/// points to three writable u64s.
+/// points to four writable u64s.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn telamon_zip_directory(
+pub unsafe extern "C" fn telamon_zip_end(
     tail: *const u8,
     len: usize,
     file_len: u64,
+    out: *mut u64,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    // SAFETY: forwarded from this function's contract.
+    let tail = unsafe { bytes(tail, len) };
+    // SAFETY (all writes): `out` has four writable u64s.
+    match archive::zip_end(tail, file_len) {
+        archive::ZipEnd::NotZip => 0,
+        archive::ZipEnd::Directory(d) => {
+            unsafe {
+                *out = d.offset;
+                *out.add(1) = d.size;
+                *out.add(2) = d.entries;
+                *out.add(3) = d.end_at;
+            }
+            1
+        }
+        archive::ZipEnd::Zip64At(at) => {
+            unsafe { *out = at };
+            2
+        }
+        archive::ZipEnd::Unreadable => 3,
+    }
+}
+
+/// The directory a zip64 end record describes (`record` is what was read at
+/// the offset `telamon_zip_end` gave); fills `out` as for `telamon_zip_end`.
+///
+/// # Safety
+/// `record` points to `len` readable bytes (or is null with length 0); `out`
+/// points to four writable u64s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_zip64_directory(
+    record: *const u8,
+    len: usize,
+    end_at: u64,
     out: *mut u64,
 ) -> bool {
     if out.is_null() {
         return false;
     }
     // SAFETY: forwarded from this function's contract.
-    let tail = unsafe { bytes(tail, len) };
-    match archive::zip_directory(tail, file_len) {
+    match archive::zip64_directory(unsafe { bytes(record, len) }, end_at) {
         Some(d) => {
-            // SAFETY: `out` has three writable u64s.
+            // SAFETY: `out` has four writable u64s.
             unsafe {
                 *out = d.offset;
                 *out.add(1) = d.size;
                 *out.add(2) = d.entries;
+                *out.add(3) = d.end_at;
             }
             true
         }
@@ -1535,9 +1574,16 @@ mod tests {
             );
         }
         // Not a zip: no directory, and nothing encrypted.
-        let mut out = [0u64; 3];
-        assert!(!unsafe { telamon_zip_directory(b"hello".as_ptr(), 5, 5, out.as_mut_ptr()) });
+        let mut out = [0u64; 4];
+        assert_eq!(
+            unsafe { telamon_zip_end(b"hello".as_ptr(), 5, 5, out.as_mut_ptr()) },
+            0
+        );
         assert!(!unsafe { telamon_zip_encrypted(b"hello".as_ptr(), 5) });
-        assert!(!unsafe { telamon_zip_directory(std::ptr::null(), 0, 0, out.as_mut_ptr()) });
+        assert_eq!(
+            unsafe { telamon_zip_end(std::ptr::null(), 0, 0, out.as_mut_ptr()) },
+            0
+        );
+        assert!(!unsafe { telamon_zip64_directory(b"no".as_ptr(), 2, 0, out.as_mut_ptr()) });
     }
 }

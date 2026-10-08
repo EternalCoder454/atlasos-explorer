@@ -22,10 +22,13 @@ namespace ArchiveCheck
 // Looks, on a worker, at the zip files among `files` (local files) for the
 // flag that says their entries are encrypted: KIO's archive worker can't
 // decrypt and would hand out the encrypted bytes as if they were the files.
-// `done` gets the name of the first that needs a password, or an empty string.
-void findEncryptedZip(const QList<QUrl> &files, QObject *context, std::function<void(const QString &name)> done);
-// The words for it; `archiveInstalled` adds where a password can be given.
+// `done` gets the name of the first that needs a password (`unknown` false),
+// or the first whose directory can't be read well enough to tell (`unknown`
+// true), or an empty name.
+void findEncryptedZip(const QList<QUrl> &files, QObject *context, std::function<void(const QString &name, bool unknown)> done);
+// The words for them; `archiveInstalled` adds where a password can be given.
 QString needsPasswordText(const QString &name, bool archiveInstalled);
+QString undecidedText(const QString &name, bool archiveInstalled);
 }
 
 // What the steps of one extraction hand to each other.
@@ -48,9 +51,9 @@ class ArchiveGuardJob : public KJob
 
 public:
     // The error code of a refusal (the window shows its text in a dialog).
-    static constexpr int Refused = KJob::UserDefinedError + 1;
+    static constexpr int Refused = KJob::UserDefinedError + 1001;
     // An encrypted zip: Files can't enter the password.
-    static constexpr int NeedsPassword = KJob::UserDefinedError + 3;
+    static constexpr int NeedsPassword = KJob::UserDefinedError + 1003;
 
     ArchiveGuardJob(const QList<QUrl> &sources, bool root, std::shared_ptr<ArchivePlan> plan, bool archiveInstalled, QObject *parent = nullptr);
 
@@ -77,6 +80,7 @@ private:
     quint64 m_bytes = 0;
     QPointer<KJob> m_sub;
     bool m_done = false;
+    bool m_toobig = false;
 };
 
 // Picks a free folder name in `parent` (a folder on this computer) when
@@ -87,7 +91,7 @@ class ArchivePrepareJob : public KJob
     Q_OBJECT
 
 public:
-    static constexpr int NoRoom = KJob::UserDefinedError + 2;
+    static constexpr int NoRoom = KJob::UserDefinedError + 1002;
 
     // `name` empty: `parent` is the folder, nothing is picked.
     ArchivePrepareJob(const QUrl &parent, const QString &name, const QString &what, std::shared_ptr<ArchivePlan> plan, QObject *parent_ = nullptr);

@@ -102,6 +102,8 @@ private:
     QString m_state;
     QString m_error;
     bool m_finished = false;
+    // The result was given (or the job was killed): nothing more is said.
+    bool m_reported = false;
     bool m_asked = false;
     // A Finished that arrived before the call had returned its path.
     QList<QDBusMessage> m_early;

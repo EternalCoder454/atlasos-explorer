@@ -33,6 +33,7 @@
 #include <QSet>
 #include <QThreadPool>
 
+#include <algorithm>
 #include <memory>
 
 #include <dirent.h>
@@ -797,7 +798,8 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
         }
         // An archive Files won't take apart, or a disk without room: a dialog
         // says it in full (the list keeps the row, the toast stays quiet).
-        if (job->error() == ArchiveGuardJob::Refused || job->error() == ArchiveGuardJob::NeedsPassword || job->error() == ArchivePrepareJob::NoRoom) {
+        const bool ours = qobject_cast<ArchiveGuardJob *>(job) || qobject_cast<ArchivePrepareJob *>(job);
+        if (ours && (job->error() == ArchiveGuardJob::Refused || job->error() == ArchiveGuardJob::NeedsPassword || job->error() == ArchivePrepareJob::NoRoom)) {
             const QString text = job->errorString();
             Q_EMIT refused(job->error() == ArchiveGuardJob::Refused ? tr("Can't Extract")
                                                                     : (job->error() == ArchiveGuardJob::NeedsPassword ? tr("Needs a Password") : tr("Not Enough Space")),
@@ -1227,6 +1229,13 @@ void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUr
     for (const QUrl &u : sources) {
         fromArchive = fromArchive || rustArchiveScheme(u.scheme());
     }
+    if (fromArchive && !std::all_of(sources.cbegin(), sources.cend(), [](const QUrl &u) { return rustArchiveScheme(u.scheme()); })) {
+        Q_EMIT refused(tr("Can't Copy"), tr("Files in an archive and files outside it can't be taken in one go. Do them one after the other."));
+        if (done) {
+            done(false);
+        }
+        return;
+    }
     if (rustArchiveScheme(destination.scheme())) {
         Q_EMIT refused(tr("Can't Copy"), tr("An archive is open for reading only, so nothing can be put into it. Extract it first, then change the files."));
         if (done) {
@@ -1449,7 +1458,7 @@ void OperationQueue::extractArchive(const QUrl &root, const QUrl &parentFolder, 
     w.sources = {root};
     w.plan = plan;
     const QString shown = rustDisplayName(archiveName.toUtf8());
-    w.title = tr("Extract %1").arg(shown);
+    w.title = tr("Extract \"%1\"").arg(shown);
     w.steps << [this, root, plan]() -> KJob * { return new ArchiveGuardJob({root}, true, plan, archiveInstalled()); };
     w.steps << [parentFolder, folderName, shown, plan]() -> KJob * { return new ArchivePrepareJob(parentFolder, folderName, tr("\"%1\"").arg(shown), plan); };
     w.steps << [plan]() -> KJob * {
@@ -1462,7 +1471,7 @@ void OperationQueue::extractArchive(const QUrl &root, const QUrl &parentFolder, 
         }
         return KIO::copy(plan->children, plan->dest, KIO::HideProgressInfo);
     };
-    enqueue(std::move(w), tr("Extracting %1").arg(shown));
+    enqueue(std::move(w), tr("Extracting \"%1\"").arg(shown));
 }
 
 // ---- Undo and redo ----

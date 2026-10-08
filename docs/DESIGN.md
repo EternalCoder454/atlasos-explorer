@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 8 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view)
+0.2.0 plus waves 1 to 9 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -40,7 +40,8 @@ Explorer replaces Dolphin completely.
 | Properties dialog | Explorer, with permissions, default app and checksums |
 | `org.freedesktop.FileManager1` ("Show in folder") | Explorer |
 | Default for `inode/directory` | Explorer (the image's `mimeapps.list`) |
-| Archive extract and compress | **Atlas Archive** over its D-Bus API; Explorer only calls it |
+| Archive extract and compress | **Telamon Archive** over its D-Bus API; Explorer only calls it |
+| Archives as folders (read-only) | Explorer, through kio-extras' archive worker, with its own checks ("Archives", below) |
 | Drive details, partitioning | **Atlas Disks** ("Open in Disks" hook) |
 | Previous versions | **Atlas Backups** ("Restore Previous Versions" hook) |
 | Baloo's indexer (already removed in the image) | Explorer's index service, used by Atlas Launcher |
@@ -71,12 +72,17 @@ Explorer replaces Dolphin completely.
     Heavy or pure logic is called from these through a `cxx` bridge into the
     core crate, never written twice. `SearchController` is the search of one
     tab and `SearchService` the client of the index service.
+  - `cpp/kio/ArchiveClient.*` (Archive1 over D-Bus and `ArchiveJob`),
+    `cpp/kio/ArchiveGuard.*` (what Files checks before KIO copies out of an
+    archive).
   - `cpp/main.cpp`: Qt start, telamon-framework-ui startup, single instance,
     FileManager1.
   - `qml/`: the window, views and dialogs, all from Telamon.Ui.
 - `apps/telamon-explorer-indexd`: the index service binary (zbus), plus its
   systemd user unit and D-Bus activation file.
 - `apps/telamon-explorer-search`: the index CLI.
+- `tests/archive-standin`: a stand-in for Telamon Archive's `Archive1` D-Bus
+  API, for smoke tests (see "Archives"). Not installed.
 
 ## Window
 
@@ -343,10 +349,11 @@ Explorer replaces Dolphin completely.
     file that isn't text or is over 1 MiB is left alone, the write is atomic.
     Unhide takes the name out. Neither is undoable. Show Hidden Files (Ctrl+H)
     shows the item dimmed.
-  - **Compress…** calls Archive's `CompressDialog(as files, a{sv})` on
-    `net.eterneon.telamon.Archive1` (then the old `atlas` name) with file://
-    URIs, `show_progress` false and, on X11, `parent_window`; an answer that
-    is an error says "Telamon Archive could not be started."
+  - **Extract Here, Extract To…, Compress to ZIP and Compress…** (wave 9)
+    call Archive; see "Archives" below. Extract shows for archives only
+    (every item's name is one of the types in Archive's desktop file's
+    `MimeType=`), Compress for any item, and all four only when Archive is
+    installed; they are off for items that aren't on this computer.
   - **Open Terminal Here** is `KTerminalLauncherJob`, which starts the
     terminal of kdeglobals (`TerminalApplication`, `TerminalService`) in the
     folder: the folder itself for a folder, the file's folder for a file, the
@@ -764,30 +771,138 @@ not set). `org.freedesktop.FileManager1` is unchanged: a still-running
 | Atlas Disks (later) | `net.eterneon.atlas.disks` (`net.eterneon.telamon.disks` after the rename): a `ShowDevice(s udisks_object_path)`-style deep link | "Open in Disks" for drives in the sidebar (built, wave 3; the names are assumed) and in Properties, shown only when installed |
 | Atlas Launcher | consumes Search1 | — |
 
-**Archive1, as Explorer uses it.** Every call passes `activation_token`,
-`parent_window` and `show_progress=false`, so the job shows in Explorer's
-queue, driven through its `net.eterneon.atlas.Archive1.Job` object (Title,
-State, Processed/Total Bytes and Items, Error; Pause, Resume, Cancel;
-`Finished(s state, as results)`, whose results Explorer selects).
+**Archive1, as Explorer uses it.** The names are Archive's: first
+`net.eterneon.telamon.archive` at `/net/eterneon/telamon/archive`, interface
+`net.eterneon.telamon.Archive1`; when that name has no owner, the old
+`net.eterneon.atlas.archive` (kept for one release). Every call passes
+`parent_window` (`x11:<id>` on X11; Wayland's xdg-foreign handle is not
+available to Qt, so none there) and, on Wayland, an `activation_token`
+(asked of KWaylandExtras, waited for half a second at most). A call that
+returns a job passes `show_progress=false`, so the job shows in Explorer's
+queue; a call that opens one of Archive's dialogs leaves it on, or nothing
+would show the job.
 
-- Extract Here: `ExtractHere(as archives, a{sv}) -> o`
-- Extract To…: `ExtractAll(as archives, a{sv})` (Archive's own dialog)
+- Extract Here: `ExtractHere(as archives, a{sv}) -> o`, a job
 - Compress to ZIP: `Compress(as files, "zip", "", a{sv}) -> o` (empty
   destination: `<name>.zip` beside the first item, `Archive.zip` for
-  several, ` (2)` on a clash); Compress…: `CompressDialog(as files, a{sv})`
-- A drop carrying `application/x-atlas-archive-entries` on a local folder,
-  tab, breadcrumb segment or place: `ExtractEntries(s archive, as entry_ids,
-  s folder, a{sv}) -> o` (IDs opaque); `text/uri-list` otherwise.
+  several, ` (2)` on a clash), a job
+- Extract To…: `ExtractAll(as archives, a{sv})` (Archive's own dialog, no
+  picker of Explorer's) and Compress…: `CompressDialog(as files, a{sv})`.
+  Both return nothing, so there is no job to show and no result to select;
+  Archive's own progress window stays on.
 - Which files get the extract items: the `MimeType=` list of
-  `net.eterneon.atlas.archive.desktop`, read through KService.
-- Double-clicking an archive opens it with the mimeapps default (Archive's
-  window). No "Open as Folder" in v1; when Archive ships its read-only
-  `atlas-archive:` KIO worker, Explorer browses through it.
-- `TooManyJobs` is shown as "Archive is busy, try again when a job
-  finishes", without a retry.
+  `net.eterneon.telamon.archive.desktop` (then the old
+  `net.eterneon.atlas.archive.desktop`), read with KDesktopFile; an item
+  counts by its name's MIME type (`QMimeType::inherits`), never by sniffing.
+- A job object (`.../job/<n>`, interface `<iface>.Job`) is followed by
+  `ArchiveJob` (`cpp/kio/ArchiveClient.*`), a `KJob`: `Finished(state,
+  results)` is listened for from before the call (a short job can end before
+  the reply is read), `GetAll` and `PropertiesChanged` give `State`,
+  `ProcessedBytes`/`TotalBytes` and `ProcessedItems`/`TotalItems` (the
+  queue's progress), Pause, Resume and Cancel are `suspend`, `resume` and
+  `kill` (a Cancel asked before the call has returned its path is sent as
+  soon as it does), `waiting-for-user` says once "Telamon Archive needs an
+  answer from you", and the job's `Error` is shown in plain words (made safe
+  to show: it can hold names from the archive). Archive going away ends the
+  job with "Telamon Archive stopped before it finished.". `results` that are
+  `file://` URIs are selected when the job is done, in a tab that shows their
+  folder. A job is `Kind::External` in the queue: a transfer, so it takes
+  turns with copies and moves, and is not undoable.
+- `TooManyJobs` is shown as "Archive is busy, try again when a job finishes."
+  with no retry; `InvalidArgs` as "Telamon Archive can't use these files. It
+  opens only files on this computer."; no owner on either name as "Telamon
+  Archive could not be started.".
+- Not done: a drop carrying `application/x-telamon-archive-entries` (or the
+  old `x-atlas-` type) on a folder, tab, breadcrumb segment or place, for
+  `ExtractEntries(s archive, as entry_ids, s folder, a{sv}) -> o`: Archive's
+  DESIGN doesn't give the type's payload yet. Drops of `text/uri-list` work as
+  for any files.
+- Double-clicking an archive opens it as a folder in Files (below); "Open
+  With" still gives Archive's window.
 - Archive asks its own questions (passwords, conflicts with the same
   choices as Explorer's, archive-bomb limits) stacked on Explorer's window.
 | kdeglobals `TerminalApplication` | KTerminalLauncherJob | "Open Terminal Here", Shift+F4 (Ghostty) |
+
+## Archives
+
+**Built (wave 9).** Two things, which don't share code: Telamon Archive's jobs
+(above), and archives opened as folders.
+
+- **Opening** an archive (Enter, double click, "Open") that is a file on this
+  computer and whose MIME type KIO's archive worker has a protocol for
+  (`KProtocolManager::protocolForArchiveMimetype` for exactly that type, so a
+  `.docx` or `.epub`, which inherits `application/zip`, opens as a document:
+  `zip`, `tar` for the `.tar.*` family, `sevenz`, `ar`) goes to `zip:/path/a.zip` and so on, a folder like
+  any other that KCoreDirLister lists through kio-extras. Others (a lone
+  `.gz`, RAR, ISO) open with the default application as before. The zip's end
+  is looked at first, on a worker (zip64, junk after the end record and data
+  before the zip are followed): when its central directory marks an entry
+  encrypted, or can't be read well enough to tell, the archive is not opened,
+  and the window says it needs a password (or that Files can't tell) (KArchive can't decrypt, and would hand out the encrypted bytes as
+  the files).
+- **Read-only:** `FolderModel.inArchive` is true for these schemes; `canWrite`
+  is false (kio-extras reports its folders writable), so New, Cut, Paste,
+  Rename and Move to Trash are off, and a drop into an archive (or a paste)
+  is refused: "An archive is open for reading only…". The status line says
+  "archive, read-only"; free space isn't shown.
+- **Where it is:** `atlas_explorer_core::archive::locate` splits
+  `zip:/home/u/a.zip/sub` into the file (the first part of the path whose name
+  ends like an archive; a folder called `x.zip` above an archive is not told
+  apart, KIO's own answer would need the disk) and the path inside. The path bar
+  shows where the archive is, then the archive as a folder, then the folders in
+  it (Home › Documents › a.zip › sub); Up from the top is the folder the
+  archive is in; the display path and tab title follow.
+- **Extract button** (command bar, only in an archive): with Archive
+  installed it is Archive's "Extract All" (`ExtractAll`, its dialog); without
+  it Files extracts by KIO into a new folder beside the archive named after it
+  (`photos.tar.gz` gives `photos`, ` (2)` when taken), as one queued operation:
+  look, choose the name and check the room, make the folder, copy what the
+  archive holds at its top.
+- **Taking entries out** (drag, paste, the Extract button without Archive) is
+  a copy by KIO, through the queue, so a name that is taken opens the
+  conflict dialog and nothing is replaced without it. Out of an archive things
+  are only copied (a drag offers Copy only, a drop makes no Move, Copy, Link
+  menu, Shift moves nothing, and a drop on the Trash or a Link says why it
+  can't) and the operation is not recorded for undo (a redo would skip the look
+  below). Before the copy starts, three steps of the same operation run:
+  1. `ArchiveGuardJob` looks at the zip's encryption flag, then lists what is
+     to be copied (`KIO::listRecursive`, stat for a file or a link) and hands
+     every path and link target to the core, which refuses the whole
+     operation when any entry's path is absolute, holds `..` (split on `/`
+     and `\`), a NUL or a drive, is longer than 256 components or 4,096
+     bytes, or is a link whose target is absolute or holds `..` (so no chain
+     of links can lead out: a link to `.` followed by `x/..` is why `..` is
+     refused and not resolved). The rules are Telamon Archive's own
+     (`core::path`), made stricter for links because KIO can't do Archive's
+     `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` work. KArchive lists a
+     `../x` entry as a folder named `..`, so this is a real case, and it
+     is tested with real zip and tar files made to do it. The refusal is a
+     dialog naming the first entry and how many are like it, and offering Telamon
+     Archive (which skips such entries and extracts the rest) when installed.
+  2. `ArchivePrepareJob` picks the folder's name (for the Extract button) and
+     checks, on a worker, that the disk has room for the sizes the listing
+     gave ("Not Enough Space"). A server is not asked.
+  3. Then `KIO::copy`.
+  What it does not do: the archive file can change between the look and the
+  copy (it is the user's own file); setuid and setgid bits in a tar come
+  through KIO's copy as KIO sets permissions (the files are the user's own,
+  but they aren't dropped as Archive drops them); and a `.tar.gz` that is cut
+  off lists only what was read and extracts silently as that (KArchive's
+  limit; Telamon Archive reports it).
+- **Errors** in plain words, never KIO's text: an archive KIO can't list says
+  "This archive couldn't be read. It may be damaged, or it may need a password,
+  which Files can't enter." (empty state "Can't Open This Archive", with Retry); a
+  zip that needs a password says so; a refusal, no room, Archive busy or not
+  running, and what Archive says (`Error`) show in the popover row's red line
+  and a toast or dialog.
+- **Testing without Archive's server:** Telamon Archive doesn't serve `Archive1`
+  yet (its DESIGN has the API, its code has none). `tests/archive-standin`
+  (`telamon-archive-standin`, a workspace member, never installed) serves the
+  API on the session bus: jobs with progress, Pause, Resume, Cancel, `Finished`,
+  `TooManyJobs`, `InvalidArgs`; it extracts with `unzip`, `tar` and `7z` and
+  compresses with `zip`, `tar` and `7z`, asks nothing, and logs each call
+  (`STANDIN_LOG`). `STANDIN_SLOW_MS`, `STANDIN_MAX_JOBS` and `STANDIN_ASK`
+  make jobs slow, few, or ask the user, to try the popover and the errors.
 
 ## Threads
 
@@ -1022,7 +1137,10 @@ files are read-only: no "Open as Administrator", no `admin:/` (Zach,
 | Index service not installed, won't start, or doesn't answer | A search that needs the index shows "Search Isn't Available" (and the chip "Search isn't available") with Try Again; a search of a folder the index doesn't hold is a live walk and works |
 | Index service busy (too many searches at once) | The search is asked again after 150 ms |
 | Live walk of a folder that can't be read | The results area says "Can't Search This Folder" |
-| Peer app missing (Archive, Backups, Disks) | Its menu items are hidden |
+| Peer app missing (Archive, Backups, Disks) | Its menu items are hidden; Open on an archive and the Extract button in an archive still work through KIO |
+| Archive busy, not running, or a job it runs fails | The popover row says why in Archive's words (or "Archive is busy, try again when a job finishes."); nothing is retried |
+| An archive KIO can't read, or a zip that needs a password | "This archive couldn't be read…" or "\"a.zip\" needs a password, which Files can't enter."; nothing is extracted |
+| An archive with an entry that would leave the folder | The whole extraction is refused, in a dialog, before anything is written |
 
 Logging: `telamon-framework-ui` logging to the journal as `telamon-explorer` and
 `telamon-explorer-indexd`: every operation's start, end, error and recovery;

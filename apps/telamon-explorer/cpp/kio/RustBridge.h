@@ -78,7 +78,8 @@ size_t telamon_tabs_restore(const uint8_t *saved, size_t len, size_t current, ui
 size_t telamon_menu_state(uint32_t kind, size_t count, size_t folders, uint32_t flags, uint8_t *out, size_t cap);
 bool telamon_menu_paste_into_folder(size_t count, size_t folders);
 size_t telamon_menu_text(uint32_t which, const uint8_t *a, size_t aLen, uint8_t *out, size_t cap);
-bool telamon_zip_directory(const uint8_t *tail, size_t len, uint64_t fileLen, uint64_t *out);
+int telamon_zip_end(const uint8_t *tail, size_t len, uint64_t fileLen, uint64_t *out);
+bool telamon_zip64_directory(const uint8_t *record, size_t len, uint64_t endAt, uint64_t *out);
 bool telamon_zip_encrypted(const uint8_t *directory, size_t len);
 bool telamon_archive_is_scheme(const uint8_t *scheme, size_t len);
 int telamon_archive_check(const uint8_t *records, size_t recordsLen, bool archiveInstalled, uint8_t *out, size_t cap, size_t *textLen);

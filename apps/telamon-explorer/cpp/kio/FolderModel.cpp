@@ -56,6 +56,8 @@ FolderModel::FolderModel(QObject *parent)
     , m_lister(new KCoreDirLister(this))
 {
     s_models.append(this);
+    connect(this, &FolderModel::urlChanged, this, &FolderModel::archiveChanged);
+    connect(this, &FolderModel::searchingChanged, this, &FolderModel::archiveChanged);
     m_pool.setMaxThreadCount(1);
     m_lister->setDelayedMimeTypes(true);
     m_lister->setAutoErrorHandlingEnabled(false);

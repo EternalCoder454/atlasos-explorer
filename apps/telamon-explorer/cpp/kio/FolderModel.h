@@ -37,7 +37,7 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(bool canWrite READ canWrite NOTIFY canWriteChanged)
     // The folder is inside an archive (`zip:/...`, `tar:/...`): read-only, with
     // an Extract button in the window.
-    Q_PROPERTY(bool inArchive READ inArchive NOTIFY urlChanged)
+    Q_PROPERTY(bool inArchive READ inArchive NOTIFY archiveChanged)
     // True while the rows are search results (SearchController) and not the
     // folder's items. `url` stays the folder the search started in.
     Q_PROPERTY(bool searching READ searching NOTIFY searchingChanged)
@@ -186,6 +186,8 @@ public:
     Q_INVOKABLE QVariantMap selectionStats(const QVariantList &rows) const;
 
 Q_SIGNALS:
+    // The folder is, or is no longer, shown from inside an archive.
+    void archiveChanged();
     void urlChanged();
     void loadingChanged();
     void errorTextChanged();

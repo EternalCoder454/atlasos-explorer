@@ -409,7 +409,7 @@ pub fn archive_name(url: &str) -> Option<String> {
 /// is 22 bytes and a comment of up to 65,535 bytes follows it).
 pub const ZIP_TAIL: usize = 22 + 65_535;
 /// The largest central directory that is read to look for encryption.
-pub const ZIP_MAX_DIRECTORY: u64 = 16 * 1024 * 1024;
+pub const ZIP_MAX_DIRECTORY: u64 = 256 * 1024 * 1024;
 
 /// Where a zip's central directory is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,6 +417,21 @@ pub struct ZipDirectory {
     pub offset: u64,
     pub size: u64,
     pub entries: u64,
+    /// Where the end record is in the file. A zip with something put before
+    /// it has its directory at `end_at - size`, not at `offset`.
+    pub end_at: u64,
+}
+
+/// What the end of a file says about it being a zip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZipEnd {
+    /// No end record: not a zip (KIO will say what it makes of it).
+    NotZip,
+    Directory(ZipDirectory),
+    /// A zip64 file: its directory is described by the record at this offset.
+    Zip64At(u64),
+    /// A zip whose directory can't be placed: the caller can't tell.
+    Unreadable,
 }
 
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
@@ -428,33 +443,68 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
 }
 
 /// Finds the end record in `tail` (the last bytes of a file `file_len` long)
-/// and says where the central directory is. None when it is not a zip, or a
-/// zip64 one (whose record is elsewhere): the caller then can't tell.
-pub fn zip_directory(tail: &[u8], file_len: u64) -> Option<ZipDirectory> {
-    let mut i = tail.len().checked_sub(22)?;
+/// and says where the central directory is. Bytes after the record (a comment,
+/// or junk put there) don't hide it.
+pub fn zip_end(tail: &[u8], file_len: u64) -> ZipEnd {
+    let Some(mut i) = tail.len().checked_sub(22) else {
+        return ZipEnd::NotZip;
+    };
     loop {
-        if tail.get(i..i + 4)? == b"PK\x05\x06" {
-            let comment = u64::from(u16_at(tail, i + 20)?);
-            // The comment must end the file, or this is bytes inside one.
-            if i as u64 + 22 + comment == tail.len() as u64 {
-                let entries = u64::from(u16_at(tail, i + 10)?);
-                let size = u64::from(u32_at(tail, i + 12)?);
-                let offset = u64::from(u32_at(tail, i + 16)?);
-                if entries == 0xFFFF || size == 0xFFFF_FFFF || offset == 0xFFFF_FFFF {
-                    return None;
+        if tail.get(i..i + 4) == Some(b"PK\x05\x06".as_slice())
+            && let Some(comment) = u16_at(tail, i + 20)
+            // The comment must fit in the file, or this is bytes inside one.
+            && i + 22 + usize::from(comment) <= tail.len()
+        {
+            let end_at = file_len - (tail.len() - i) as u64;
+            let (Some(entries), Some(size), Some(offset)) = (
+                u16_at(tail, i + 10),
+                u32_at(tail, i + 12),
+                u32_at(tail, i + 16),
+            ) else {
+                return ZipEnd::Unreadable;
+            };
+            if entries == 0xFFFF || size == u32::MAX || offset == u32::MAX {
+                // zip64: a locator just before the record points to its own.
+                if let Some(at) = i.checked_sub(20)
+                    && tail.get(at..at + 4) == Some(b"PK\x06\x07".as_slice())
+                    && let Some(b) = tail.get(at + 8..at + 16)
+                {
+                    let offset = u64::from_le_bytes(b.try_into().unwrap_or([0; 8]));
+                    return ZipEnd::Zip64At(offset);
                 }
-                if offset.checked_add(size)? > file_len {
-                    return None;
-                }
-                return Some(ZipDirectory {
-                    offset,
-                    size,
-                    entries,
-                });
+                return ZipEnd::Unreadable;
             }
+            let (size, offset) = (u64::from(size), u64::from(offset));
+            if offset.checked_add(size).is_none_or(|e| e > file_len) {
+                return ZipEnd::Unreadable;
+            }
+            return ZipEnd::Directory(ZipDirectory {
+                offset,
+                size,
+                entries: u64::from(entries),
+                end_at,
+            });
         }
-        i = i.checked_sub(1)?;
+        match i.checked_sub(1) {
+            Some(n) => i = n,
+            None => return ZipEnd::NotZip,
+        }
     }
+}
+
+/// The directory a zip64 end record (`PK\x06\x06`, read at the offset
+/// `ZipEnd::Zip64At` gave) describes.
+pub fn zip64_directory(record: &[u8], end_at: u64) -> Option<ZipDirectory> {
+    if record.get(..4)? != b"PK\x06\x06" {
+        return None;
+    }
+    let q = |at: usize| Some(u64::from_le_bytes(record.get(at..at + 8)?.try_into().ok()?));
+    Some(ZipDirectory {
+        entries: q(32)?,
+        size: q(40)?,
+        offset: q(48)?,
+        end_at,
+    })
 }
 
 /// Whether any entry of a central directory is marked encrypted (the
@@ -773,9 +823,16 @@ mod tests {
         out
     }
 
-    fn encrypted(zip: &[u8]) -> Option<bool> {
+    fn directory_of(zip: &[u8]) -> Option<ZipDirectory> {
         let tail = &zip[zip.len().saturating_sub(ZIP_TAIL)..];
-        let d = zip_directory(tail, zip.len() as u64)?;
+        match zip_end(tail, zip.len() as u64) {
+            ZipEnd::Directory(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    fn encrypted(zip: &[u8]) -> Option<bool> {
+        let d = directory_of(zip)?;
         let dir = &zip[d.offset as usize..(d.offset + d.size) as usize];
         Some(zip_directory_encrypted(dir))
     }
@@ -808,25 +865,83 @@ mod tests {
 
     #[test]
     fn what_is_not_a_zip_is_not_judged() {
-        assert_eq!(zip_directory(b"", 0), None);
-        assert_eq!(zip_directory(&[0; 100], 100), None);
-        assert_eq!(zip_directory(b"PK\x05\x06", 4), None);
+        assert_eq!(zip_end(b"", 0), ZipEnd::NotZip);
+        assert_eq!(zip_end(&[0; 100], 100), ZipEnd::NotZip);
+        assert_eq!(zip_end(b"PK\x05\x06", 4), ZipEnd::NotZip);
         let mut zip = zip_with(&[("a", 1)], b"");
         // A directory that claims to lie past the end of the file.
         let n = zip.len();
-        zip[n - 6..n - 2].copy_from_slice(&u32::MAX.to_le_bytes()[..4]);
-        assert_eq!(zip_directory(&zip, zip.len() as u64), None);
-        // Zip64 markers: the caller can't tell.
+        zip[n - 6..n - 2].copy_from_slice(&0x7FFF_FFFFu32.to_le_bytes());
+        assert_eq!(zip_end(&zip, zip.len() as u64), ZipEnd::Unreadable);
+    }
+
+    #[test]
+    fn junk_after_the_end_record_does_not_hide_it() {
+        let mut zip = zip_with(&[("a", 1)], b"");
+        zip.extend_from_slice(b"trailing junk that is not a comment");
+        assert_eq!(encrypted(&zip), Some(true));
+        // And data put before the zip moves the offsets: the directory is
+        // found from the end record instead.
+        let plain = zip_with(&[("a", 1), ("b", 0)], b"");
+        let mut shifted = vec![b'x'; 100];
+        shifted.extend_from_slice(&plain);
+        let d = directory_of(&shifted).unwrap();
+        let at = (d.end_at - d.size) as usize;
+        assert!(zip_directory_encrypted(&shifted[at..at + d.size as usize]));
+    }
+
+    #[test]
+    fn zip64_is_followed_to_its_record() {
+        // A 64-bit end record, its locator, and the end record with markers.
         let mut zip = zip_with(&[("a", 1)], b"");
         let n = zip.len();
-        zip[n - 12..n - 8].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(zip_directory(&zip, zip.len() as u64), None);
+        let (size, offset) = (
+            u32::from_le_bytes(zip[n - 10..n - 6].try_into().unwrap()),
+            u32::from_le_bytes(zip[n - 6..n - 2].try_into().unwrap()),
+        );
+        zip.truncate(n - 22);
+        let record_at = zip.len() as u64;
+        zip.extend_from_slice(b"PK\x06\x06");
+        zip.extend_from_slice(&44u64.to_le_bytes());
+        zip.extend_from_slice(&[45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        zip.extend_from_slice(&1u64.to_le_bytes());
+        zip.extend_from_slice(&1u64.to_le_bytes());
+        zip.extend_from_slice(&u64::from(size).to_le_bytes());
+        zip.extend_from_slice(&u64::from(offset).to_le_bytes());
+        zip.extend_from_slice(b"PK\x06\x07");
+        zip.extend_from_slice(&[0; 4]);
+        zip.extend_from_slice(&record_at.to_le_bytes());
+        zip.extend_from_slice(&[1, 0, 0, 0]);
+        let end_at = zip.len() as u64;
+        zip.extend_from_slice(b"PK\x05\x06");
+        zip.extend_from_slice(&[0; 4]);
+        zip.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        zip.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        zip.extend_from_slice(&u32::MAX.to_le_bytes());
+        zip.extend_from_slice(&u32::MAX.to_le_bytes());
+        zip.extend_from_slice(&[0, 0]);
+        let tail = &zip[zip.len().saturating_sub(ZIP_TAIL)..];
+        let ZipEnd::Zip64At(at) = zip_end(tail, zip.len() as u64) else {
+            panic!("not found");
+        };
+        assert_eq!(at, record_at);
+        let d = zip64_directory(&zip[at as usize..], end_at).unwrap();
+        assert_eq!((d.size, d.offset), (u64::from(size), u64::from(offset)));
+        assert!(zip_directory_encrypted(
+            &zip[d.offset as usize..(d.offset + d.size) as usize]
+        ));
+        assert_eq!(zip64_directory(b"PK\x03\x04 and more bytes", 0), None);
+        // Markers with no locator: can't tell.
+        let mut bare = zip_with(&[("a", 1)], b"");
+        let n = bare.len();
+        bare[n - 6..n - 2].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(zip_end(&bare, bare.len() as u64), ZipEnd::Unreadable);
     }
 
     #[test]
     fn a_cut_off_directory_does_not_run_away() {
         let zip = zip_with(&[("name", 0), ("other", 0)], b"");
-        let d = zip_directory(&zip, zip.len() as u64).unwrap();
+        let d = directory_of(&zip).unwrap();
         let dir = &zip[d.offset as usize..(d.offset + d.size) as usize];
         for cut in 0..dir.len() {
             // Whatever is cut off, it ends and says no.

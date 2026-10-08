@@ -237,7 +237,13 @@ void ArchiveJob::attachTo(const QString &path)
     // Archive going away takes the job with it.
     auto *watcher = new QDBusServiceWatcher(t.service, bus, QDBusServiceWatcher::WatchForUnregistration, this);
     connect(watcher, &QDBusServiceWatcher::serviceUnregistered, this, [this] {
-        if (!m_finished) {
+        if (m_finished) {
+            return;
+        }
+        // Archive may leave as soon as it is done: what it already said stands.
+        if (isTerminal(m_state)) {
+            finish(m_state, {});
+        } else {
             failWith(tr("Telamon Archive stopped before it finished."));
         }
     });
@@ -304,7 +310,8 @@ void ArchiveJob::onFinishedMessage(const QDBusMessage &message)
     }
     if (m_shared->path.isEmpty()) {
         // The call has not returned its path yet: keep it until it does.
-        if (m_early.size() < 32) {
+        // Other jobs of Archive's end here too: only the shape of ours is kept.
+        if (m_early.size() < 256 && message.arguments().size() >= 2) {
             m_early.append(message);
         }
         return;
@@ -329,8 +336,10 @@ void ArchiveJob::finish(const QString &state, const QStringList &results)
         }
     }
     if (state == QLatin1String("done")) {
+        m_reported = true;
         emitResult();
     } else if (state == QLatin1String("cancelled")) {
+        m_reported = true;
         setError(KIO::ERR_USER_CANCELED);
         emitResult();
     } else {
@@ -358,6 +367,10 @@ void ArchiveJob::finish(const QString &state, const QStringList &results)
 
 void ArchiveJob::failWith(const QString &text)
 {
+    if (m_reported) {
+        return;
+    }
+    m_reported = true;
     m_finished = true;
     m_lateFinish.stop();
     setError(KJob::UserDefinedError);
@@ -377,6 +390,7 @@ bool ArchiveJob::doKill()
 {
     m_shared->cancel = true;
     m_finished = true;
+    m_reported = true;
     m_lateFinish.stop();
     if (!m_shared->path.isEmpty()) {
         send(m_shared->target, m_shared->path, QStringLiteral("Cancel"));

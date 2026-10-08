@@ -58,12 +58,12 @@ void ArchiveGuardJob::start()
         }
     }
     QPointer<ArchiveGuardJob> self(this);
-    ArchiveCheck::findEncryptedZip(files, this, [self](const QString &name) {
+    ArchiveCheck::findEncryptedZip(files, this, [self](const QString &name, bool unknown) {
         if (!self || self->m_done) {
             return;
         }
         if (!name.isEmpty()) {
-            self->fail(NeedsPassword, ArchiveCheck::needsPasswordText(name, self->m_archiveInstalled));
+            self->fail(NeedsPassword, unknown ? ArchiveCheck::undecidedText(name, self->m_archiveInstalled) : ArchiveCheck::needsPasswordText(name, self->m_archiveInstalled));
             return;
         }
         self->next();
@@ -85,6 +85,10 @@ void ArchiveGuardJob::fail(int code, const QString &text)
         return;
     }
     m_done = true;
+    // The listing that was running stops with it.
+    if (m_sub) {
+        m_sub->kill(KJob::Quietly);
+    }
     setError(code);
     setErrorText(text);
     emitResult();
@@ -94,6 +98,11 @@ void ArchiveGuardJob::addRecord(const QString &path, const QString &link, bool i
 {
     ++m_count;
     m_bytes += size;
+    // Names of a million entries at 64 KiB each are not held in memory.
+    if (m_records.size() > qsizetype(256) * 1024 * 1024) {
+        m_toobig = true;
+        return;
+    }
     m_records.append(isLink ? 'l' : 'f');
     m_records.append(path.toUtf8());
     m_records.append('\0');
@@ -191,6 +200,10 @@ void ArchiveGuardJob::finishChecks()
     if (m_done) {
         return;
     }
+    if (m_toobig) {
+        fail(KJob::UserDefinedError, tr("The list of what is in this archive is too long for Files. Open it with Telamon Archive instead."));
+        return;
+    }
     const RustArchiveCheck check = rustArchiveCheck(m_records, m_archiveInstalled);
     if (!check.ok) {
         fail(Refused, check.text);
@@ -205,36 +218,81 @@ void ArchiveGuardJob::finishChecks()
 
 namespace
 {
-bool zipNeedsPassword(const QString &path)
+enum class ZipState { Plain, Encrypted, Unknown };
+
+bool startsWith(QFile &f, qint64 at, const char *sig)
+{
+    return f.seek(at) && f.read(4) == QByteArray(sig, 4);
+}
+
+ZipState zipState(const QString &path)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
-        return false;
+        return ZipState::Plain;
     }
     const qint64 size = f.size();
     if (size < 22) {
-        return false;
+        return ZipState::Plain;
     }
     constexpr qint64 TailBytes = 22 + 65535;
     const qint64 n = qMin(size, TailBytes);
     if (!f.seek(size - n)) {
-        return false;
+        return ZipState::Plain;
     }
     const QByteArray tail = f.read(n);
-    uint64_t dir[3] = {0, 0, 0};
-    if (tail.size() != n || !telamon_zip_directory(reinterpret_cast<const uint8_t *>(tail.constData()), size_t(tail.size()), uint64_t(size), dir)) {
-        return false;
+    uint64_t dir[4] = {0, 0, 0, 0};
+    int end = telamon_zip_end(reinterpret_cast<const uint8_t *>(tail.constData()), size_t(tail.size()), uint64_t(size), dir);
+    if (tail.size() != n) {
+        return ZipState::Unknown;
     }
-    constexpr uint64_t MaxDirectory = 16 * 1024 * 1024;
-    if (dir[1] == 0 || dir[1] > MaxDirectory || !f.seek(qint64(dir[0]))) {
-        return false;
+    if (end == 0) {
+        // No end record: not a zip, and KIO will say what it makes of the file.
+        return ZipState::Plain;
+    }
+    if (end == 2) {
+        // zip64: the end record's own record holds the directory's place.
+        const uint64_t record = dir[0];
+        if (record > uint64_t(size) || !f.seek(qint64(record))) {
+            return ZipState::Unknown;
+        }
+        const QByteArray rec = f.read(56);
+        const uint64_t endAt = uint64_t(size - n);
+        if (!telamon_zip64_directory(reinterpret_cast<const uint8_t *>(rec.constData()), size_t(rec.size()), endAt, dir)) {
+            return ZipState::Unknown;
+        }
+        end = 1;
+    }
+    if (end != 1) {
+        return ZipState::Unknown;
+    }
+    constexpr uint64_t MaxDirectory = 256ull * 1024 * 1024;
+    if (dir[1] == 0) {
+        return ZipState::Plain;
+    }
+    if (dir[1] > MaxDirectory) {
+        return ZipState::Unknown;
+    }
+    // Where the directory says it is, or just before the end record (a zip
+    // with something in front of it has its offsets moved).
+    qint64 at = -1;
+    if (dir[0] + dir[1] <= uint64_t(size) && startsWith(f, qint64(dir[0]), "PK\x01\x02")) {
+        at = qint64(dir[0]);
+    } else if (dir[3] >= dir[1] && startsWith(f, qint64(dir[3] - dir[1]), "PK\x01\x02")) {
+        at = qint64(dir[3] - dir[1]);
+    }
+    if (at < 0 || !f.seek(at)) {
+        return ZipState::Unknown;
     }
     const QByteArray list = f.read(qint64(dir[1]));
-    return quint64(list.size()) == dir[1] && telamon_zip_encrypted(reinterpret_cast<const uint8_t *>(list.constData()), size_t(list.size()));
+    if (uint64_t(list.size()) != dir[1]) {
+        return ZipState::Unknown;
+    }
+    return telamon_zip_encrypted(reinterpret_cast<const uint8_t *>(list.constData()), size_t(list.size())) ? ZipState::Encrypted : ZipState::Plain;
 }
 }
 
-void ArchiveCheck::findEncryptedZip(const QList<QUrl> &files, QObject *context, std::function<void(const QString &)> done)
+void ArchiveCheck::findEncryptedZip(const QList<QUrl> &files, QObject *context, std::function<void(const QString &, bool)> done)
 {
     QStringList paths;
     for (const QUrl &u : files) {
@@ -243,24 +301,27 @@ void ArchiveCheck::findEncryptedZip(const QList<QUrl> &files, QObject *context, 
         }
     }
     if (paths.isEmpty()) {
-        QTimer::singleShot(0, context, [done] { done(QString()); });
+        QTimer::singleShot(0, context, [done] { done(QString(), false); });
         return;
     }
     QPointer<QObject> guard(context);
     QThreadPool::globalInstance()->start([guard, paths, done] {
         QString found;
+        bool unknown = false;
         for (const QString &p : paths) {
-            if (zipNeedsPassword(p)) {
+            const ZipState state = zipState(p);
+            if (state != ZipState::Plain) {
                 found = QFileInfo(p).fileName();
+                unknown = state == ZipState::Unknown;
                 break;
             }
         }
         if (!guard) {
             return;
         }
-        QMetaObject::invokeMethod(guard.data(), [guard, found, done] {
+        QMetaObject::invokeMethod(guard.data(), [guard, found, unknown, done] {
             if (guard) {
-                done(found);
+                done(found, unknown);
             }
         });
     });
@@ -271,6 +332,12 @@ QString ArchiveCheck::needsPasswordText(const QString &name, bool archiveInstall
     const QString shown = rustDisplayName(name.toUtf8());
     const QString base = QObject::tr("\"%1\" needs a password, which Files can't enter.").arg(shown);
     return archiveInstalled ? base + QLatin1Char(' ') + QObject::tr("Use Extract Here or Extract To in the right-click menu: Telamon Archive asks for it.") : base;
+}
+
+QString ArchiveCheck::undecidedText(const QString &name, bool archiveInstalled)
+{
+    const QString base = QObject::tr("Files can't tell whether \"%1\" needs a password.").arg(rustDisplayName(name.toUtf8()));
+    return archiveInstalled ? base + QLatin1Char(' ') + QObject::tr("Use Extract Here or Extract To in the right-click menu: Telamon Archive can open it.") : base;
 }
 
 // ---- Where it goes ----

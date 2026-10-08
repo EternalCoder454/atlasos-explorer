@@ -142,14 +142,14 @@ void FileActions::openUrls(const QList<QUrl> &urls)
             // instead of showing files that are not what they seem.
             const QUrl file = urls.first();
             QPointer<FileActions> self(this);
-            ArchiveCheck::findEncryptedZip({file}, this, [self, inside, file](const QString &name) {
+            ArchiveCheck::findEncryptedZip({file}, this, [self, inside](const QString &name, bool unknown) {
                 if (!self) {
                     return;
                 }
                 if (name.isEmpty()) {
                     Q_EMIT self->navigateRequested(inside);
                 } else {
-                    Q_EMIT self->failed(ArchiveCheck::needsPasswordText(name, self->archiveInstalled()));
+                    Q_EMIT self->failed(unknown ? ArchiveCheck::undecidedText(name, self->archiveInstalled()) : ArchiveCheck::needsPasswordText(name, self->archiveInstalled()));
                 }
             });
             return;
@@ -585,7 +585,7 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
         set(all, MenuFlag::ArchiveItems);
     }
     set(single && folders == 1 && rustPlacesPinnable(items.first().url().scheme()), MenuFlag::Pinnable);
-    set(single && folders == 1 && items.first().isWritable(), MenuFlag::FolderWritable);
+    set(single && folders == 1 && items.first().isWritable() && !(m_folder && m_folder->inArchive()), MenuFlag::FolderWritable);
     set(!openWith.isEmpty(), MenuFlag::OpenWith);
     set(hideable, MenuFlag::Hideable);
     set(!hideable && unhideable, MenuFlag::Unhideable);
@@ -813,8 +813,12 @@ QString FileActions::labelOf(const QList<QUrl> &urls) const
 
 void FileActions::runArchive(const QString &method, const QList<QUrl> &urls, const QVariantList &extra, const QString &title, const QString &running)
 {
+    if (urls.size() > 1000) {
+        Q_EMIT failed(tr("Telamon Archive takes at most 1,000 items at a time."));
+        return;
+    }
     QStringList files;
-    for (const QUrl &u : urls.mid(0, 1000)) {
+    for (const QUrl &u : urls) {
         if (u.isLocalFile()) {
             files << u.toString(QUrl::FullyEncoded);
         }
@@ -922,13 +926,9 @@ QUrl FileActions::browseUrl(const QUrl &url) const
     }
     const QMimeType type = QMimeDatabase().mimeTypeForFile(url.fileName(), QMimeDatabase::MatchExtension);
     // KIO's own table of what its archive worker opens (kio-extras).
-    QString protocol = KProtocolManager::protocolForArchiveMimetype(type.name());
-    for (const QString &parent : type.allAncestors()) {
-        if (!protocol.isEmpty()) {
-            break;
-        }
-        protocol = KProtocolManager::protocolForArchiveMimetype(parent);
-    }
+    // Only the types the worker names itself: a .docx or .epub is a zip too
+    // (it inherits application/zip), but it is a document, and opens as one.
+    const QString protocol = KProtocolManager::protocolForArchiveMimetype(type.name());
     if (protocol.isEmpty() || !rustArchiveScheme(protocol)) {
         return {};
     }
