@@ -1,9 +1,12 @@
 //! Small wrappers over Linux calls: scheduling priority, an event fd to wake a
-//! thread, and `poll`. Everything unsafe in the crate that is not the cache
-//! folder (`snapshot`) is here.
+//! thread, `poll`, and reading one extended attribute. Everything unsafe in the
+//! crate that is not the cache folder (`snapshot`) is here.
 
+use std::ffi::{CStr, CString};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 
 /// Put the calling thread at nice 19 and idle I/O priority, so scanning never
 /// competes with the user's work. Failures are ignored: a lower priority is a
@@ -21,6 +24,54 @@ pub fn set_idle_priority() {
             tid as libc::c_long,
             IOPRIO_CLASS_IDLE << 13,
         );
+    }
+}
+
+/// Read the extended attribute `name` of `path` into `buf`, returning how many
+/// bytes it holds. Never follows a symlink (`lgetxattr`): a link's own
+/// attributes are read, which for `user.*` names means none. An attribute
+/// longer than `buf` is an `ERANGE` error, not a cut value.
+pub fn lgetxattr(path: &Path, name: &CStr, buf: &mut [u8]) -> io::Result<usize> {
+    let c = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: c and name are NUL-terminated for the call; the kernel writes at
+    // most buf.len() bytes into buf.
+    let n = unsafe {
+        libc::lgetxattr(
+            c.as_ptr(),
+            name.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+        )
+    };
+    if n < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(n as usize)
+    }
+}
+
+/// Set the extended attribute `name` of `path` to `value`, never following a
+/// symlink. For tests and tools that write tags; the index only reads them.
+#[doc(hidden)]
+pub fn lsetxattr(path: &Path, name: &CStr, value: &[u8]) -> io::Result<()> {
+    let c = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: c and name are NUL-terminated for the call; the kernel reads at
+    // most value.len() bytes from value.
+    let r = unsafe {
+        libc::lsetxattr(
+            c.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    if r < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 

@@ -13,6 +13,7 @@
 
 use crate::category::{Category, icon_of, mime_of};
 use crate::index::{Index, NONE};
+use crate::tags;
 use crate::text::{fold, is_word_start_at_ascii, word_starts_folded};
 use atlas_explorer_core::display_name;
 use memchr::memmem;
@@ -55,6 +56,9 @@ pub struct Options {
     pub size_max: Option<u64>,
     /// Match the whole path, not the name.
     pub path_match: bool,
+    /// Only entries that carry this tag (`user.xdg.tags`), ignoring case and
+    /// accents.
+    pub tag: Option<String>,
 }
 
 impl Options {
@@ -66,6 +70,7 @@ impl Options {
             || self.modified_before.is_some()
             || self.size_min.is_some()
             || self.size_max.is_some()
+            || self.tag.is_some()
     }
 }
 
@@ -328,6 +333,14 @@ fn ranges(index: &Index, root: Option<&[u8]>) -> Vec<(u32, u32)> {
     out
 }
 
+/// The part of `ranges` made of the ids in `ids` (ascending), one range each.
+fn only_ids(ranges: &[(u32, u32)], ids: &[u32]) -> Vec<(u32, u32)> {
+    ids.iter()
+        .filter(|&&id| ranges.iter().any(|&(a, b)| a <= id && id < b))
+        .map(|&id| (id, id + 1))
+        .collect()
+}
+
 /// Run a search. `now` is the current time in seconds since the epoch.
 pub fn search(index: &Index, query: &str, limit: usize, opts: &Options, now: i64) -> Vec<Hit> {
     let limit = limit.min(MAX_LIMIT);
@@ -338,7 +351,11 @@ pub fn search(index: &Index, query: &str, limit: usize, opts: &Options, now: i64
     if matcher.words.is_empty() && !opts.has_filter() {
         return Vec::new();
     }
-    let ranges = ranges(index, opts.root.as_deref());
+    let mut ranges = ranges(index, opts.root.as_deref());
+    if let Some(tag) = &opts.tag {
+        // only the entries that carry the tag are looked at
+        ranges = only_ids(&ranges, &index.ids_with_tag(&tags::folded(tag)));
+    }
     let total: usize = ranges.iter().map(|&(a, b)| (b - a) as usize).sum();
     if total == 0 {
         return Vec::new();
@@ -900,6 +917,160 @@ mod tests {
         assert_eq!(png.size, 7);
         let d = search(&ix, "dir", 10, &Options::default(), NOW);
         assert!(d[0].is_dir && d[0].size == 0 && d[0].mime() == "inode/directory");
+    }
+
+    /// "/r" with these (name, tags, mtime, hidden) files, all at the top.
+    fn build_tagged(files: &[(&str, &str, i64)]) -> Index {
+        let mut b = IndexBuilder::new();
+        let root = b
+            .push(NONE, b"/r", FLAG_DIR, Category::Folder, NOW, 0)
+            .unwrap();
+        for &(name, tags, mtime) in files {
+            let flags = if name.starts_with('.') {
+                FLAG_HIDDEN
+            } else {
+                0
+            };
+            let id = b
+                .push(
+                    root,
+                    name.as_bytes(),
+                    flags,
+                    category_of(name.as_bytes(), false, false),
+                    mtime,
+                    1,
+                )
+                .unwrap();
+            b.set_tags(id, tags.as_bytes());
+        }
+        b.finish(&HashMap::new())
+    }
+
+    fn tag(t: &str) -> Options {
+        Options {
+            tag: Some(t.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tag_alone_lists_the_tagged_entries_newest_first() {
+        let ix = build_tagged(&[
+            ("a-old.txt", "Red", NOW - 90 * 86_400),
+            ("b-new.txt", "Work,red", NOW - 100),
+            ("c-none.txt", "", NOW - 50),
+            ("d-other.txt", "Blue", NOW - 60),
+            ("e-mid.png", "RED", NOW - 3 * 86_400),
+        ]);
+        assert_eq!(
+            q(&ix, "", &tag("Red")),
+            ["b-new.txt", "e-mid.png", "a-old.txt"]
+        );
+        // no tag, no query: nothing, as before
+        assert!(q(&ix, "", &Options::default()).is_empty());
+        assert_eq!(q(&ix, "", &tag("blue")), ["d-other.txt"]);
+        assert!(q(&ix, "", &tag("green")).is_empty());
+        assert!(q(&ix, "", &tag("Re")).is_empty(), "whole tags only");
+    }
+
+    #[test]
+    fn tag_matching_ignores_case_accents_and_spaces_around() {
+        let ix = build_tagged(&[("a.txt", "Taxes 2025,Zo\u{eb}", old())]);
+        for t in ["taxes 2025", "TAXES 2025", "  Taxes 2025 ", "zoe", "ZOË"] {
+            assert_eq!(q(&ix, "", &tag(t)), ["a.txt"], "{t:?}");
+        }
+        assert!(q(&ix, "", &tag("taxes")).is_empty());
+        assert!(q(&ix, "", &tag("")).is_empty());
+        assert!(q(&ix, "", &tag("   ")).is_empty());
+    }
+
+    #[test]
+    fn tag_combines_with_every_other_option() {
+        let t = old();
+        let ix = build_tagged(&[
+            ("report.pdf", "Work", NOW - 100),
+            ("report.txt", "Work", NOW - 100),
+            ("notes.txt", "Work", NOW - 100),
+            ("report-untagged.txt", "", NOW - 100),
+            (".hidden-report.txt", "Work", NOW - 100),
+            ("ancient.txt", "Work", t),
+        ]);
+        let with = |f: &dyn Fn(&mut Options)| {
+            let mut o = tag("work");
+            f(&mut o);
+            o
+        };
+        assert_eq!(q(&ix, "report", &tag("work")).len(), 2);
+        assert_eq!(
+            q(&ix, "", &with(&|o| o.kinds = Some(Category::Pdf.bit()))),
+            ["report.pdf"]
+        );
+        assert_eq!(q(&ix, "", &with(&|o| o.include_hidden = true)).len(), 5);
+        assert_eq!(q(&ix, "", &tag("work")).len(), 4, "hidden left out");
+        assert_eq!(
+            q(&ix, "", &with(&|o| o.modified_after = Some(NOW - 1000))).len(),
+            3
+        );
+        assert_eq!(
+            q(&ix, "", &with(&|o| o.modified_before = Some(NOW - 1000))),
+            ["ancient.txt"]
+        );
+        assert_eq!(q(&ix, "", &with(&|o| o.size_min = Some(2))).len(), 0);
+        assert_eq!(q(&ix, "", &with(&|o| o.size_max = Some(1))).len(), 4);
+        assert_eq!(
+            q(&ix, "", &with(&|o| o.kind = Some(KindFilter::Folder))).len(),
+            0
+        );
+        assert_eq!(
+            q(&ix, "notes", &with(&|o| o.path_match = true)),
+            ["notes.txt"]
+        );
+        assert_eq!(
+            q(&ix, "", &with(&|o| o.root = Some(b"/r".to_vec()))).len(),
+            4
+        );
+        assert!(q(&ix, "", &with(&|o| o.root = Some(b"/elsewhere".to_vec()))).is_empty());
+    }
+
+    #[test]
+    fn tag_search_under_a_root_only_finds_entries_inside_it() {
+        let mut b = IndexBuilder::new();
+        let r = b
+            .push(NONE, b"/r", FLAG_DIR, Category::Folder, NOW, 0)
+            .unwrap();
+        let d1 = b
+            .push(r, b"d1", FLAG_DIR, Category::Folder, NOW - 5, 0)
+            .unwrap();
+        let x = b.push(d1, b"x.txt", 0, Category::Text, NOW - 5, 1).unwrap();
+        b.set_tags(x, b"T");
+        let d2 = b
+            .push(r, b"d2", FLAG_DIR, Category::Folder, NOW - 5, 0)
+            .unwrap();
+        let y = b.push(d2, b"y.txt", 0, Category::Text, NOW - 5, 1).unwrap();
+        b.set_tags(y, b"T");
+        let ix = b.finish(&HashMap::new());
+        let o = Options {
+            tag: Some("t".into()),
+            root: Some(b"/r/d2".to_vec()),
+            ..Default::default()
+        };
+        assert_eq!(q(&ix, "", &o), ["d2/y.txt"]);
+        assert_eq!(q(&ix, "", &tag("t")).len(), 2);
+    }
+
+    #[test]
+    fn tagged_folders_are_hits_but_a_root_is_not() {
+        let mut b = IndexBuilder::new();
+        let r = b
+            .push(NONE, b"/r", FLAG_DIR, Category::Folder, NOW, 0)
+            .unwrap();
+        b.set_tags(r, b"T");
+        let d = b
+            .push(r, b"d", FLAG_DIR, Category::Folder, NOW - 5, 0)
+            .unwrap();
+        b.set_tags(d, b"T");
+        let ix = b.finish(&HashMap::new());
+        assert_eq!(q(&ix, "", &tag("t")), ["d"]);
     }
 
     #[test]

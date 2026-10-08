@@ -6,6 +6,13 @@
 //! A folder's record keeps its modification time and, in `size`, the
 //! nanoseconds of it: a folder's size is not shown, and the extra precision lets
 //! the reconcile walk see a change made in the same second as the scan.
+//!
+//! Tags (`user.xdg.tags`) are read for every file and folder when it is listed,
+//! so listing a folder again refreshes the tags of all its entries, subfolders'
+//! own tags included. A tag change does not change a folder's modification
+//! time: `changed_dirs` cannot see it, so it is picked up by the watcher (a
+//! change to an entry of a watched folder), by `NotifyChanged` and by a full
+//! rescan, not by the start-up or lazy mtime check.
 
 use crate::category::{Category, category_of};
 use crate::config::{
@@ -15,6 +22,7 @@ use crate::index::{
     FLAG_DIR, FLAG_EXEC, FLAG_HIDDEN, FLAG_RECENT, Index, IndexBuilder, MAX_DEPTH, NONE,
     RECENT_SECS,
 };
+use crate::tags;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
@@ -102,7 +110,7 @@ pub fn rebuild(
         if s.stopped || s.full {
             break;
         }
-        s.visit_old(root, NONE, &mut path);
+        s.visit_old(root, NONE, &mut path, None);
     }
     s.finish(used, 0)
 }
@@ -192,14 +200,24 @@ impl<'a> Scanner<'a> {
 
     /// Carry old record `old_id` and its subtree over, listing again the dirty
     /// folders in it. `path` is the parent's path (empty for a root).
-    fn visit_old(&mut self, old_id: u32, new_parent: u32, path: &mut PathBuf) {
+    ///
+    /// `fresh` is the folder's own `user.xdg.tags` as just read by the listing
+    /// of its parent (`None`: keep the old tags). A folder listed again reads
+    /// its own.
+    fn visit_old(
+        &mut self,
+        old_id: u32,
+        new_parent: u32,
+        path: &mut PathBuf,
+        fresh: Option<&[u8]>,
+    ) {
         if self.check_stop() || self.full {
             return;
         }
         let Some(old) = self.old else { return };
         let end = old.end(old_id);
         if !self.dirty_in(old_id, end) {
-            self.copy_block(old_id, end, new_parent);
+            self.copy_block(old_id, end, new_parent, fresh);
             return;
         }
         let keep = path.as_os_str().len();
@@ -207,11 +225,11 @@ impl<'a> Scanner<'a> {
         let is_dirty = self.dirty.binary_search(&old_id).is_ok();
         if is_dirty {
             self.relist(old_id, end, new_parent, path);
-        } else if let Some(id) = self.b.push_copy(old, old_id, new_parent) {
+        } else if let Some(id) = self.b.push_copy_with(old, old_id, new_parent, fresh) {
             self.map[old_id as usize] = id;
             let mut c = old_id + 1;
             while c < end {
-                self.visit_old(c, id, path);
+                self.visit_old(c, id, path, None);
                 c = old.end(c);
             }
         } else {
@@ -229,12 +247,18 @@ impl<'a> Scanner<'a> {
             Err(e) => {
                 // cannot look at it now: keep what was known
                 self.error(format!("{} cannot be read: {e}", path.display()));
-                self.copy_block(old_id, end, new_parent);
+                self.copy_block(old_id, end, new_parent, None);
                 return;
             }
         };
         let mark = self.b.mark();
-        let Some(id) = self.b.push_copy(old, old_id, new_parent) else {
+        let is_root = new_parent == NONE;
+        // the folder's own tags, read again (a root is a place, not a hit)
+        let fresh = (!is_root).then(|| tags::read_raw(path));
+        let Some(id) = self
+            .b
+            .push_copy_with(old, old_id, new_parent, fresh.as_deref())
+        else {
             self.full = true;
             return;
         };
@@ -245,7 +269,6 @@ impl<'a> Scanner<'a> {
             recent_flag(md.mtime()) != 0,
         );
         self.map[old_id as usize] = id;
-        let is_root = new_parent == NONE;
         match self.list_dir(id, path, md.dev(), Some(old_id), is_root, 0) {
             Listing::Done => {}
             Listing::Excluded => {
@@ -258,7 +281,8 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn copy_block(&mut self, from: u32, to: u32, new_parent: u32) {
+    /// Copy old records `from..to`; `fresh` replaces the tags of the first.
+    fn copy_block(&mut self, from: u32, to: u32, new_parent: u32, fresh: Option<&[u8]>) {
         let Some(old) = self.old else { return };
         for i in from..to {
             let parent = if i == from {
@@ -266,7 +290,8 @@ impl<'a> Scanner<'a> {
             } else {
                 self.map[old.record(i).parent as usize]
             };
-            match self.b.push_copy(old, i, parent) {
+            let fresh = if i == from { fresh } else { None };
+            match self.b.push_copy_with(old, i, parent, fresh) {
                 Some(id) => self.map[i as usize] = id,
                 None => {
                     self.full = true;
@@ -363,7 +388,7 @@ impl<'a> Scanner<'a> {
             if ft.is_dir() {
                 self.child_dir(id, name, path, keep, dev, &old_children, depth);
             } else if (ft.is_file() || ft.is_symlink()) && !self.excl.name_excluded(name) {
-                self.child_file(id, name, &e);
+                self.child_file(id, name, &e, path);
             }
             truncate_path(path, keep);
         }
@@ -394,8 +419,10 @@ impl<'a> Scanner<'a> {
         if let Some(&oc) = old_children.get(name) {
             // keep the old subtree (or walk it, if a folder in it is dirty);
             // visit_old appends the name itself, so give it the parent's path
+            // (a kept folder's own tags are read here: they belong to this listing)
+            let fresh = tags::read_raw(path);
             truncate_path(path, parent_len);
-            self.visit_old(oc, parent, path);
+            self.visit_old(oc, parent, path, Some(&fresh));
             path.push(OsStr::from_bytes(name));
             return;
         }
@@ -423,6 +450,7 @@ impl<'a> Scanner<'a> {
             self.full = true;
             return;
         };
+        self.b.set_tags(id, &tags::read_raw(path));
         match self.list_dir(id, path, md.dev(), None, false, depth + 1) {
             Listing::Done => {}
             Listing::Excluded => self.b.rollback(mark),
@@ -430,7 +458,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn child_file(&mut self, parent: u32, name: &[u8], e: &fs::DirEntry) {
+    fn child_file(&mut self, parent: u32, name: &[u8], e: &fs::DirEntry, path: &Path) {
         let md = match e.metadata() {
             Ok(m) => m,
             Err(_) => return, // gone between the listing and now
@@ -447,19 +475,16 @@ impl<'a> Scanner<'a> {
         if exec {
             flags |= FLAG_EXEC;
         }
-        if self
-            .b
-            .push(
-                parent,
-                name,
-                flags,
-                category_of(name, false, exec),
-                md.mtime(),
-                md.len(),
-            )
-            .is_none()
-        {
-            self.full = true;
+        match self.b.push(
+            parent,
+            name,
+            flags,
+            category_of(name, false, exec),
+            md.mtime(),
+            md.len(),
+        ) {
+            Some(id) => self.b.set_tags(id, &tags::read_raw(path)),
+            None => self.full = true,
         }
     }
 }
@@ -742,6 +767,188 @@ mod tests {
         );
         assert_eq!(res.index.len(), 1);
         assert!(res.map.iter().skip(1).all(|&m| m == NONE));
+    }
+
+    fn tag_it(p: &Path, v: &str) {
+        crate::testdir::set_tags(p, v).unwrap();
+    }
+
+    fn rebuild_dirty(first: &ScanResult, dirty: &[u32]) -> ScanResult {
+        rebuild(
+            &first.index,
+            dirty,
+            &Excludes::new(&[]),
+            &AtomicBool::new(false),
+            &HashMap::new(),
+        )
+    }
+
+    fn id_of(ix: &Index, r: &Path, rel: &str) -> u32 {
+        ix.find_path(&[r.as_os_str().as_bytes(), b"/", rel.as_bytes()].concat())
+            .unwrap_or_else(|| panic!("{rel} is not indexed"))
+    }
+
+    fn tags_at(ix: &Index, r: &Path, rel: &str) -> String {
+        ix.tags_of(id_of(ix, r, rel)).to_string()
+    }
+
+    #[test]
+    fn a_scan_records_the_tags_of_files_and_folders() {
+        let t = Scratch::new("scan-tags");
+        if crate::testdir::skip_without_xattrs(&t.0) {
+            return;
+        }
+        let r = fs::canonicalize(&t.0).unwrap();
+        touch(&r.join("a/one.txt"));
+        touch(&r.join("a/two.txt"));
+        touch(&r.join("b/three.txt"));
+        symlink(r.join("a/one.txt"), r.join("link")).unwrap();
+        tag_it(&r.join("a/one.txt"), "Red, Work ,red,,Taxes 2025");
+        tag_it(&r.join("a"), "Project");
+        tag_it(&r.join("b/three.txt"), "\u{1}bad,Fine");
+        tag_it(&r, "root-tag");
+        let res = scan(&r, &[]);
+        let ix = &res.index;
+        assert_eq!(tags_at(ix, &r, "a/one.txt"), "Red,Work,Taxes 2025");
+        assert_eq!(tags_at(ix, &r, "a"), "Project");
+        assert_eq!(tags_at(ix, &r, "b/three.txt"), "Fine");
+        assert_eq!(tags_at(ix, &r, "a/two.txt"), "");
+        assert_eq!(tags_at(ix, &r, "b"), "");
+        // a symlink has none of its own (the target's are not followed)
+        assert_eq!(tags_at(ix, &r, "link"), "");
+        // a root is a place, not a hit: its tags are not read
+        assert_eq!(ix.tags_of(0), "");
+        assert_eq!(ix.tag_table().refs.len(), 3);
+    }
+
+    #[test]
+    fn listing_a_folder_again_rereads_the_tags_of_its_entries() {
+        let t = Scratch::new("rebuild-tags");
+        if crate::testdir::skip_without_xattrs(&t.0) {
+            return;
+        }
+        let r = fs::canonicalize(&t.0).unwrap();
+        touch(&r.join("a/f.txt"));
+        touch(&r.join("a/sub/g.txt"));
+        touch(&r.join("b/h.txt"));
+        tag_it(&r.join("a/f.txt"), "Old");
+        tag_it(&r.join("a/sub"), "S1");
+        tag_it(&r.join("a/sub/g.txt"), "G1");
+        tag_it(&r.join("b/h.txt"), "H1");
+        let first = scan(&r, &[]);
+        let ix = &first.index;
+        assert_eq!(tags_at(ix, &r, "a/f.txt"), "Old");
+        // the user retags everything...
+        tag_it(&r.join("a/f.txt"), "New,Extra");
+        tag_it(&r.join("a/sub"), "S2");
+        tag_it(&r.join("a/sub/g.txt"), "G2");
+        tag_it(&r.join("b/h.txt"), "H2");
+        // ...and only `a` is listed again (what a change event in it causes)
+        let res = rebuild_dirty(&first, &[id_of(ix, &r, "a")]);
+        let now = &res.index;
+        assert_eq!(tags_at(now, &r, "a/f.txt"), "New,Extra", "its file");
+        assert_eq!(tags_at(now, &r, "a/sub"), "S2", "its subfolder's own tags");
+        // what was not listed is carried over as it was (a subfolder's contents
+        // are read when the subfolder is listed)
+        assert_eq!(tags_at(now, &r, "a/sub/g.txt"), "G1");
+        assert_eq!(tags_at(now, &r, "b/h.txt"), "H1");
+        // a full scan sees everything
+        let full = scan(&r, &[]);
+        assert_eq!(tags_at(&full.index, &r, "a/sub/g.txt"), "G2");
+        assert_eq!(tags_at(&full.index, &r, "b/h.txt"), "H2");
+    }
+
+    #[test]
+    fn a_folder_listed_again_rereads_its_own_tags() {
+        let t = Scratch::new("rebuild-own-tags");
+        if crate::testdir::skip_without_xattrs(&t.0) {
+            return;
+        }
+        let r = fs::canonicalize(&t.0).unwrap();
+        touch(&r.join("a/sub/deep/z.txt"));
+        touch(&r.join("a/sub/y.txt"));
+        tag_it(&r.join("a"), "A1");
+        tag_it(&r.join("a/sub"), "S1");
+        tag_it(&r.join("a/sub/deep"), "D1");
+        let first = scan(&r, &[]);
+        let ix = &first.index;
+        tag_it(&r.join("a"), "A2");
+        tag_it(&r.join("a/sub"), "S2");
+        tag_it(&r.join("a/sub/deep"), "D2");
+        // the folder itself is dirty (a NotifyChanged for it, or a change in it)
+        let res = rebuild_dirty(&first, &[id_of(ix, &r, "a/sub")]);
+        assert_eq!(tags_at(&res.index, &r, "a/sub"), "S2");
+        assert_eq!(
+            tags_at(&res.index, &r, "a"),
+            "A1",
+            "its parent was not listed"
+        );
+        assert_eq!(
+            tags_at(&res.index, &r, "a/sub/deep"),
+            "D2",
+            "a subfolder of the listed folder"
+        );
+        // a folder kept only because one below it is dirty is not read again
+        // unless its parent is listed: here `a` is, so `sub`'s own tags are fresh
+        let res = rebuild_dirty(&first, &[id_of(ix, &r, "a"), id_of(ix, &r, "a/sub/deep")]);
+        assert_eq!(tags_at(&res.index, &r, "a"), "A2");
+        assert_eq!(
+            tags_at(&res.index, &r, "a/sub"),
+            "S2",
+            "the kept middle folder"
+        );
+        assert_eq!(tags_at(&res.index, &r, "a/sub/deep"), "D2");
+        // the same through the index of a rebuilt index: ids moved, tags followed
+        let again = rebuild_dirty(&res, &[]);
+        assert_eq!(tags_at(&again.index, &r, "a/sub"), "S2");
+        assert_eq!(again.index.tag_table(), res.index.tag_table());
+    }
+
+    #[test]
+    fn a_folder_with_no_dirty_folder_below_still_gets_fresh_tags_from_its_parent() {
+        let t = Scratch::new("rebuild-kept-tags");
+        if crate::testdir::skip_without_xattrs(&t.0) {
+            return;
+        }
+        let r = fs::canonicalize(&t.0).unwrap();
+        touch(&r.join("a/kept/k.txt"));
+        tag_it(&r.join("a/kept"), "K1");
+        tag_it(&r.join("a/kept/k.txt"), "KF1");
+        let first = scan(&r, &[]);
+        tag_it(&r.join("a/kept"), "");
+        let res = rebuild_dirty(&first, &[id_of(&first.index, &r, "a")]);
+        // cleared: the attribute is now empty
+        assert_eq!(tags_at(&res.index, &r, "a/kept"), "");
+        assert_eq!(tags_at(&res.index, &r, "a/kept/k.txt"), "KF1");
+        assert_eq!(res.index.tag_table().refs.len(), 1);
+    }
+
+    #[test]
+    fn a_rolled_back_folder_leaves_no_tags_behind() {
+        let t = Scratch::new("rebuild-excl-tags");
+        if crate::testdir::skip_without_xattrs(&t.0) {
+            return;
+        }
+        let r = fs::canonicalize(&t.0).unwrap();
+        touch(&r.join("v/lib/x.py"));
+        touch(&r.join("keep/k.txt"));
+        tag_it(&r.join("v"), "gone");
+        tag_it(&r.join("v/lib/x.py"), "gone");
+        tag_it(&r.join("keep/k.txt"), "stay");
+        let first = scan(&r, &[]);
+        touch(&r.join("v/pyvenv.cfg"));
+        let res = rebuild_dirty(&first, &[id_of(&first.index, &r, "v")]);
+        assert!(
+            res.index
+                .find_path(&[r.as_os_str().as_bytes(), b"/v"].concat())
+                .is_none()
+        );
+        assert_eq!(tags_at(&res.index, &r, "keep/k.txt"), "stay");
+        assert_eq!(res.index.tag_table().refs.len(), 1);
+        assert_eq!(res.index.tag_table().arena, b"stay");
+        // and the same for a scan that meets the marker first
+        let again = scan(&r, &[]);
+        assert_eq!(again.index.tag_table().arena, b"stay");
     }
 
     #[test]

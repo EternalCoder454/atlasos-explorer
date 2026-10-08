@@ -13,6 +13,7 @@ use crate::category::{Category, category_of};
 use crate::config::{BUILTIN_EXCLUDES, CACHEDIR_SIGNATURE, is_cachedir_tag, marker_excludes};
 use crate::index::MAX_DEPTH;
 use crate::query::{KindFilter, NameMatcher, Options};
+use crate::tags;
 use std::collections::VecDeque;
 use std::fs;
 use std::io::Read;
@@ -33,12 +34,15 @@ const STOP_EVERY: u32 = 64;
 pub struct LiveMatcher {
     names: NameMatcher,
     opts: Options,
+    /// The wanted tag in its [`tags::folded`] form.
+    tag: Option<String>,
 }
 
 impl LiveMatcher {
     pub fn new(query: &str, opts: Options) -> LiveMatcher {
         LiveMatcher {
             names: NameMatcher::new(query),
+            tag: opts.tag.as_deref().map(tags::folded),
             opts,
         }
     }
@@ -54,6 +58,7 @@ impl LiveMatcher {
             && o.modified_before.is_none()
             && o.size_min.is_none()
             && o.size_max.is_none()
+            && o.tag.is_none()
     }
 
     /// Is the entry hidden and so left out?
@@ -87,6 +92,23 @@ impl LiveMatcher {
         }
         let size = if is_dir { 0 } else { size };
         !(o.size_min.is_some_and(|s| size < s) || o.size_max.is_some_and(|s| size > s))
+    }
+
+    /// Does the search ask for a tag? Then every candidate needs
+    /// [`LiveMatcher::tag_accepts`] too, which `accepts` and `test` (they have
+    /// only a name and a stat) do not do.
+    pub fn wants_tag(&self) -> bool {
+        self.tag.is_some()
+    }
+
+    /// The third look: does the entry at `path` carry the tag asked for (its
+    /// `user.xdg.tags`, read now, symlinks not followed)? Always true when no
+    /// tag is asked for.
+    pub fn tag_accepts(&self, path: &Path) -> bool {
+        match &self.tag {
+            None => true,
+            Some(want) => tags::contains(&tags::clean(&tags::read_raw(path)), want),
+        }
     }
 
     /// Judge an entry fully (the name, then the filters) given its stat.
@@ -197,8 +219,12 @@ pub fn walk(
             if !m.accepts(name, is_dir, exec, size, mtime) {
                 continue;
             }
+            let full = entry.path();
+            if m.wants_tag() && !m.tag_accepts(&full) {
+                continue;
+            }
             batch.push(WalkHit {
-                path: entry.path().as_os_str().as_bytes().to_vec(),
+                path: full.as_os_str().as_bytes().to_vec(),
                 is_dir,
                 size: if is_dir { 0 } else { size },
                 mtime,
@@ -523,6 +549,85 @@ mod tests {
             ..Options::default()
         };
         assert!(!LiveMatcher::new("", o).is_empty());
+    }
+
+    fn tagged_tree() -> Option<Scratch> {
+        let s = Scratch::new("walk-tags");
+        if crate::testdir::skip_without_xattrs(&s.0) {
+            return None;
+        }
+        let r = &s.0;
+        touch(&r.join("plain.txt"), 1);
+        touch(&r.join("red.txt"), 1);
+        touch(&r.join("sub/deep-red.png"), 1);
+        touch(&r.join("sub/blue.txt"), 1);
+        touch(&r.join("sub/.hidden-red"), 1);
+        fs::create_dir_all(r.join("red-folder")).unwrap();
+        crate::testdir::set_tags(&r.join("red.txt"), "Work, Red").unwrap();
+        crate::testdir::set_tags(&r.join("sub/deep-red.png"), "RED").unwrap();
+        crate::testdir::set_tags(&r.join("sub/blue.txt"), "Blue").unwrap();
+        crate::testdir::set_tags(&r.join("sub/.hidden-red"), "Red").unwrap();
+        crate::testdir::set_tags(&r.join("red-folder"), "red").unwrap();
+        Some(s)
+    }
+
+    fn tag(t: &str) -> Options {
+        Options {
+            tag: Some(t.to_string()),
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn the_tag_is_read_from_each_candidate() {
+        let Some(s) = tagged_tree() else { return };
+        let r = &s.0;
+        let (hits, end, _) = run(r, "", tag("red"));
+        assert_eq!(end, WalkEnd::Done);
+        assert_eq!(rel(r, &hits), ["red-folder", "red.txt", "sub/deep-red.png"]);
+        let (hits, _, _) = run(r, "", tag("  BLUE "));
+        assert_eq!(rel(r, &hits), ["sub/blue.txt"]);
+        assert!(run(r, "", tag("green")).0.is_empty());
+        assert!(run(r, "", tag("re")).0.is_empty());
+        // with a name, a kind, hidden entries
+        let (hits, _, _) = run(r, "deep", tag("red"));
+        assert_eq!(rel(r, &hits), ["sub/deep-red.png"]);
+        let o = Options {
+            tag: Some("red".into()),
+            kinds: Some(Category::Image.bit()),
+            ..Options::default()
+        };
+        assert_eq!(rel(r, &run(r, "", o).0), ["sub/deep-red.png"]);
+        let o = Options {
+            tag: Some("red".into()),
+            include_hidden: true,
+            ..Options::default()
+        };
+        assert_eq!(rel(r, &run(r, "", o).0).len(), 4);
+    }
+
+    #[test]
+    fn a_symlink_has_no_tags_of_its_own() {
+        let Some(s) = tagged_tree() else { return };
+        let r = &s.0;
+        symlink(r.join("red.txt"), r.join("link-to-red")).unwrap();
+        let (hits, _, _) = run(r, "", tag("red"));
+        assert!(!rel(r, &hits).contains(&"link-to-red".to_string()));
+    }
+
+    #[test]
+    fn a_tag_makes_a_search_non_empty() {
+        let o = Options {
+            tag: Some("red".into()),
+            ..Options::default()
+        };
+        let m = LiveMatcher::new("", o);
+        assert!(!m.is_empty());
+        assert!(m.wants_tag());
+        assert!(!LiveMatcher::new("", Options::default()).wants_tag());
+        // with no tag asked for, any path is accepted
+        assert!(LiveMatcher::new("a", Options::default()).tag_accepts(Path::new("/nonexistent")));
+        assert!(!m.tag_accepts(Path::new("/nonexistent")));
     }
 
     #[test]

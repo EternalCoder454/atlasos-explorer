@@ -8,6 +8,7 @@
 //! - [`query`]: matching, filters, ranking.
 //! - [`snapshot`]: the on-disk cache, read as untrusted input.
 //! - [`engine`]: the worker thread with inotify, debounce and publishing.
+//! - [`tags`]: reading and cleaning the `user.xdg.tags` attribute.
 //! - [`walk`]: the live search of folders the index does not hold.
 
 pub mod category;
@@ -20,6 +21,7 @@ pub mod recent;
 pub mod scan;
 pub mod snapshot;
 pub mod sys;
+pub mod tags;
 pub mod text;
 pub mod uri;
 pub mod walk;

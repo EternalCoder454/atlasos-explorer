@@ -46,6 +46,44 @@ pub fn new(name: &str) -> PathBuf {
     panic!("no free test dir name under {}", base.display());
 }
 
+/// Set the `user.xdg.tags` attribute of `path` (never following a symlink).
+pub fn set_tags(path: &std::path::Path, value: &str) -> std::io::Result<()> {
+    crate::sys::lsetxattr(path, crate::tags::XATTR, value.as_bytes())
+}
+
+/// Does the filesystem under `dir` keep `user.*` attributes? Tests of tags
+/// call this first and skip, saying so, when it does not (tmpfs before Linux
+/// 6.6 and some overlay setups refuse them).
+pub fn xattrs_supported(dir: &std::path::Path) -> bool {
+    let probe = dir.join(".xattr-probe");
+    if std::fs::write(&probe, b"x").is_err() {
+        return false;
+    }
+    let ok = set_tags(&probe, "probe").is_ok() && crate::tags::read_raw(&probe) == b"probe";
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// `true` (after saying so on stderr) when a test of tags must be skipped
+/// because the filesystem under `dir` has no user attributes. Set
+/// `TELAMON_EXPLORER_REQUIRE_XATTR_TESTS=1` to make that a failure.
+pub fn skip_without_xattrs(dir: &std::path::Path) -> bool {
+    if xattrs_supported(dir) {
+        return false;
+    }
+    if std::env::var("TELAMON_EXPLORER_REQUIRE_XATTR_TESTS").as_deref() == Ok("1") {
+        panic!(
+            "tag tests are required but {} keeps no user xattrs",
+            dir.display()
+        );
+    }
+    eprintln!(
+        "SKIPPED: tag test, {} keeps no user extended attributes (set ATLAS_TEST_DIR to a folder on a filesystem that does, or TELAMON_EXPLORER_REQUIRE_XATTR_TESTS=1 to make this an error)",
+        dir.display()
+    );
+    true
+}
+
 /// Removes the folder when dropped.
 pub struct Scratch(pub PathBuf);
 

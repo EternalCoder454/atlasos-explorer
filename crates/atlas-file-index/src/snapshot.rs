@@ -1,23 +1,33 @@
-//! The snapshot file `$XDG_CACHE_HOME/telamon-explorer/index/v1.idx`: a cache, so
+//! The snapshot file `$XDG_CACHE_HOME/telamon-explorer/index/v2.idx`: a cache, so
 //! deleting it only costs a rescan. Flat and little-endian:
 //!
 //! ```text
 //! header, 64 bytes
-//!   0  magic "ATLASIDX"      8  version u32 (1)        12 header length u32 (64)
+//!   0  magic "ATLASIDX"      8  version u32 (2)        12 header length u32 (64)
 //!   16 record count u32      20 exclusion hash u32          24 arena length u64
-//!   32 saved at i64 (secs)   40 crc32 of the body      44 crc32 of bytes 0..44
-//!   48 reserved, 16 bytes
+//!   32 saved at i64 (secs)   40 crc32 of the body
+//!   44 crc32 of bytes 0..44 and 48..56
+//!   48 tag entry count u32   52 tag arena length u32        56 reserved, 8 bytes
 //! body
 //!   record count x 40-byte records
 //!     0 parent u32 (0xFFFFFFFF for a root)   4 name offset u32   8 folded name offset u32
 //!     12 name length u16   14 folded length u16   16 flags u8   17 category u8
 //!     18 reserved u16   20 reserved u32   24 mtime i64   32 size u64
 //!   string arena (names; a root's name is its absolute path)
+//!   tag entry count x 12-byte tag entries, sorted by record id
+//!     0 record id u32   4 offset into the tag arena u32   8 length u16
+//!     10 reserved u16 (zero)
+//!   tag arena (per entry the file's tags as UTF-8 names joined by ",")
 //! ```
+//!
+//! Version 2 added the tag sections; a version 1 file (`v1.idx`) is not read
+//! and is deleted when a snapshot is written. The version is checked before the
+//! header checksum so an older file is named as such.
 //!
 //! The reader treats the file as untrusted: the checksum catches damage, not
 //! tampering, so every length and offset is checked against the file and the
-//! arena, and the records must form a valid depth-first tree (`Index::from_parts`).
+//! arena, and the records must form a valid depth-first tree (`Index::from_parts`);
+//! the tag entries must be in order, inside the tag arena and hold valid text.
 //! Anything wrong means "no snapshot": the caller scans again.
 //!
 //! The folder follows the Store's cache rules: `telamon-explorer/index` under the
@@ -26,7 +36,7 @@
 //! the file is opened with `O_NOFOLLOW` and must be a regular file of the user's
 //! own; it is written to a temp file, synced, then renamed.
 
-use crate::index::{Index, MAX_ARENA, MAX_RECORDS, Record};
+use crate::index::{Index, MAX_ARENA, MAX_RECORDS, Record, TagRef, TagTable};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
@@ -35,11 +45,14 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"ATLASIDX";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 const HEADER: usize = 64;
 const RECORD: usize = 40;
-const FILE_NAME: &str = "v1.idx";
-const TMP_NAME: &str = "v1.idx.tmp";
+const TAG_ENTRY: usize = 12;
+const FILE_NAME: &str = "v2.idx";
+const TMP_NAME: &str = "v2.idx.tmp";
+/// The names of the version before: removed when a snapshot is written.
+const OLD_NAMES: [&str; 2] = ["v1.idx", "v1.idx.tmp"];
 /// Largest snapshot file read or written.
 pub const MAX_FILE: u64 = 512 * 1024 * 1024;
 
@@ -63,6 +76,17 @@ impl std::fmt::Display for SnapshotError {
 fn le32(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
+fn le16(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([b[o], b[o + 1]])
+}
+/// The checksum of the header: bytes 0..44 and 48..56 (the checksums
+/// themselves are left out).
+fn header_crc(b: &[u8]) -> u32 {
+    let mut h = crc32fast::Hasher::new();
+    h.update(&b[0..44]);
+    h.update(&b[48..56]);
+    h.finalize()
+}
 fn le64(b: &[u8], o: usize) -> u64 {
     let mut a = [0u8; 8];
     a.copy_from_slice(&b[o..o + 8]);
@@ -79,7 +103,10 @@ pub fn encode(index: &Index, saved_at: i64) -> Vec<u8> {
 pub fn encode_with(index: &Index, saved_at: i64, excl_hash: u32) -> Vec<u8> {
     let recs = index.records();
     let arena = index.arena();
-    let mut out = Vec::with_capacity(HEADER + recs.len() * RECORD + arena.len());
+    let tags = index.tag_table();
+    let mut out = Vec::with_capacity(
+        HEADER + recs.len() * RECORD + arena.len() + tags.refs.len() * TAG_ENTRY + tags.arena.len(),
+    );
     out.resize(HEADER, 0);
     for r in recs {
         out.extend_from_slice(&r.parent.to_le_bytes());
@@ -95,6 +122,13 @@ pub fn encode_with(index: &Index, saved_at: i64, excl_hash: u32) -> Vec<u8> {
         out.extend_from_slice(&r.size.to_le_bytes());
     }
     out.extend_from_slice(arena);
+    for t in &tags.refs {
+        out.extend_from_slice(&t.id.to_le_bytes());
+        out.extend_from_slice(&t.off.to_le_bytes());
+        out.extend_from_slice(&t.len.to_le_bytes());
+        out.extend_from_slice(&[0u8; 2]);
+    }
+    out.extend_from_slice(&tags.arena);
     let body_crc = crc32fast::hash(&out[HEADER..]);
     out[0..8].copy_from_slice(MAGIC);
     out[8..12].copy_from_slice(&VERSION.to_le_bytes());
@@ -104,7 +138,9 @@ pub fn encode_with(index: &Index, saved_at: i64, excl_hash: u32) -> Vec<u8> {
     out[24..32].copy_from_slice(&(arena.len() as u64).to_le_bytes());
     out[32..40].copy_from_slice(&saved_at.to_le_bytes());
     out[40..44].copy_from_slice(&body_crc.to_le_bytes());
-    let head_crc = crc32fast::hash(&out[0..44]);
+    out[48..52].copy_from_slice(&(tags.refs.len() as u32).to_le_bytes());
+    out[52..56].copy_from_slice(&(tags.arena.len() as u32).to_le_bytes());
+    let head_crc = header_crc(&out);
     out[44..48].copy_from_slice(&head_crc.to_le_bytes());
     out
 }
@@ -126,25 +162,29 @@ pub fn decode_with(
     if &bytes[0..8] != MAGIC {
         return Err(Corrupt("not an index file"));
     }
-    if crc32fast::hash(&bytes[0..44]) != le32(bytes, 44) {
-        return Err(Corrupt("header checksum"));
-    }
     let version = le32(bytes, 8);
     if version != VERSION {
         return Err(WrongVersion(version));
+    }
+    if header_crc(bytes) != le32(bytes, 44) {
+        return Err(Corrupt("header checksum"));
     }
     if le32(bytes, 12) as usize != HEADER {
         return Err(Corrupt("header length"));
     }
     let n = le32(bytes, 16) as usize;
     let arena_len = le64(bytes, 24);
-    if n > MAX_RECORDS || arena_len > MAX_ARENA as u64 {
+    let tag_n = le32(bytes, 48) as usize;
+    let tag_arena_len = le32(bytes, 52) as usize;
+    if n > MAX_RECORDS || arena_len > MAX_ARENA as u64 || tag_n > n || tag_arena_len > MAX_ARENA {
         return Err(Corrupt("counts out of range"));
     }
     let arena_len = arena_len as usize;
     let expect = HEADER
         .checked_add(n.checked_mul(RECORD).ok_or(Corrupt("size overflow"))?)
         .and_then(|v| v.checked_add(arena_len))
+        .and_then(|v| v.checked_add(tag_n.checked_mul(TAG_ENTRY)?))
+        .and_then(|v| v.checked_add(tag_arena_len))
         .ok_or(Corrupt("size overflow"))?;
     if expect != bytes.len() {
         return Err(Corrupt("length does not match the header"));
@@ -167,8 +207,27 @@ pub fn decode_with(
             size: le64(bytes, o + 32),
         });
     }
-    let arena = bytes[HEADER + n * RECORD..].to_vec();
-    let index = Index::from_parts(recs, arena, used).map_err(|e| Corrupt(e.0))?;
+    let arena_at = HEADER + n * RECORD;
+    let tags_at = arena_at + arena_len;
+    let tag_text_at = tags_at + tag_n * TAG_ENTRY;
+    let arena = bytes[arena_at..tags_at].to_vec();
+    let mut refs = Vec::with_capacity(tag_n);
+    for i in 0..tag_n {
+        let o = tags_at + i * TAG_ENTRY;
+        if le16(bytes, o + 10) != 0 {
+            return Err(Corrupt("reserved tag field is not zero"));
+        }
+        refs.push(TagRef {
+            id: le32(bytes, o),
+            off: le32(bytes, o + 4),
+            len: le16(bytes, o + 8),
+        });
+    }
+    let table = TagTable {
+        refs,
+        arena: bytes[tag_text_at..].to_vec(),
+    };
+    let index = Index::from_parts(recs, arena, table, used).map_err(|e| Corrupt(e.0))?;
     Ok((index, le64(bytes, 32) as i64, le32(bytes, 20)))
 }
 
@@ -347,6 +406,16 @@ impl CacheDir {
             }
             return Err(e);
         }
+        // the files of the version before are of no use any more; a failure to
+        // remove them is not a failure to save
+        for old in OLD_NAMES {
+            if let Ok(c) = cstr(old) {
+                // SAFETY: dir is open; c is NUL-terminated.
+                unsafe {
+                    libc::unlinkat(dir, c.as_ptr(), 0);
+                }
+            }
+        }
         // SAFETY: dir is open. A failed directory sync is not worth failing for:
         // the rename is done, only its durability is in question.
         unsafe {
@@ -359,7 +428,7 @@ impl CacheDir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::testutil::sample;
+    use crate::index::testutil::{sample, sample_tagged};
     use crate::testdir::Scratch;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
@@ -373,7 +442,9 @@ mod tests {
             assert_eq!(a.name(i), b.name(i));
             assert_eq!(a.fold(i), b.fold(i));
             assert_eq!(a.end(i), b.end(i));
+            assert_eq!(a.tags_of(i), b.tags_of(i));
         }
+        assert_eq!(a.tag_table(), b.tag_table());
     }
 
     #[test]
@@ -383,6 +454,12 @@ mod tests {
         let (back, saved) = decode(&bytes, &none()).unwrap();
         assert_eq!(saved, 1234);
         same(&ix, &back);
+        // an index with tags too
+        let tagged = sample_tagged();
+        let (back, _) = decode(&encode(&tagged, 7), &none()).unwrap();
+        same(&tagged, &back);
+        assert_eq!(back.tags_of(5), "Taxes 2025,RED");
+        assert_eq!(back.tag_counts(10), tagged.tag_counts(10));
         // an empty index too
         let e = Index::empty();
         let (b, _) = decode(&encode(&e, 0), &none()).unwrap();
@@ -391,44 +468,158 @@ mod tests {
 
     #[test]
     fn every_truncation_is_refused() {
-        let bytes = encode(&sample(), 1);
-        for cut in 0..bytes.len() {
-            assert!(decode(&bytes[..cut], &none()).is_err(), "cut at {cut}");
+        for ix in [sample(), sample_tagged()] {
+            let bytes = encode(&ix, 1);
+            for cut in 0..bytes.len() {
+                assert!(decode(&bytes[..cut], &none()).is_err(), "cut at {cut}");
+            }
+            let mut longer = bytes.clone();
+            longer.push(0);
+            assert!(decode(&longer, &none()).is_err());
         }
-        let mut longer = bytes.clone();
-        longer.push(0);
-        assert!(decode(&longer, &none()).is_err());
     }
 
     #[test]
     fn every_flipped_byte_is_refused() {
-        let bytes = encode(&sample(), 1);
-        for i in 0..bytes.len() {
-            if (48..64).contains(&i) {
-                continue; // reserved, not covered
+        for ix in [sample(), sample_tagged()] {
+            let bytes = encode(&ix, 1);
+            for i in 0..bytes.len() {
+                if (56..64).contains(&i) {
+                    continue; // reserved, not covered
+                }
+                let mut b = bytes.clone();
+                b[i] ^= 0x41;
+                assert!(decode(&b, &none()).is_err(), "flip at {i}");
             }
-            let mut b = bytes.clone();
-            b[i] ^= 0x41;
-            assert!(decode(&b, &none()).is_err(), "flip at {i}");
         }
     }
 
     fn reseal(b: &mut [u8]) {
         let body = crc32fast::hash(&b[HEADER..]);
         b[40..44].copy_from_slice(&body.to_le_bytes());
-        let head = crc32fast::hash(&b[0..44]);
+        let head = header_crc(b);
         b[44..48].copy_from_slice(&head.to_le_bytes());
     }
 
     #[test]
     fn wrong_version_is_named() {
-        let mut b = encode(&sample(), 1);
-        b[8..12].copy_from_slice(&2u32.to_le_bytes());
-        reseal(&mut b);
+        for v in [1u32, 3, u32::MAX] {
+            let mut b = encode(&sample(), 1);
+            b[8..12].copy_from_slice(&v.to_le_bytes());
+            reseal(&mut b);
+            assert_eq!(
+                decode(&b, &none()).err(),
+                Some(SnapshotError::WrongVersion(v))
+            );
+            // named even when the checksum does not fit (version before CRC)
+            let mut b = encode(&sample(), 1);
+            b[8..12].copy_from_slice(&v.to_le_bytes());
+            assert_eq!(
+                decode(&b, &none()).err(),
+                Some(SnapshotError::WrongVersion(v))
+            );
+        }
+    }
+
+    /// A file as version 1 wrote it: 64-byte header, records, arena, no tags.
+    fn v1_file(ix: &Index) -> Vec<u8> {
+        let mut b = encode(ix, 9);
+        b.truncate(HEADER + ix.len() * RECORD + ix.arena().len());
+        b[8..12].copy_from_slice(&1u32.to_le_bytes());
+        b[48..64].fill(0);
+        let body = crc32fast::hash(&b[HEADER..]);
+        b[40..44].copy_from_slice(&body.to_le_bytes());
+        let head = crc32fast::hash(&b[0..44]);
+        b[44..48].copy_from_slice(&head.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn a_version_1_file_is_named_not_read() {
+        let b = v1_file(&sample());
         assert_eq!(
             decode(&b, &none()).err(),
-            Some(SnapshotError::WrongVersion(2))
+            Some(SnapshotError::WrongVersion(1))
         );
+    }
+
+    #[test]
+    fn a_snapshot_without_tags_is_as_small_as_before_plus_the_header_fields() {
+        let ix = sample();
+        assert_eq!(
+            encode(&ix, 1).len(),
+            HEADER + ix.len() * RECORD + ix.arena().len()
+        );
+    }
+
+    /// Where the tag entries start in the encoding of `ix`.
+    fn tags_at(ix: &Index) -> usize {
+        HEADER + ix.len() * RECORD + ix.arena().len()
+    }
+
+    #[test]
+    fn hostile_tag_sections_with_valid_checksums_are_refused() {
+        let ix = sample_tagged();
+        let base = encode(&ix, 1);
+        assert!(decode(&base, &none()).is_ok());
+        let at = tags_at(&ix);
+        let text_at = at + ix.tag_table().refs.len() * TAG_ENTRY;
+        let bad = |what: &str, edit: &dyn Fn(&mut Vec<u8>)| {
+            let mut b = base.clone();
+            edit(&mut b);
+            reseal(&mut b);
+            assert!(decode(&b, &none()).is_err(), "{what}");
+        };
+        // entry fields (entry 1 is the second tagged record)
+        let e1 = at + TAG_ENTRY;
+        bad("id past the records", &|b| {
+            b[e1..e1 + 4].copy_from_slice(&99u32.to_le_bytes())
+        });
+        bad("id not ascending", &|b| {
+            b[e1..e1 + 4].copy_from_slice(&0u32.to_le_bytes())
+        });
+        bad("offset outside", &|b| {
+            b[e1 + 4..e1 + 8].copy_from_slice(&u32::MAX.to_le_bytes())
+        });
+        bad("length outside", &|b| {
+            b[e1 + 8..e1 + 10].copy_from_slice(&60_000u16.to_le_bytes())
+        });
+        bad("zero length", &|b| {
+            b[e1 + 8..e1 + 10].copy_from_slice(&0u16.to_le_bytes())
+        });
+        bad("reserved field set", &|b| b[e1 + 10] = 1);
+        bad("overlap", &|b| {
+            let first = b[at + 4..at + 8].to_vec();
+            b[e1 + 4..e1 + 8].copy_from_slice(&first);
+        });
+        // the tag text
+        bad("not UTF-8", &|b| b[text_at] = 0xFF);
+        bad("control character in a name", &|b| b[text_at + 1] = 0x01);
+        bad("an empty name", &|b| b[text_at + 2] = b',');
+        bad("a repeated name", &|b| {
+            b[text_at..text_at + 8].copy_from_slice(b"ab,AB,ab");
+        });
+        // counts that lie
+        bad("more entries than records", &|b| {
+            b[48..52].copy_from_slice(&99u32.to_le_bytes())
+        });
+        bad("entry count huge", &|b| {
+            b[48..52].copy_from_slice(&u32::MAX.to_le_bytes())
+        });
+        bad("tag arena length huge", &|b| {
+            b[52..56].copy_from_slice(&u32::MAX.to_le_bytes())
+        });
+        bad("tag arena length short", &|b| {
+            let n = le32(b, 52) - 1;
+            b[52..56].copy_from_slice(&n.to_le_bytes())
+        });
+        bad("tag arena length long", &|b| {
+            let n = le32(b, 52) + 1;
+            b[52..56].copy_from_slice(&n.to_le_bytes())
+        });
+        bad("entries without text", &|b| {
+            b[52..56].copy_from_slice(&0u32.to_le_bytes())
+        });
     }
 
     #[test]
@@ -501,6 +692,22 @@ mod tests {
         std::fs::write(dir.join(TMP_NAME), b"junk").unwrap();
         cd.write(&bytes).unwrap();
         assert!(!dir.join(TMP_NAME).exists());
+    }
+
+    #[test]
+    fn a_write_removes_the_files_of_version_1() {
+        let t = Scratch::new("snap-v1");
+        let cd = CacheDir::open(&t.0, true).unwrap().unwrap();
+        let dir = t.0.join("telamon-explorer/index");
+        std::fs::write(dir.join("v1.idx"), v1_file(&sample())).unwrap();
+        std::fs::write(dir.join("v1.idx.tmp"), b"junk").unwrap();
+        // the old file is not read as a snapshot
+        assert!(cd.read().unwrap().is_none());
+        cd.write(&encode(&sample(), 5)).unwrap();
+        assert!(!dir.join("v1.idx").exists());
+        assert!(!dir.join("v1.idx.tmp").exists());
+        assert!(dir.join(FILE_NAME).exists());
+        assert_eq!(FILE_NAME, "v2.idx");
     }
 
     #[test]

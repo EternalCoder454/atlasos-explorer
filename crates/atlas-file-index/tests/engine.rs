@@ -195,7 +195,7 @@ fn snapshot_serves_a_restart_before_any_scan() {
     let eng = start(cfg(&e));
     ready(&eng);
     eng.shutdown(); // writes the pending snapshot
-    let snap = e.home.join(".cache/telamon-explorer/index/v1.idx");
+    let snap = e.home.join(".cache/telamon-explorer/index/v2.idx");
     assert!(snap.exists());
     // a second start answers from the snapshot straight away, even if the scan is slow
     let mut c = cfg(&e);
@@ -223,7 +223,7 @@ fn damaged_snapshots_mean_a_rescan() {
     let eng = start(cfg(&e));
     ready(&eng);
     eng.shutdown();
-    let snap = e.home.join(".cache/telamon-explorer/index/v1.idx");
+    let snap = e.home.join(".cache/telamon-explorer/index/v2.idx");
     let good = fs::read(&snap).unwrap();
     for bad in [
         good[..good.len() / 2].to_vec(),
@@ -438,4 +438,215 @@ fn refresh_calls_are_merged() {
     eng.refresh();
     assert!(wait(WITHIN, || found(&eng, "after-refresh").len() == 1));
     eng.shutdown();
+}
+
+// ---- tags (user.xdg.tags) ----
+
+fn set_tags(p: &Path, v: &str) {
+    atlas_file_index::testdir::set_tags(p, v).unwrap();
+}
+
+/// Paths of the entries with the tag, found by `Search("", .., {tag})`.
+fn tagged(e: &Engine, tag: &str) -> Vec<String> {
+    let o = Options {
+        tag: Some(tag.to_string()),
+        ..Default::default()
+    };
+    let mut v: Vec<String> = e
+        .search("", 50, &o)
+        .iter()
+        .map(|h| String::from_utf8_lossy(&h.path).to_string())
+        .collect();
+    v.sort();
+    v
+}
+
+fn tag_count(e: &Engine, tag: &str) -> u32 {
+    e.tags()
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(tag))
+        .map_or(0, |(_, c)| *c)
+}
+
+/// An environment on a filesystem with user xattrs, or `None` (skipped).
+fn tag_env(name: &str) -> Option<Env> {
+    let e = env(name);
+    if atlas_file_index::testdir::skip_without_xattrs(&e.root) {
+        return None;
+    }
+    Some(e)
+}
+
+#[test]
+fn tagged_entries_are_found_and_counted() {
+    let Some(e) = tag_env("tags") else { return };
+    touch(&e.root.join("a.txt"));
+    touch(&e.root.join("docs/b.txt"));
+    touch(&e.root.join("docs/c.txt"));
+    touch(&e.root.join("plain.txt"));
+    set_tags(&e.root.join("a.txt"), "Red,Work");
+    set_tags(&e.root.join("docs/b.txt"), "red");
+    set_tags(&e.root.join("docs"), "Work");
+    let eng = start(cfg(&e));
+    ready(&eng);
+    let p = |rel: &str| e.root.join(rel).to_string_lossy().to_string();
+    assert_eq!(tagged(&eng, "Red"), [p("a.txt"), p("docs/b.txt")]);
+    assert_eq!(tagged(&eng, "RED"), tagged(&eng, "red"));
+    assert_eq!(tagged(&eng, "work"), [p("a.txt"), p("docs")]);
+    assert!(tagged(&eng, "blue").is_empty());
+    // the untagged do not appear
+    assert!(!tagged(&eng, "red").contains(&p("plain.txt")));
+    assert_eq!(
+        eng.tags(),
+        vec![("Red".to_string(), 2), ("Work".to_string(), 2)]
+    );
+    // a tag and a name together
+    let o = Options {
+        tag: Some("red".into()),
+        ..Default::default()
+    };
+    assert_eq!(eng.search("b.txt", 10, &o).len(), 1);
+    assert!(eng.search("c.txt", 10, &o).is_empty());
+    eng.shutdown();
+}
+
+#[test]
+fn a_tag_change_is_seen_by_the_watcher() {
+    let Some(e) = tag_env("tags-watch") else {
+        return;
+    };
+    touch(&e.root.join("a.txt"));
+    touch(&e.root.join("sub/b.txt"));
+    touch(&e.root.join("sub/inner/c.txt"));
+    set_tags(&e.root.join("a.txt"), "Old");
+    let eng = start(cfg(&e));
+    ready(&eng);
+    assert_eq!(tag_count(&eng, "Old"), 1);
+    // changed
+    set_tags(&e.root.join("a.txt"), "New");
+    assert!(
+        wait(WITHIN, || tagged(&eng, "new").len() == 1
+            && tagged(&eng, "old").is_empty()),
+        "a changed tag not seen"
+    );
+    // added to a file in a subfolder
+    set_tags(&e.root.join("sub/b.txt"), "Fresh,New");
+    assert!(
+        wait(WITHIN, || tagged(&eng, "new").len() == 2
+            && tagged(&eng, "fresh").len() == 1),
+        "a tag on a file in a subfolder not seen"
+    );
+    // on a folder itself
+    set_tags(&e.root.join("sub/inner"), "Folder Tag");
+    assert!(
+        wait(WITHIN, || tagged(&eng, "folder tag").len() == 1),
+        "a tag on a folder not seen"
+    );
+    set_tags(&e.root.join("sub"), "Folder Tag");
+    assert!(
+        wait(WITHIN, || tagged(&eng, "folder tag").len() == 2),
+        "a tag on a folder that has a watched folder below it"
+    );
+    // a new file that is tagged right after it is made
+    touch(&e.root.join("sub/inner/d.txt"));
+    set_tags(&e.root.join("sub/inner/d.txt"), "Late");
+    assert!(
+        wait(WITHIN, || tagged(&eng, "late").len() == 1),
+        "a new tagged file not seen"
+    );
+    // cleared
+    set_tags(&e.root.join("a.txt"), "");
+    assert!(
+        wait(WITHIN, || tagged(&eng, "new").len() == 1),
+        "a cleared tag not seen"
+    );
+    assert_eq!(tag_count(&eng, "Fresh"), 1);
+    eng.shutdown();
+}
+
+#[test]
+fn notify_changed_picks_up_tag_changes_without_watches() {
+    let Some(e) = tag_env("tags-notify") else {
+        return;
+    };
+    touch(&e.root.join("sub/a.txt"));
+    touch(&e.root.join("sub/deep/b.txt"));
+    set_tags(&e.root.join("sub/a.txt"), "One");
+    let mut c = cfg(&e);
+    c.watch_budget = Some(0); // only hints and refresh can find changes
+    c.recheck_after = Duration::from_secs(3600);
+    let eng = start(c);
+    ready(&eng);
+    assert_eq!(tagged(&eng, "one").len(), 1);
+    set_tags(&e.root.join("sub/a.txt"), "Two");
+    set_tags(&e.root.join("sub/deep"), "Dir");
+    // no event, no mtime change: nothing sees it by itself
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(tagged(&eng, "one").len(), 1, "stale until hinted");
+    let uri = path_to_uri(e.root.join("sub/a.txt").as_os_str().as_bytes());
+    assert_eq!(eng.notify_changed(&[uri]), 1);
+    assert!(
+        wait(WITHIN, || tagged(&eng, "two").len() == 1
+            && tagged(&eng, "one").is_empty()),
+        "NotifyChanged did not refresh the tags"
+    );
+    // the folder was listed again, so its subfolder's own tags came with it
+    assert_eq!(tagged(&eng, "dir").len(), 1);
+    // a hint for a folder re-reads that folder's own tags
+    set_tags(&e.root.join("sub/deep"), "Dir2");
+    let uri = path_to_uri(e.root.join("sub/deep").as_os_str().as_bytes());
+    assert_eq!(eng.notify_changed(&[uri]), 1);
+    assert!(
+        wait(WITHIN, || tagged(&eng, "dir2").len() == 1),
+        "a hint for a tagged folder"
+    );
+    // and Refresh sees everything
+    set_tags(&e.root.join("sub/deep/b.txt"), "Everything");
+    eng.refresh();
+    assert!(wait(WITHIN, || tagged(&eng, "everything").len() == 1));
+    eng.shutdown();
+}
+
+#[test]
+fn tags_survive_a_restart_through_the_snapshot() {
+    let Some(e) = tag_env("tags-snap") else {
+        return;
+    };
+    for i in 0..20 {
+        touch(&e.root.join(format!("d{i}/f{i}.txt")));
+    }
+    set_tags(&e.root.join("d3/f3.txt"), "Kept,Also Kept");
+    set_tags(&e.root.join("d4"), "Kept");
+    let eng = start(cfg(&e));
+    ready(&eng);
+    let before = eng.tags();
+    assert_eq!(before.first(), Some(&("Kept".to_string(), 2)));
+    eng.shutdown(); // writes the snapshot
+    assert!(e.home.join(".cache/telamon-explorer/index/v2.idx").exists());
+    // the second start answers from the snapshot, before any scan
+    let mut c = cfg(&e);
+    c.scan_delay = Duration::from_secs(30);
+    let eng2 = start(c);
+    assert!(matches!(eng2.status().state, State::Stale | State::Ready));
+    assert_eq!(eng2.tags(), before);
+    assert_eq!(tagged(&eng2, "kept").len(), 2);
+    assert_eq!(tagged(&eng2, "ALSO KEPT").len(), 1);
+    eng2.shutdown();
+}
+
+#[test]
+fn a_snapshot_of_the_version_before_is_ignored_and_removed() {
+    let Some(e) = tag_env("tags-v1") else { return };
+    touch(&e.root.join("a.txt"));
+    set_tags(&e.root.join("a.txt"), "Now");
+    let idx = e.home.join(".cache/telamon-explorer/index");
+    fs::create_dir_all(&idx).unwrap();
+    fs::set_permissions(&idx, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    fs::write(idx.join("v1.idx"), b"ATLASIDX not a real snapshot").unwrap();
+    let eng = start(cfg(&e));
+    ready(&eng);
+    assert_eq!(tagged(&eng, "now").len(), 1);
+    eng.shutdown();
+    assert!(idx.join("v2.idx").exists());
+    assert!(!idx.join("v1.idx").exists(), "the old file is removed");
 }
