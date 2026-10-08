@@ -21,7 +21,8 @@ T.MenuItem {
 
     readonly property real dotCell: Math.round(Kirigami.Units.gridUnit * 2.0)
     implicitWidth: Math.max(colours.length * dotCell, Kirigami.Units.gridUnit * 11 - 2 * TelamonStyle.spacingSmall)
-    implicitHeight: Math.round(Kirigami.Units.gridUnit * 2.4)
+    // A hidden row takes no room (the items can't keep tags: the menu says why).
+    implicitHeight: visible ? Math.round(Kirigami.Units.gridUnit * 2.4) : 0
     padding: 0
     hoverEnabled: true
 

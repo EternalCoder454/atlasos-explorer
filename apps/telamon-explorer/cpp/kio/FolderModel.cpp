@@ -767,6 +767,14 @@ void FolderModel::refresh()
     }
     setLoading(true);
     startProbe(m_url);
+    // Tags are not part of what the lister watches: another program may have
+    // changed them, so a refresh reads them again.
+    for (Entry &e : m_rows) {
+        e.tagState = 0;
+    }
+    if (!m_rows.isEmpty()) {
+        Q_EMIT dataChanged(index(0), index(int(m_rows.size()) - 1), {TagsRole, TagColoursRole, TagsTextRole});
+    }
     m_lister->openUrl(m_url, KCoreDirLister::Reload);
 }
 

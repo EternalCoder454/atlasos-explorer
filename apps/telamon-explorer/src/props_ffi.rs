@@ -277,8 +277,7 @@ fn changes_text(c: &[Change]) -> Vec<u8> {
 fn parse_changes(raw: &[u8]) -> Option<Vec<Change>> {
     let mut fields = raw.split(|b| *b == 0);
     let mut out = Vec::new();
-    loop {
-        let Some(path) = fields.next() else { break };
+    while let Some(path) = fields.next() {
         if path.is_empty() {
             // The trailing empty piece after the last NUL.
             break;
