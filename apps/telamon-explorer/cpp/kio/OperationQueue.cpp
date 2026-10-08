@@ -223,6 +223,8 @@ struct OperationQueue::Work {
     QList<QUrl> created;
     QUrl lastDest;
     std::function<void(bool)> done;
+    // An undo or redo: tells the history queue it is over.
+    std::function<void()> histDone;
     QMimeData *data = nullptr;
     bool ended = false;
 };
@@ -650,6 +652,11 @@ void OperationQueue::attach(Work &w, KJob *job)
         });
     }
     telamon_ops_started(m_engine, id);
+    // Paused while it was being checked (before there was a job to suspend).
+    TelamonOpInfo info;
+    if (telamon_ops_info(m_engine, id, &info) && info.state == 2) {
+        job->suspend();
+    }
 }
 
 void OperationQueue::runStep(quint64 id)
@@ -730,6 +737,7 @@ void OperationQueue::failOp(quint64 id, const QString &why, bool say)
     if (w.side >= 0) {
         // The undo or redo did not go through: its entry is stale.
         telamon_hist_drop(m_engine, uint32_t(w.side));
+        m_undoableId = 0;
         refreshHistory();
         Q_EMIT message(tr("Couldn't %1 \"%2\": %3").arg(w.side == 0 ? tr("undo") : tr("redo"), w.title, why));
     } else if (say) {
@@ -750,15 +758,16 @@ void OperationQueue::endOp(quint64 id, bool ok)
         return;
     }
     delete it->data;
-    const bool history = it->side >= 0;
     auto doneFn = std::move(it->done);
+    // A finished undo or redo reports itself when its entry is moved
+    // (completeHistory); one that failed or was cancelled is over now.
+    auto histFn = ok ? std::function<void()>() : std::move(it->histDone);
     m_work.erase(it);
-    // A finished undo or redo is still being recorded (completeHistory).
-    if (history && !ok) {
-        m_historyBusy = false;
-    }
     if (doneFn) {
         doneFn(ok);
+    }
+    if (histFn) {
+        histFn();
     }
     refresh();
 }
@@ -893,7 +902,7 @@ void OperationQueue::askConflict(OperationAsker *asker, quint64 opId, KJob *job,
         return u;
     };
     // Gives the job its answer. Replace and merge touch what was there before.
-    auto reply = [this, opId, a, j, dest, inFolder](uint32_t ans, const QString &name) {
+    auto reply = [this, opId, a, j, dest, inFolder, suggestion](uint32_t ans, const QString &name) {
         if (!a || !j) {
             return;
         }
@@ -905,15 +914,24 @@ void OperationQueue::askConflict(OperationAsker *asker, quint64 opId, KJob *job,
         case Merge:
             a->replyRename(KIO::Result_Overwrite, dest, j);
             break;
-        case KeepBoth:
-            a->replyRename(KIO::Result_Rename, inFolder(name), j);
+        case KeepBoth: {
+            // The dialog checks the name; this is the second look.
+            const QString use = rustValidateName(name).ok ? name : suggestion();
+            a->replyRename(KIO::Result_Rename, inFolder(use), j);
             break;
+        }
         default:
             a->replyRename(KIO::Result_Skip, dest, j);
             break;
         }
     };
 
+    // An undo or redo never overwrites anything: something that turned up
+    // since it was planned is left alone.
+    if (m_work.contains(opId) && work(opId).side >= 0) {
+        asker->replyRename(KIO::Result_Skip, dest, job);
+        return;
+    }
     const uint32_t code = telamon_ops_conflict(m_engine, opId, srcDir && dstDir ? 2 : 1);
     if (code == 0) {
         asker->replyRename(KIO::Result_Cancel, dest, job);
@@ -1225,32 +1243,53 @@ void OperationQueue::redo()
     startHistory(1);
 }
 
-void OperationQueue::recordingDone()
+void OperationQueue::histEnqueue(HistoryJob job)
 {
-    if (--m_recording == 0 && m_deferredSide >= 0) {
-        const int side = m_deferredSide;
-        m_deferredSide = -1;
-        startHistory(side);
+    m_histJobs.append(std::move(job));
+    histPump();
+}
+
+void OperationQueue::histPump()
+{
+    if (m_histRunning || m_histJobs.isEmpty()) {
+        return;
     }
+    m_histRunning = true;
+    HistoryJob job = m_histJobs.takeFirst();
+    QPointer<OperationQueue> self(this);
+    job([self] {
+        if (self) {
+            self->m_histRunning = false;
+            self->histPump();
+        }
+    });
 }
 
 void OperationQueue::startHistory(int side)
 {
-    if (m_recording > 0) {
-        // The last operation is still being written down.
-        m_deferredSide = side;
-        return;
-    }
-    const QStringList titles = side == 0 ? m_undoTitles : m_redoTitles;
-    if (titles.isEmpty()) {
-        Q_EMIT message(side == 0 ? tr("There is nothing to undo.") : tr("There is nothing to redo."));
-        return;
-    }
-    if (m_historyBusy) {
+    // A press per second for a long time is not an undo list.
+    if (m_histJobs.size() >= 20) {
         Q_EMIT message(tr("Wait for the last undo or redo to finish."));
         return;
     }
-    m_historyBusy = true;
+    QPointer<OperationQueue> self(this);
+    histEnqueue([self, side](std::function<void()> next) {
+        if (self) {
+            self->runHistory(side, std::move(next));
+        }
+    });
+}
+
+// Plans the next undo (or redo) and queues it; `next` is called when it is
+// over, or at once when there is nothing to run.
+void OperationQueue::runHistory(int side, std::function<void()> next)
+{
+    const QStringList titles = side == 0 ? m_undoTitles : m_redoTitles;
+    if (titles.isEmpty()) {
+        Q_EMIT message(side == 0 ? tr("There is nothing to undo.") : tr("There is nothing to redo."));
+        next();
+        return;
+    }
     const QString title = titles.first();
     const QString paths = OpsBridge::textOf([&](uint8_t *o, size_t c) { return telamon_hist_paths(m_engine, uint32_t(side), false, o, c); });
     QList<QUrl> urls;
@@ -1258,7 +1297,7 @@ void OperationQueue::startHistory(int side)
         urls << urlOfKey(p);
     }
     QPointer<OperationQueue> self(this);
-    StatBatch::run(urls, this, [self, side, title](const SeenMap &seen) {
+    StatBatch::run(urls, this, [self, side, title, next](const SeenMap &seen) {
         if (!self) {
             return;
         }
@@ -1290,9 +1329,10 @@ void OperationQueue::startHistory(int side)
                 why += QStringLiteral(": ") + rustDisplayName((u.isLocalFile() ? u.toLocalFile() : u.toDisplayString()).toUtf8());
             }
             telamon_hist_drop(self->m_engine, uint32_t(side));
-            self->m_historyBusy = false;
+            self->m_undoableId = 0;
             self->refreshHistory();
             Q_EMIT self->message(tr("Can't %1 \"%2\": %3").arg(verb, title, why));
+            next();
             return;
         }
 
@@ -1334,13 +1374,14 @@ void OperationQueue::startHistory(int side)
             w.steps << [restoreList]() -> KJob * { return KIO::restoreFromTrash(restoreList, KIO::HideProgressInfo); };
         }
         if (w.steps.isEmpty()) {
-            self->m_historyBusy = false;
             Q_EMIT self->message(tr("There is nothing to %1.").arg(verb));
+            next();
             return;
         }
+        w.histDone = next;
         const QString label = side == 0 ? tr("Undoing: %1").arg(title) : tr("Redoing: %1").arg(title);
         if (self->enqueue(std::move(w), label) == 0) {
-            self->m_historyBusy = false;
+            next();
         }
     });
 }
@@ -1360,7 +1401,8 @@ void OperationQueue::completeHistory(const Work &w)
         urls << urlOfKey(p);
     }
     QPointer<OperationQueue> self(this);
-    StatBatch::run(urls, this, [self, side, title, trashes](const SeenMap &seen) {
+    auto next = w.histDone;
+    StatBatch::run(urls, this, [self, side, title, trashes, next](const SeenMap &seen) {
         if (!self) {
             return;
         }
@@ -1369,11 +1411,14 @@ void OperationQueue::completeHistory(const Work &w)
             states += stateLine(it.key(), it.value());
         }
         const QByteArray st = states.toUtf8(), tr8 = trashes.toUtf8();
-        OpsBridge::textOf([&](uint8_t *o, size_t c) { return telamon_hist_complete(self->m_engine, uint32_t(side), OpsBridge::p(st), OpsBridge::n(st), OpsBridge::p(tr8), OpsBridge::n(tr8), o, c); });
-        self->m_historyBusy = false;
+        // Once: it moves the entry, so it must not be repeated with a bigger buffer.
+        telamon_hist_complete(self->m_engine, uint32_t(side), OpsBridge::p(st), OpsBridge::n(st), OpsBridge::p(tr8), OpsBridge::n(tr8), nullptr, 0);
         self->m_undoableId = 0;
         self->refreshHistory();
         Q_EMIT self->message(side == 0 ? tr("Undid: %1").arg(title) : tr("Redid: %1").arg(title));
+        if (next) {
+            next();
+        }
     });
 }
 
@@ -1408,62 +1453,62 @@ void OperationQueue::recordHistory(const Work &w)
     }
     QPointer<OperationQueue> self(this);
     const quint64 opId = id;
-    ++m_recording;
-    StatBatch::run(look, this, [self, kind, title, pairs, created, opId](const SeenMap &seen) {
+    histEnqueue([self, look, kind, title, pairs, created, opId](std::function<void()> next) {
         if (!self) {
             return;
         }
-        const std::shared_ptr<void> done(nullptr, [self](void *) {
-            if (self) {
-                self->recordingDone();
+        StatBatch::run(look, self.data(), [self, kind, title, pairs, created, opId, next](const SeenMap &seen) {
+            if (!self) {
+                return;
+            }
+            const std::shared_ptr<void> done(nullptr, [next](void *) { next(); });
+            QString rec;
+            auto state = [&](const QUrl &u) { return seen.value(urlKey(u)); };
+            switch (kind) {
+            case NewFolder:
+                rec = QStringLiteral("newfolder\n") + urlKey(created.first()) + QLatin1Char('\n');
+                break;
+            case Copy:
+            case Link:
+                rec = QStringLiteral("copy\n");
+                for (const auto &p : pairs) {
+                    if (!state(p.second).exists) {
+                        return;
+                    }
+                    rec += urlKey(p.second) + QLatin1Char('\t') + stateFields(state(p.second)) + QLatin1Char('\n');
+                }
+                break;
+            case Move:
+            case Rename:
+                rec = QStringLiteral("move\n");
+                for (const auto &p : pairs) {
+                    if (!state(p.second).exists) {
+                        return;
+                    }
+                    rec += urlKey(p.first) + QLatin1Char('\t') + urlKey(p.second) + QLatin1Char('\t') + stateFields(state(p.second)) + QLatin1Char('\n');
+                }
+                break;
+            case Trash:
+                rec = QStringLiteral("trash\n");
+                for (const auto &p : pairs) {
+                    SeenState s = state(p.second);
+                    if (!s.exists) {
+                        // The Trash didn't answer: the file is known to be gone from
+                        // where it was, which is all a restore needs to go by.
+                        return;
+                    }
+                    rec += urlKey(p.first) + QLatin1Char('\t') + urlKey(p.second) + QLatin1Char('\t') + stateFields(s) + QLatin1Char('\n');
+                }
+                break;
+            default:
+                return;
+            }
+            const QByteArray t = title.toUtf8(), r = rec.toUtf8();
+            if (telamon_hist_record(self->m_engine, OpsBridge::p(t), OpsBridge::n(t), OpsBridge::p(r), OpsBridge::n(r))) {
+                self->m_undoableId = opId;
+                self->refreshHistory();
+                self->refresh();
             }
         });
-        QString rec;
-        auto state = [&](const QUrl &u) { return seen.value(urlKey(u)); };
-        switch (kind) {
-        case NewFolder:
-            rec = QStringLiteral("newfolder\n") + urlKey(created.first()) + QLatin1Char('\n');
-            break;
-        case Copy:
-        case Link:
-            rec = QStringLiteral("copy\n");
-            for (const auto &p : pairs) {
-                if (!state(p.second).exists) {
-                    return;
-                }
-                rec += urlKey(p.second) + QLatin1Char('\t') + stateFields(state(p.second)) + QLatin1Char('\n');
-            }
-            break;
-        case Move:
-        case Rename:
-            rec = QStringLiteral("move\n");
-            for (const auto &p : pairs) {
-                if (!state(p.second).exists) {
-                    return;
-                }
-                rec += urlKey(p.first) + QLatin1Char('\t') + urlKey(p.second) + QLatin1Char('\t') + stateFields(state(p.second)) + QLatin1Char('\n');
-            }
-            break;
-        case Trash:
-            rec = QStringLiteral("trash\n");
-            for (const auto &p : pairs) {
-                SeenState s = state(p.second);
-                if (!s.exists) {
-                    // The Trash didn't answer: the file is known to be gone from
-                    // where it was, which is all a restore needs to go by.
-                    return;
-                }
-                rec += urlKey(p.first) + QLatin1Char('\t') + urlKey(p.second) + QLatin1Char('\t') + stateFields(s) + QLatin1Char('\n');
-            }
-            break;
-        default:
-            return;
-        }
-        const QByteArray t = title.toUtf8(), r = rec.toUtf8();
-        if (telamon_hist_record(self->m_engine, OpsBridge::p(t), OpsBridge::n(t), OpsBridge::p(r), OpsBridge::n(r))) {
-            self->m_undoableId = opId;
-            self->refreshHistory();
-            self->refresh();
-        }
     });
 }

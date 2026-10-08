@@ -150,6 +150,8 @@ private:
         std::function<void(const QVariantMap &)> reply;
     };
 
+    using HistoryJob = std::function<void(std::function<void()> next)>;
+
     quint64 enqueue(Work work, const QString &runningLabel);
     void pump();
     void startOp(quint64 id);
@@ -168,7 +170,9 @@ private:
     void recordHistory(const Work &w);
     void completeHistory(const Work &w);
     void startHistory(int side);
-    void recordingDone();
+    void histEnqueue(HistoryJob job);
+    void histPump();
+    void runHistory(int side, std::function<void()> next);
     QString nameList(const QList<QUrl> &urls, int max) const;
     static QString folderName(const QUrl &folder);
     static QString key(const QUrl &url);
@@ -182,11 +186,11 @@ private:
     QStringList m_undoTitles;
     QStringList m_redoTitles;
     quint64 m_undoableId = 0;
-    // A history step (undo or redo) is being prepared or run: one at a time.
-    bool m_historyBusy = false;
-    // Finished operations whose undo record is still being made (their files
-    // are looked at first); an undo asked for meanwhile waits for them.
-    int m_recording = 0;
-    int m_deferredSide = -1;
+    // Everything that reads or changes the undo lists (writing down a
+    // finished operation, an undo, a redo) runs one after the other, in the
+    // order it was asked: each needs the files looked at first, and each must
+    // find the lists as the one before left them. A job calls `next` when done.
+    QList<HistoryJob> m_histJobs;
+    bool m_histRunning = false;
     QTimer m_tick;
 };
