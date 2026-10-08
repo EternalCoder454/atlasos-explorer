@@ -27,6 +27,7 @@
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDir>
+#include <QFileInfo>
 #include <QDrag>
 #include <QDropEvent>
 #include <QFuture>
@@ -52,6 +53,18 @@ QUrl childUrl(const QUrl &dir, const QString &name)
     QUrl u = dir;
     u.setPath(QDir::cleanPath(dir.path() + QLatin1Char('/') + name));
     return u;
+}
+
+// Whether `name` is in the folder `dir` on this computer, listed or not (a
+// hidden file, one the lister hasn't reached). One lstat; a folder on a
+// server is the lister's and KIO's to answer.
+bool existsOnDisk(const QUrl &dir, const QString &name)
+{
+    if (!dir.isLocalFile()) {
+        return false;
+    }
+    const QFileInfo info(QDir(dir.toLocalFile()).filePath(name));
+    return info.exists() || info.isSymLink();
 }
 
 // A drop that changes nothing: back into the folder the items are in, or onto
@@ -274,6 +287,11 @@ void FileActions::renameTo(const QUrl &url, const QString &name, bool select)
         return;
     }
     QUrl target = url.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
+    // A hidden file the view doesn't list is as much "already here".
+    if (existsOnDisk(target, name)) {
+        Q_EMIT failed(tr("\"%1\" is already here. Choose another name.").arg(rustDisplayName(name.toUtf8())));
+        return;
+    }
     target = childUrl(target, name);
     QPointer<FileActions> self(this);
     m_ops->rename(url, name, [self, target, select](bool ok) {
@@ -302,7 +320,7 @@ void FileActions::tell(const QString &text)
 QString FileActions::suggestName(const QUrl &folder, const QString &wanted) const
 {
     QPointer<FolderModel> model = m_folder;
-    return rustFreeName(wanted, [&](const QString &candidate) { return model && model->rowOfUrl(childUrl(folder, candidate)) >= 0; });
+    return rustFreeName(wanted, [&](const QString &candidate) { return (model && model->rowOfUrl(childUrl(folder, candidate)) >= 0) || existsOnDisk(folder, candidate); });
 }
 
 void FileActions::newFolder()
@@ -441,7 +459,9 @@ QVariantMap FileActions::batchPreview(const QList<QUrl> &urls, const QVariantMap
     const TelamonBatchSpec s = batchSpec(spec, first, second);
     const QUrl dir = m_folder->url().adjusted(QUrl::StripTrailingSlash);
     QPointer<FolderModel> model = m_folder;
-    const RustBatch plan = rustBatchPlan(s, names, [&](const QString &name) { return model && model->rowOfUrl(childUrl(dir, name)) >= 0; });
+    // The list and Apply look at the disk too (hidden files, files not listed
+    // yet): a stat for each name that changes, local folders only.
+    const RustBatch plan = rustBatchPlan(s, names, [&](const QString &name) { return (model && model->rowOfUrl(childUrl(dir, name)) >= 0) || existsOnDisk(dir, name); });
     if (!plan.valid) {
         return out;
     }
@@ -475,7 +495,7 @@ void FileActions::batchApply(const QList<QUrl> &urls, const QVariantMap &spec)
     const TelamonBatchSpec s = batchSpec(spec, first, second);
     const QUrl dir = m_folder->url().adjusted(QUrl::StripTrailingSlash);
     QPointer<FolderModel> model = m_folder;
-    const RustBatch plan = rustBatchPlan(s, names, [&](const QString &name) { return model && model->rowOfUrl(childUrl(dir, name)) >= 0; });
+    const RustBatch plan = rustBatchPlan(s, names, [&](const QString &name) { return (model && model->rowOfUrl(childUrl(dir, name)) >= 0) || existsOnDisk(dir, name); });
     // The folder may have changed since the list was shown: nothing happens
     // unless the plan holds now.
     if (!plan.valid || !plan.canApply) {

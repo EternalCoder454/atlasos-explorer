@@ -930,8 +930,14 @@ void OperationQueue::cancel(quint64 id)
     telamon_ops_event(m_engine, id, 3);
     pump();
     if (known && m_work.contains(id)) {
+        // A batch of renames stopped half way: the ones done are one step to undo.
+        const Work w = work(id);
+        const bool partial = w.kind == Rename && w.record && w.side < 0 && w.sources.size() > 1 && !w.pairs.isEmpty();
         // Waiting operations have no job to kill.
         endOp(id);
+        if (partial) {
+            recordHistory(w);
+        }
     }
     if (known) {
         Q_EMIT jobFinished();
@@ -1368,7 +1374,8 @@ void OperationQueue::renameMany(const QList<QPair<QUrl, QString>> &renames, std:
     }
     w.dest = w.sources.first().adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
     w.title = textFor(0, Rename, w.sources, QString(), QString());
-    enqueue(std::move(w), textFor(1, Rename, w.sources, QString(), QString()));
+    const QString running = textFor(1, Rename, w.sources, QString(), QString());
+    enqueue(std::move(w), running);
 }
 
 void OperationQueue::makeFolder(const QUrl &folder, const QString &name, std::function<void(bool)> done)

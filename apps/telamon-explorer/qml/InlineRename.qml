@@ -37,6 +37,9 @@ FocusScope {
     // Enter was pressed once on a name that has a warning.
     property bool confirmed: false
     property bool finished: false
+    // The item this field was made for. `itemUrl` follows the row, which may
+    // come to show another item (a reused row); what is renamed never does.
+    property url target
     // The field has its first text (typing after that is the user's).
     property bool ready: false
     property string original: ""
@@ -47,22 +50,24 @@ FocusScope {
     function evaluate() {
         check = actions.checkName(input.text, {
                 "mode": "rename",
-                "url": itemUrl
+                "url": target
             });
         confirmed = false;
     }
 
     // Ends the edit; with `commit`, renames to what is typed (when it differs).
-    function finish(commit, select) {
+    // `refocus`: the view takes the keyboard back (not when the user has just
+    // put it somewhere else).
+    function finish(commit, select, refocus = true) {
         if (finished) {
             return;
         }
         finished = true;
         const text = input.text;
-        const url = itemUrl;
+        const url = target;
         const a = actions;
         const view = fv;
-        view.endRename();
+        view.endRename(refocus);
         if (commit && text !== original) {
             a.renameTo(url, text, select);
         }
@@ -87,17 +92,17 @@ FocusScope {
 
     // The keyboard went elsewhere, or the view was clicked: rename if the
     // name can simply be used, else leave it and say why.
-    function leave() {
+    function leave(refocus = true) {
         if (finished) {
             return;
         }
         if (input.text === original) {
-            finish(false, false);
+            finish(false, false, refocus);
         } else if (check.ok && !warned) {
-            finish(true, false);
+            finish(true, false, refocus);
         } else {
             const why = check.text;
-            finish(false, false);
+            finish(false, false, refocus);
             actions.tell(qsTr("The name wasn't changed. %1").arg(why));
         }
     }
@@ -169,8 +174,9 @@ FocusScope {
         // goes because its row now shows another item, or because the row's
         // new place made another field, is not the user leaving.)
         onActiveFocusChanged: {
-            if (!activeFocus && ed.Window.active && ed.fv.activeEditor === ed && ed.fv.renameUrl.toString() === ed.itemUrl.toString()) {
-                ed.leave();
+            // (A row put away for reuse is hidden; that is not the user leaving.)
+            if (!activeFocus && ed.visible && ed.Window.active && ed.fv.activeEditor === ed && ed.fv.renameUrl.toString() === ed.target.toString()) {
+                ed.leave(false);
             }
         }
         Accessible.name: qsTr("Name")
@@ -178,7 +184,12 @@ FocusScope {
     }
     property int stem: 0
 
+    // Nothing the field doesn't use goes on to the view (Left at the start of
+    // the name would move the selection).
+    Keys.onPressed: event => event.accepted = true
+
     Component.onCompleted: {
+        target = itemUrl;
         const info = actions.editableName(itemUrl, isDir);
         original = info.name;
         stem = info.stem;
@@ -197,7 +208,11 @@ FocusScope {
         fv.activeEditor = ed;
     }
     Component.onDestruction: {
+        // The row went away under the edit (scrolled off): the edit ends as a click away does.
         if (fv.activeEditor === ed) {
+            if (!finished) {
+                leave(false);
+            }
             fv.activeEditor = null;
         }
     }

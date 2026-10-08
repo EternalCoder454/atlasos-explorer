@@ -250,12 +250,14 @@ FocusScope {
         }
     }
     // The edit is over (renamed, cancelled or abandoned); the view has the keyboard back.
-    function endRename() {
+    function endRename(refocus = true) {
         renameUrl = "";
         renameText = "";
         renameDirty = false;
         renameWanted = "";
-        forceActiveFocus();
+        if (refocus) {
+            forceActiveFocus();
+        }
     }
     // A new folder or file: edited as soon as it is listed.
     property url renameWanted

@@ -310,6 +310,8 @@ Item {
             MouseArea {
                 id: mouse
                 anchors.fill: parent
+                // The name being edited takes the mouse; a click elsewhere ends the edit (FolderView).
+                enabled: !row.editing
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 property point start

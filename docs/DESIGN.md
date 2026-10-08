@@ -15,7 +15,7 @@ Solid, KService, KCoreAddons, KDBusAddons, KWindowSystem).
 
 This file describes the finished Files. The code is smaller, and
 `docs/ROADMAP.md` lists what is built and what is planned, wave by wave. As of
-0.2.0 plus waves 1 to 9 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders)
+0.2.0 plus waves 1 to 10 (tabs; the path bar, history menus and status line; the sidebar with pins, drives and the Trash; search; Quick Look, the preview pane and zoom; the operation queue, conflict dialog and undo; the context menus and name prompts; the Columns and Gallery views, grouping and each folder's remembered view; archives: Telamon Archive's jobs in the queue, and zip, tar and 7z files opened as read-only folders; names edited in place, Batch Rename, new items edited as they are made)
 only these parts of the sections below exist: a tab strip with one folder per
 tab (Details, Icons, Compact, Columns and Gallery views, remembered per folder, with Group by), a breadcrumb path bar that becomes a
 text field with completion, a search field with scope and filter chips that
@@ -293,7 +293,7 @@ Explorer replaces Dolphin completely.
     rebuild button, `re:` patterns.
 - **Command bar:** New (folder, text file, templates from
   `~/Templates` and KNewFileMenu's system templates), Cut, Copy, Paste,
-  Rename, Share (a portal-free menu: email via `mailto:`, KDE Connect when
+  Rename (one item in place, several in Batch Rename), Share (a portal-free menu: email via `mailto:`, KDE Connect when
   installed, copy location), Delete, then Sort and View menus, and "…"
   (select all, invert selection, hidden files, file extensions, Properties,
   Open Terminal Here). Disabled states follow the selection and the folder's
@@ -333,16 +333,60 @@ Explorer replaces Dolphin completely.
     by name, Sort and View (the same menus as the toolbar's buttons), Open
     Terminal Here, Pin This Folder to Sidebar, Properties. Show Hidden Files
     is in View.
-  - **Names:** Rename, New Folder and New Text File (or from a template) ask
-    in a Telamon.Ui dialog (`qml/NamePrompt.qml`): the name is checked as it is
-    typed (the core's rules, and a listed item that has the name), a refusal
-    shows under the field and keeps the button off, a warning (a hidden
-    character, a leading space) shows and the button then says "Use This
-    Name". A file's name opens with its extension left out of the selection.
-    The answer is queued like any other change (`makeFolder`, `makeFile`,
-    `rename`). A new file is recorded as a copy, so Undo trashes it and Redo
-    brings it back; a template is copied with `KIO::copyAs`, an empty file
-    is written with `KIO::storedPut` (which refuses a name that exists).
+  - **Names** (wave 10): F2, Rename and the toolbar's pencil edit one item's
+    name where it is shown (`qml/InlineRename.qml`, in Details, Icons,
+    Compact and the tab's own column of Columns): the field opens with the
+    name without its extension selected (the core's `names::stem_len`: all of
+    a folder's name, `report` of `report.tar.gz`, none of `.bashrc`'s dot).
+    The name is checked as it is typed (the core's rules, and a listed item
+    that has the name) and the reason shows under the field in plain words:
+    `/`, an empty name, only dots, over 255 bytes are refused (Enter does
+    nothing); control, bidi, leading or trailing space and similar are a
+    warning, and Enter needs pressing a second time. Enter renames and the
+    item stays selected and in view; Escape leaves the name; a click away
+    renames when the name can be used, else leaves it and says why (the line
+    above the list). The field shows the true name, not the display form. A
+    view with the folder gone, or the item gone, ends the edit. Where a name
+    can't be edited in place (the Gallery, which shows no name to edit, and
+    search results, which are from many folders) the same check runs in the
+    Telamon.Ui dialog `qml/NamePrompt.qml`, with "Use This Name" for a
+    warning. The answer is queued like any other change (`rename`).
+  - **New** (wave 10): Folder (Ctrl+Shift+N, the toolbar's New Folder), Text
+    File and the `~/Templates` entries make the item at once, in the folder
+    shown, under the first free name ("New Folder", "New Folder (2)"), through
+    the queue (`makeFolder`, `makeFile`; a new file is recorded as a copy, so
+    Undo trashes it and Redo brings it back; a template is copied with
+    `KIO::copyAs`, an empty file is written with `KIO::storedPut`, which
+    refuses a name that exists). When it is listed the view selects it and
+    puts its name in edit mode (`createdItem`, `FolderView.renameWhenListed`).
+    Escape keeps the free name. Nothing asks first. A rename onto a name the view
+    doesn't list but the disk has (a hidden file) is refused in words.
+  - **Batch Rename** (wave 10): F2, Rename or the pencil with two or more
+    items selected in one folder (not in search results) opens
+    `qml/BatchRenameDialog.qml`. Four rules: Find and Replace (plain text or a
+    regular expression, "Match case"; on the whole file name, so an extension
+    can change; a replacement in a pattern uses `${1}`, a bare `$1_` names a
+    group called `1_`), Add Number (start, step, digits, before or after the
+    name, text between), Change Case (lower, UPPER, Title, Sentence) and Add
+    Text (before or after the name). Number, case and text work on the name
+    without its extension, and on a folder's whole name. The items are taken
+    in the order the folder shows them. The list shows each name before and
+    after as the rule is set; a name that can't be used is marked with the
+    reason and blocks Rename: not a name (the single rename's refusals), the
+    same name as another item in the list, a name another selected item has
+    now (a swap or a chain would need an order and a temporary name, so it
+    is refused rather than done), or a file that is in the folder already (the list and Rename look at the
+    disk as well as the listing, so a hidden file counts; one `lstat` for each
+    name that changes, on this computer only).
+    Warnings (hidden characters) show and do not block. The plan is
+    `atlas_explorer_core::batch`, over `telamon_batch_plan`; Rename asks the
+    core again, so a folder that changed under the dialog can't slip a bad
+    name in. Rust's `regex` runs in time linear in the name, the pattern is
+    capped at 512 bytes and its compiled size at 1 MiB, and a batch at 5000
+    items. Apply is one operation in the queue (`renameMany`: one KIO move
+    job per item, in order, as one entry in Undo and Redo, titled "Rename 50
+    Items"); if one fails the ones before it stay done and are still one step
+    to undo. The renamed items are selected afterwards.
   - **Hide** writes the item's name to the folder's `.hidden` file (one name a
     line, which KIO, Dolphin and the file index read), through the queue as a
     job on a worker: a folder on this computer only, never through a link, a
