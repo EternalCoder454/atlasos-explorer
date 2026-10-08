@@ -9,10 +9,12 @@ pub mod legacy;
 pub mod location;
 pub mod names;
 pub mod places;
+pub mod preview;
 pub mod queue;
 pub mod search;
 pub mod sort;
 pub mod tabs;
 pub mod undo;
+pub mod zoom;
 
 pub use display::{MAX_DISPLAY_CHARS, NameBytes, display_name};

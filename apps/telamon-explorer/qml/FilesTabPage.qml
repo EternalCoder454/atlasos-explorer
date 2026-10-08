@@ -44,6 +44,8 @@ FocusScope {
     signal navigated
     // Open File Location on search results: their URLs.
     signal openLocation(var urls)
+    // Space in the view: Quick Look for the selected file.
+    signal quickLookRequested
 
     function load() {
         if (loaded) {
@@ -181,6 +183,7 @@ FocusScope {
         actions: page.actions
         search: tabSearch
         onOpenLocationRequested: urls => page.openLocation(urls)
+        onQuickLookRequested: page.quickLookRequested()
         onSearchCloseRequested: tabSearch.clear()
         onNavigateRequested: target => page.navigate(target)
         onOpenInNewTabRequested: target => page.openInNewTab(target)

@@ -51,6 +51,8 @@ BuildRequires:  cmake(KF6Config)
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
 BuildRequires:  kf6-kirigami-devel
+# QtMultimedia, for the media player of Quick Look and the preview pane (QML only)
+BuildRequires:  qt6-qtmultimedia
 BuildRequires:  telamon-ui >= 2.0.0
 
 Requires:       kf6-kirigami
@@ -59,6 +61,8 @@ Requires:       kf6-kirigami
 Requires:       telamon-ui >= 2.0.0
 Requires:       kf6-qqc2-desktop-style
 Requires:       qt6-qtdeclarative
+# the player of Quick Look and the preview pane
+Requires:       qt6-qtmultimedia
 # the app icon and Breeze's icons are SVG
 Requires:       qt6-qtsvg
 # KIO's workers beyond file:/ and trash:/ (smb, sftp, mtp, network,

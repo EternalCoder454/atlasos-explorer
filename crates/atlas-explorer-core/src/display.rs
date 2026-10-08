@@ -123,6 +123,13 @@ fn push_char(out: &mut String, c: char, in_space_run: bool) {
     }
 }
 
+/// Adds `c` to `out` as it may be shown: a control, bidi or invisible
+/// character comes out as a visible marker (for text that is not a name, such
+/// as a file's content in Quick Look; a line break is the caller's to keep).
+pub(crate) fn push_visible(out: &mut String, c: char) {
+    push_char(out, c, false);
+}
+
 /// The text to show for a file name. Never longer than
 /// [`MAX_DISPLAY_CHARS`] characters plus a `…`, and holds no control or bidi
 /// character. Invalid UTF-8 bytes appear as `\xNN`.

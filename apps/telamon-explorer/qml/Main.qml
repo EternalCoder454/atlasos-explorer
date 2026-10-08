@@ -41,8 +41,17 @@ TelamonWindow {
     // Why the address typed in the path bar was refused, shown under it.
     property string addressError
     readonly property bool editingAddress: pathBar.editing
-    // A text field has the keyboard: keys that mean something to it are not the window's.
-    readonly property bool typing: pathBar.editing || searchField.activeFocus || searchBar.activeFocus
+    // A text field has the keyboard.
+    readonly property bool inTextField: pathBar.editing || searchField.activeFocus || searchBar.activeFocus
+    // Keys that mean something to a text field, or to Quick Look (which shows
+    // a file and must not act on it), are not the window's.
+    readonly property bool typing: inTextField || quickLook.opened
+    onInTextFieldChanged: {
+        if (inTextField) {
+            quickLook.close();
+        }
+    }
+    onViewChanged: quickLook.close()
     // The tab's search, and whether its results are what the view shows.
     readonly property var search: page ? page.search : null
     readonly property bool searching: view ? view.folder.searching : false
@@ -369,6 +378,27 @@ TelamonWindow {
         fileActions.saveShowHidden(on);
     }
 
+    // ---- Quick Look, the preview pane and zoom ----
+    // Space on the tab shown: a large preview of the selected file.
+    function showQuickLook(from) {
+        if (from === page && view && !typing) {
+            quickLook.openFor(view);
+        }
+    }
+    // Ctrl+plus, Ctrl+minus (steps) and Ctrl+0 (0): the icons' size in the
+    // Icons view, the rows' height in the others.
+    function zoom(steps) {
+        if (!view) {
+            return;
+        }
+        const icons = !view.showsDetails && view.viewMode === "icons";
+        if (steps === 0) {
+            PreviewLogic.resetZoom(icons);
+        } else {
+            PreviewLogic.zoom(icons, steps);
+        }
+    }
+
     // ---- Navigation in the tab shown ----
     function navigate(target) {
         if (page) {
@@ -510,6 +540,7 @@ TelamonWindow {
         pages[id] = p;
         p.openInNewTab.connect(u => root.openInNewTab(u));
         p.openLocation.connect(urls => root.openFileLocation(urls));
+        p.quickLookRequested.connect(() => root.showQuickLook(p));
         p.navigated.connect(() => root.freshStart = false);
         p.titleChanged.connect(() => root.syncTab(p));
         p.toolTipChanged.connect(() => root.syncTab(p));
@@ -769,6 +800,7 @@ TelamonWindow {
     }
 
     Component.onCompleted: {
+        PreviewLogic.rowDefault = Kirigami.Units.gridUnit * 2;
         restoreTabs = TabLogic.restoreOnStart();
         const saved = restoreTabs ? TabLogic.savedSession() : null;
         if (saved && saved.urls.length > 0) {
@@ -795,11 +827,15 @@ TelamonWindow {
     Shortcut { sequence: "Ctrl+Z"; enabled: !root.typing; onActivated: fileActions.undo() }
     Shortcut { sequence: "Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.trash(root.selected) }
     Shortcut { sequence: "Shift+Delete"; enabled: !root.typing && root.hasSelection && root.canWrite; onActivated: fileActions.deleteForGood(root.selected) }
-    Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching; onActivated: fileActions.newFolder() }
+    Shortcut { sequence: "Ctrl+Shift+N"; enabled: root.canWrite && !root.searching && !quickLook.opened; onActivated: fileActions.newFolder() }
     Shortcut { sequence: "Ctrl+H"; enabled: !root.typing; onActivated: root.toggleHidden() }
-    Shortcut { sequence: "Shift+F4"; onActivated: fileActions.openTerminal() }
+    Shortcut { sequence: "Shift+F4"; enabled: !quickLook.opened; onActivated: fileActions.openTerminal() }
     Shortcut { sequences: ["Ctrl+L", "F4", "F6", "Alt+D"]; onActivated: pathBar.startEdit() }
     Shortcut { sequences: ["Ctrl+F", "Ctrl+E"]; onActivated: root.focusSearch() }
+    Shortcut { sequence: "Alt+P"; enabled: !quickLook.opened; onActivated: PreviewLogic.paneShown = !PreviewLogic.paneShown }
+    Shortcut { sequences: ["Ctrl++", "Ctrl+=", "Ctrl+Plus"]; enabled: !root.typing; onActivated: root.zoom(1) }
+    Shortcut { sequences: ["Ctrl+-", "Ctrl+Minus"]; enabled: !root.typing; onActivated: root.zoom(-1) }
+    Shortcut { sequence: "Ctrl+0"; enabled: !root.typing; onActivated: root.zoom(0) }
     Shortcut { sequence: "Alt+Left"; enabled: !root.typing; onActivated: root.goBack() }
     Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
@@ -822,6 +858,12 @@ TelamonWindow {
         ContextMenuItem { text: qsTr("Details"); radio: true; checkable: true; checked: root.view?.viewMode === "details"; onTriggered: root.view.viewMode = "details" }
         ContextMenuItem { text: qsTr("Icons"); radio: true; checkable: true; checked: root.view?.viewMode === "icons"; onTriggered: root.view.viewMode = "icons" }
         ContextMenuItem { text: qsTr("Compact"); radio: true; checkable: true; checked: root.view?.viewMode === "compact"; onTriggered: root.view.viewMode = "compact" }
+        ContextMenuSeparator {}
+        ContextMenuItem { text: qsTr("Preview Pane"); shortcutText: "Alt+P"; checkable: true; checked: PreviewLogic.paneShown; onTriggered: PreviewLogic.paneShown = !PreviewLogic.paneShown }
+        ContextMenuSeparator {}
+        ContextMenuItem { text: qsTr("Zoom In"); shortcutText: "Ctrl++"; onTriggered: root.zoom(1) }
+        ContextMenuItem { text: qsTr("Zoom Out"); shortcutText: "Ctrl+-"; onTriggered: root.zoom(-1) }
+        ContextMenuItem { text: qsTr("Reset Zoom"); shortcutText: "Ctrl+0"; onTriggered: root.zoom(0) }
     }
 
     ContextMenu {
@@ -1305,6 +1347,31 @@ TelamonWindow {
                 search: root.search
                 selection: root.selectionStats
                 freeBytes: root.freeBytes
+            }
+        }
+
+        // The preview pane (Alt+P), on the right.
+        Rectangle {
+            Layout.fillHeight: true
+            implicitWidth: 1
+            visible: PreviewLogic.paneShown
+            color: Qt.alpha(Kirigami.Theme.textColor, 0.12)
+        }
+        PreviewPane {
+            Layout.fillHeight: true
+            Layout.preferredWidth: Kirigami.Units.gridUnit * 20
+            visible: PreviewLogic.paneShown
+            view: PreviewLogic.paneShown ? root.view : null
+            covered: quickLook.opened
+        }
+    }
+
+    // Quick Look, over everything in the window.
+    QuickLook {
+        id: quickLook
+        onOpenFile: row => {
+            if (root.view) {
+                root.view.activateRow(row);
             }
         }
     }

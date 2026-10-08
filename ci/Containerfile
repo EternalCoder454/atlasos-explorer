@@ -62,4 +62,4 @@ LABEL net.eterneon.telamon.explorer.image-tag=$IMAGE_TAG
 FROM ci AS dev
 RUN --mount=type=cache,target=/var/cache/libdnf5,sharing=locked \
     dnf -y --setopt=keepcache=1 install breeze-icon-theme ImageMagick xdotool \
-        kio-extras kdegraphics-thumbnailers ffmpegthumbs e2fsprogs fuse3 at-spi2-core
+        kio-extras kdegraphics-thumbnailers ffmpegthumbs ffmpeg-free ghostscript e2fsprogs fuse3 at-spi2-core

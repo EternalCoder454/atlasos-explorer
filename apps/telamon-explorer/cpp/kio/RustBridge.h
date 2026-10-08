@@ -82,6 +82,16 @@ void *telamon_walk_start(const uint8_t *root, size_t rootLen, const uint8_t *que
                          size_t maxHits, TelamonWalkCallback callback, void *user);
 void telamon_walk_stop(void *handle);
 void telamon_walk_free(void *handle);
+
+// ---- Quick Look, the preview pane and zoom (src/preview_ffi.rs) ----
+uint32_t telamon_preview_classify(const uint8_t *mime, size_t len);
+size_t telamon_preview_text_cap();
+size_t telamon_preview_read_text(const uint8_t *path, size_t pathLen, uint8_t *out, size_t cap, uint32_t *status, bool *truncated);
+size_t telamon_preview_text(uint32_t which, uint64_t n, uint8_t *out, size_t cap);
+int32_t telamon_zoom_clamp(uint32_t kind, int32_t value);
+int32_t telamon_zoom_step(uint32_t kind, int32_t current, int32_t steps);
+int32_t telamon_zoom_default(uint32_t kind, int32_t defaultRow);
+int32_t telamon_zoom_wheel(int32_t pending, int32_t delta, int32_t *rest);
 }
 
 using RustFn = size_t (*)(const uint8_t *, size_t, uint8_t *, size_t);
@@ -315,5 +325,23 @@ inline QString rustSearchPathText(const QString &parentUrl, const QString &home)
         buf.resize(qsizetype(len));
         len = call();
     }
+    return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+}
+
+
+// ---- Quick Look and the preview pane ----
+
+// The category (PreviewLoader::Category) of a MIME type name.
+inline uint32_t rustPreviewClassify(const QString &mime)
+{
+    const QByteArray m = mime.toUtf8();
+    return telamon_preview_classify(reinterpret_cast<const uint8_t *>(m.constData()), size_t(m.size()));
+}
+
+// A duration (which 0, `n` in ms) or dimensions (which 1, width << 32 | height) as the details write them.
+inline QString rustPreviewText(uint32_t which, quint64 n)
+{
+    QByteArray buf(64, 0);
+    const size_t len = telamon_preview_text(which, n, reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
     return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
 }

@@ -149,6 +149,7 @@ dependencies = [
 name = "atlas-explorer-core"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "log",
 ]
 

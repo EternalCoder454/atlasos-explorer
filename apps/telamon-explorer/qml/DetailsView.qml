@@ -10,7 +10,10 @@ Item {
     id: root
 
     required property var fv
-    readonly property int rowHeight: Kirigami.Units.gridUnit * 2
+    // Ctrl+scroll, Ctrl+plus and Ctrl+minus change the rows' height (kept); the header stays.
+    readonly property int rowHeight: PreviewLogic.rowHeight
+    readonly property int headerHeight: Kirigami.Units.gridUnit * 2
+    readonly property int iconSide: Math.min(rowHeight - 4, Math.max(Kirigami.Units.iconSizes.smallMedium, Math.round(rowHeight * 0.62)))
     // Search results have a Path column (the folder each one is in) after the name.
     readonly property bool withPath: fv.folder.searching
     // Widths of the columns by key.
@@ -78,7 +81,7 @@ Item {
         header: Rectangle {
             z: 2
             width: Math.max(list.width, root.totalWidth)
-            height: root.rowHeight
+            height: root.headerHeight
             color: Kirigami.Theme.backgroundColor
             Row {
                 Repeater {
@@ -88,7 +91,7 @@ Item {
                         required property var modelData
                         required property int index
                         width: root.widths[modelData.key]
-                        height: root.rowHeight
+                        height: root.headerHeight
                         readonly property bool sorted: root.fv.folder.sortColumn === modelData.sort
                         Text {
                             anchors.fill: parent
@@ -178,7 +181,7 @@ Item {
                         id: icon
                         x: Kirigami.Units.largeSpacing
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Kirigami.Units.iconSizes.smallMedium
+                        width: root.iconSide
                         height: width
                         source: row.iconName
                     }
