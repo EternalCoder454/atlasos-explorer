@@ -372,6 +372,8 @@ struct OperationQueue::Work {
     // The window's own dialogs for this one (KIO's paste asks for a name).
     bool widgetDelegate = false;
     QHash<QString, QUrl> pairs;
+    // Where items will be once the step that puts them there has succeeded.
+    QHash<QString, QUrl> pendingPairs;
     QSet<QString> top;
     QList<QUrl> created;
     QUrl lastDest;
@@ -737,7 +739,14 @@ void OperationQueue::pump()
             }
             // A copy killed half way leaves its partial file; KIO removes
             // the ".part" it writes first, and nothing else is left.
+            const Work cancelled = w;
             endOp(id);
+            // A batch of renames (or of items put back) stopped half way: the
+            // ones done are one step to undo.
+            if (((cancelled.kind == Rename && cancelled.sources.size() > 1) || cancelled.kind == Restore) && cancelled.record && cancelled.side < 0
+                && !cancelled.pairs.isEmpty()) {
+                recordHistory(cancelled);
+            }
             break;
         }
         }
@@ -878,6 +887,11 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
     if (auto *archiveJob = qobject_cast<ArchiveJob *>(job)) {
         w.results = archiveJob->results();
     }
+    if (qobject_cast<KIO::RestoreJob *>(job)) {
+        // These are back where they were now.
+        w.pairs.insert(w.pendingPairs);
+        w.pendingPairs.clear();
+    }
     ++w.step;
     runStep(id);
 }
@@ -901,17 +915,8 @@ void OperationQueue::finishOp(quint64 id)
     } else if (w.record) {
         recordHistory(w);
     }
-    if (w.kind == EmptyTrash) {
-        // The Trash's lists (the sidebar's count, a tab showing it) read it
-        // again: KIO tells only when nothing at all is left in it, and Files'
-        // own emptying works behind KIO's back.
-        org::kde::KDirNotify::emitFilesAdded(QUrl(QStringLiteral("trash:/")));
-        if (!w.quiet) {
-            Q_EMIT message(tr("Trash emptied."));
-        }
-    }
-    if (w.quiet) {
-        telamon_ops_dismiss(m_engine, id);
+    if (w.kind == EmptyTrash && !w.quiet) {
+        Q_EMIT message(tr("Trash emptied."));
     }
     refresh();
     Q_EMIT jobFinished();
@@ -943,10 +948,6 @@ void OperationQueue::failOp(quint64 id, const QString &why, bool say)
         Q_EMIT message(tr("%1 didn't finish: %2").arg(w.title, why));
     }
     endOp(id, false);
-    if (w.quiet) {
-        // Upkeep that went wrong is no business of the window's: the journal has it.
-        telamon_ops_dismiss(m_engine, id);
-    }
     // A batch of renames (or of items put back) that stopped half way: the
     // ones done are one step to undo.
     if (((w.kind == Rename && w.sources.size() > 1) || w.kind == Restore) && w.record && w.side < 0 && !w.pairs.isEmpty()) {
@@ -964,6 +965,18 @@ void OperationQueue::endOp(quint64 id, bool ok)
     auto it = m_work.find(id);
     if (it == m_work.end()) {
         return;
+    }
+    if (it->kind == EmptyTrash) {
+        // The Trash's lists (the sidebar's count, a tab showing it) read it
+        // again, also when the emptying stopped half way: KIO tells only when
+        // nothing at all is left in it, and Files' own emptying works behind
+        // KIO's back.
+        org::kde::KDirNotify::emitFilesAdded(QUrl(QStringLiteral("trash:/")));
+    }
+    if (it->quiet) {
+        // Upkeep leaves no row behind, whatever came of it (the journal has it).
+        telamon_ops_dismiss(m_engine, id);
+        m_oldTrashBusy = false;
     }
     delete it->data;
     auto doneFn = std::move(it->done);
@@ -1011,7 +1024,7 @@ void OperationQueue::cancel(quint64 id)
     if (known && m_work.contains(id)) {
         // A batch of renames stopped half way: the ones done are one step to undo.
         const Work w = work(id);
-        const bool partial = w.kind == Rename && w.record && w.side < 0 && w.sources.size() > 1 && !w.pairs.isEmpty();
+        const bool partial = ((w.kind == Rename && w.sources.size() > 1) || w.kind == Restore) && w.record && w.side < 0 && !w.pairs.isEmpty();
         // Waiting operations have no job to kill.
         endOp(id);
         if (partial) {
@@ -1577,8 +1590,8 @@ void OperationQueue::restore(const QList<RestoreItem> &items, const QStringList 
         w.top.insert(key(it.trashUrl));
         if (!it.taken) {
             free << it.trashUrl;
-            // Where it goes, written down now: the undo record looks at what is there when it is done.
-            w.pairs.insert(key(it.trashUrl), it.target);
+            // Where it goes: kept for the undo record once the restore step has succeeded.
+            w.pendingPairs.insert(key(it.trashUrl), it.target);
         }
     }
     w.dest = items.first().target.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
@@ -1610,6 +1623,11 @@ void OperationQueue::restore(const QList<RestoreItem> &items, const QStringList 
 
 void OperationQueue::emptyOldTrash(int days)
 {
+    // One run at a time: a second request while one is looking or running is dropped.
+    if (m_oldTrashBusy) {
+        return;
+    }
+    m_oldTrashBusy = true;
     // Looked at first, on a worker, with nothing changed: when nothing is old
     // enough there is no operation, and so nothing to see.
     const QDateTime now = QDateTime::currentDateTime();
@@ -1619,7 +1637,15 @@ void OperationQueue::emptyOldTrash(int days)
     QThreadPool::globalInstance()->start([self, days, local, dataHome] {
         TelamonTrashReport report{};
         const bool ok = telamon_trash_purge(quint32(days), local, 1, reinterpret_cast<const uint8_t *>(dataHome.constData()), size_t(dataHome.size()), &report);
-        if (!self || !ok || report.removed == 0) {
+        if (!self) {
+            return;
+        }
+        if (!ok || report.removed == 0) {
+            QMetaObject::invokeMethod(self.data(), [self] {
+                if (self) {
+                    self->m_oldTrashBusy = false;
+                }
+            });
             return;
         }
         QMetaObject::invokeMethod(self.data(), [self, days] {

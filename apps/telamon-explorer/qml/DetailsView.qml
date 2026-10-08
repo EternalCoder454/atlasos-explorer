@@ -37,6 +37,8 @@ Item {
         };
     }
     property var widths: defaultWidths(withTrash)
+    // The Trash has its own layout: a drag in another folder does not carry over.
+    onWithTrashChanged: widths = defaultWidths(withTrash)
     readonly property var columns: withTrash ? [
         { key: "name", title: qsTr("Name"), sort: FolderModel.Name },
         { key: "path", title: qsTr("Original Location"), sort: FolderModel.OriginalLocation },

@@ -225,6 +225,18 @@ QString FolderModel::originalPathOf(const QUrl &url) const
     return row < 0 ? QString() : m_rows.at(row).originPath;
 }
 
+QHash<QUrl, QString> FolderModel::originalPathsOf(const QList<QUrl> &urls) const
+{
+    const QSet<QUrl> wanted(urls.cbegin(), urls.cend());
+    QHash<QUrl, QString> found;
+    for (const Entry &e : std::as_const(m_rows)) {
+        if (!e.originPath.isEmpty() && wanted.contains(e.item.url())) {
+            found.insert(e.item.url(), e.originPath);
+        }
+    }
+    return found;
+}
+
 bool FolderModel::inArchive() const
 {
     return !m_searching && rustArchiveScheme(m_url.scheme());

@@ -192,6 +192,9 @@ public:
     // Where the Trash's item `url` was before it was trashed, as a path
     // ("" when it isn't a row, or the Trash did not say).
     Q_INVOKABLE QString originalPathOf(const QUrl &url) const;
+    // The same for many items in one pass over the rows: url -> path (only
+    // items that are rows and say where they were).
+    QHash<QUrl, QString> originalPathsOf(const QList<QUrl> &urls) const;
     Q_INVOKABLE int rowOfUrl(const QUrl &url) const;
     Q_INVOKABLE QVariantList urlsOf(const QVariantList &rows) const;
     // First row at or after startRow (wrapping) whose display name starts with prefix; -1 for none.

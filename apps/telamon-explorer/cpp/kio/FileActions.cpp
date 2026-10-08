@@ -267,13 +267,14 @@ void FileActions::restore(const QList<QUrl> &urls)
     QList<OperationQueue::RestoreItem> items;
     int unknown = 0;
     QSet<QString> seen;
+    // Where the Trash says each item was (one pass over the rows); nothing else is believed.
+    const QHash<QUrl, QString> origins = m_folder->originalPathsOf(urls);
     for (const QUrl &u : urls) {
         if (seen.contains(u.toString())) {
             continue;
         }
         seen.insert(u.toString());
-        // Where the Trash says it was; nothing else is believed.
-        const QString original = m_folder->originalPathOf(u);
+        const QString original = origins.value(u);
         if (original.isEmpty() || !QDir::isAbsolutePath(original)) {
             ++unknown;
             continue;
@@ -292,6 +293,7 @@ void FileActions::restore(const QList<QUrl> &urls)
     QThreadPool::globalInstance()->start([self, items]() mutable {
         QSet<QString> claimed;
         QStringList missing;
+        int needFolder = 0;
         for (OperationQueue::RestoreItem &it : items) {
             const QString path = it.target.toLocalFile();
             struct stat st;
@@ -302,11 +304,15 @@ void FileActions::restore(const QList<QUrl> &urls)
             if (!missing.contains(parent) && !QFileInfo::exists(parent)) {
                 missing << parent;
             }
+            // Items that wait for a folder to be made, for the question's words.
+            if (missing.contains(parent)) {
+                ++needFolder;
+            }
         }
         if (!self) {
             return;
         }
-        QMetaObject::invokeMethod(self.data(), [self, items, missing] {
+        QMetaObject::invokeMethod(self.data(), [self, items, missing, needFolder] {
             if (!self) {
                 return;
             }
@@ -321,7 +327,7 @@ void FileActions::restore(const QList<QUrl> &urls)
                 shown << rustSearchPathText(QUrl::fromLocalFile(m).toString(QUrl::FullyEncoded), QDir::homePath());
             }
             const QString list = shown.join(QLatin1Char('\n'));
-            Q_EMIT self->restoreAsk(rustTrashText(0, list, quint64(items.size())), rustTrashText(1, list, quint64(items.size())));
+            Q_EMIT self->restoreAsk(rustTrashText(0, list, quint64(needFolder)), rustTrashText(1, list, quint64(needFolder)));
         });
     });
 }

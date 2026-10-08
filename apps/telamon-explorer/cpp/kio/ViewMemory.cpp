@@ -141,6 +141,10 @@ void ViewMemory::remember(const QUrl &folder, const QString &mode, int sort, boo
     const int code = modeCode(mode);
     TelamonViewPrefs p{uint32_t(qMax(0, code)), uint32_t(qMax(0, sort)), descending, int32_t(icon), uint32_t(qMax(0, group))};
     if (m_same) {
+        // The Trash's own columns (7 and 8) are no other folder's: the shared view keeps its sort.
+        if (p.sort >= 7) {
+            return;
+        }
         // The core's limits for what is kept, the same as for a folder's.
         m_mode = modeName(p.mode);
         m_sort = p.sort > 5 ? 0 : int(p.sort);

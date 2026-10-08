@@ -234,6 +234,8 @@ private:
     QStringList m_undoTitles;
     QStringList m_redoTitles;
     quint64 m_undoableId = 0;
+    // A look at the old items of the Trash, or the operation that removes them, is under way.
+    bool m_oldTrashBusy = false;
     // Everything that reads or changes the undo lists (writing down a
     // finished operation, an undo, a redo) runs one after the other, in the
     // order it was asked: each needs the files looked at first, and each must

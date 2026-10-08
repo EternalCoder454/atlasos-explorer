@@ -385,7 +385,9 @@ pub fn trash_dirs(home_trash: &Path, mounts: &[Mount], uid: u32) -> Vec<PathBuf>
     let mut out: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let home_dev = fs::metadata(home_trash).ok().map(|m| m.dev());
-    if is_real_dir(home_trash).is_some() {
+    // The home Trash itself may be a link the user made (to a bigger disk, say):
+    // KIO follows it, and so does this, once; what is inside is checked below.
+    if fs::metadata(home_trash).is_ok_and(|m| m.is_dir()) {
         seen.insert(home_trash.to_path_buf());
         out.push(home_trash.to_path_buf());
     }
@@ -481,7 +483,13 @@ fn forget_directory_size(trash: &Path, stem: &[u8]) {
     if !changed {
         return;
     }
-    let tmp = trash.join("directorysizes.files-tmp");
+    // A name of its own: two runs at once must not write one file.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let tmp = trash.join(format!(
+        "directorysizes.files-tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     if fs::write(&tmp, kept).is_ok()
         && (fs::set_permissions(&tmp, meta.permissions()).is_err()
             || fs::rename(&tmp, &path).is_err())
@@ -1080,7 +1088,12 @@ mod tests {
             fs::read_to_string(t.join("directorysizes")).unwrap(),
             "4096 1700000001 new\n"
         );
-        assert!(!t.join("directorysizes.files-tmp").exists());
+        assert!(fs::read_dir(&t).unwrap().all(|e| {
+            !e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("files-tmp")
+        }));
     }
 
     #[test]
@@ -1200,8 +1213,11 @@ nonsense
             },
         ];
         assert_eq!(trash_dirs(&home, &mounts, u), vec![home.clone()]);
-        // A home Trash that does not exist is not listed.
+        // A home Trash that does not exist is not listed; one that is a link to a folder is.
         assert!(trash_dirs(&d.0.join("no-such"), &[], u).is_empty());
+        let linked = d.0.join("linked-trash");
+        symlink(&home, &linked).unwrap();
+        assert_eq!(trash_dirs(&linked, &[], u), vec![linked.clone()]);
         // A volume on another file system is (the memory file system stands in
         // for one, when this machine has one apart from the temporary folder's).
         let shm = PathBuf::from("/dev/shm");
