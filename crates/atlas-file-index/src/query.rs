@@ -202,6 +202,31 @@ impl Matcher {
     }
 }
 
+/// The index's matcher for one name at a time, for a walk of folders that
+/// are not indexed (see `walk`): the same words, folding and classes, so a
+/// live result is judged like an indexed one.
+pub struct NameMatcher(Matcher);
+
+impl NameMatcher {
+    pub fn new(query: &str) -> NameMatcher {
+        NameMatcher(Matcher::new(query, false))
+    }
+
+    /// No word to look for: everything matches (only filters narrow it).
+    pub fn is_empty(&self) -> bool {
+        self.0.words.is_empty()
+    }
+
+    /// How well a name matches, 1 (substring) to 5 (the whole name), or `None`.
+    pub fn class(&self, name: &[u8]) -> Option<u8> {
+        if self.0.words.is_empty() {
+            return Some(SUBSTRING);
+        }
+        let folded = crate::text::fold_bytes(name);
+        self.0.classify(name, &folded)
+    }
+}
+
 /// Ranking key; higher is better. See the module docs.
 #[inline]
 fn rank_key(class: u8, recency: i64, depth: u8, boost: u8, now: i64) -> u64 {
