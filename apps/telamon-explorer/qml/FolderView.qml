@@ -13,7 +13,8 @@ FocusScope {
 
     // "details", "icons" or "compact"
     property string viewMode: "details"
-    property int iconSize: 96
+    // The size of the icons in the Icons view (Ctrl+scroll, Ctrl+plus, Ctrl+minus; kept).
+    readonly property int iconSize: PreviewLogic.iconSize
     property alias folder: folderModel
     property alias selection: sel
     property alias url: folderModel.url
@@ -45,6 +46,8 @@ FocusScope {
     signal openLocationRequested(var urls)
     // Escape while the rows are search results: end the search.
     signal searchCloseRequested()
+    // Space: Quick Look for the selected file.
+    signal quickLookRequested()
 
     FolderModel {
         id: folderModel
@@ -256,6 +259,14 @@ FocusScope {
             }
             event.accepted = true;
             return;
+        case Qt.Key_Space:
+            // Space is Quick Look, unless it is part of a name being typed.
+            if (typed.length === 0 && (mods & ~Qt.KeypadModifier) === 0) {
+                quickLookRequested();
+                event.accepted = true;
+                return;
+            }
+            break;
         case Qt.Key_Backspace:
             // Among search results it is not "go up": the folder is not what is shown.
             if (!folderModel.searching) {
@@ -336,6 +347,22 @@ FocusScope {
             const target = row >= 0 && folderModel.isDirAt(row) ? folderModel.urlAt(row) : folderModel.url;
             drop.accepted = true;
             top.actions.drop(drop.urls, target);
+        }
+    }
+
+    // Ctrl and the wheel change the size of the icons or of the rows. Any
+    // other wheel movement goes on to the view below.
+    MouseArea {
+        anchors.fill: parent
+        z: 10
+        acceptedButtons: Qt.NoButton
+        onWheel: wheel => {
+            if (wheel.modifiers & Qt.ControlModifier) {
+                PreviewLogic.zoomByWheel(!top.showsDetails && top.viewMode === "icons", wheel.angleDelta.y);
+                wheel.accepted = true;
+            } else {
+                wheel.accepted = false;
+            }
         }
     }
 

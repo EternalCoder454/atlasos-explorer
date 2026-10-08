@@ -121,6 +121,10 @@ public:
     // The KFileItem of the shown entry with this URL (null when it isn't listed).
     KFileItem fileItemOf(const QUrl &url) const;
     Q_INVOKABLE QItemSelection rangeSelection(int from, int to) const;
+    // What a row shows, for Quick Look and the preview pane (no I/O):
+    // {name, url, localPath, isDir, isLink, typeText, iconName, sizeText,
+    // modifiedText, createdText, pathText}. Empty for a row that isn't there.
+    Q_INVOKABLE QVariantMap detailsAt(int row) const;
     // What the rows hold: {files, folders, bytes}; bytes count the files only.
     Q_INVOKABLE QVariantMap selectionStats(const QVariantList &rows) const;
 

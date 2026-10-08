@@ -11,9 +11,10 @@ Item {
 
     required property var fv
     property bool compact: false
-    readonly property int icon: compact ? Kirigami.Units.iconSizes.smallMedium : fv.iconSize
+    // The rows' height is the same setting as in the Details view.
+    readonly property int icon: compact ? Math.min(PreviewLogic.rowHeight - 4, Math.max(Kirigami.Units.iconSizes.smallMedium, Math.round(PreviewLogic.rowHeight * 0.62))) : fv.iconSize
     readonly property real cellW: compact ? Kirigami.Units.gridUnit * 14 : Math.max(icon + Kirigami.Units.gridUnit * 2, Kirigami.Units.gridUnit * 6)
-    readonly property real cellH: compact ? Kirigami.Units.gridUnit * 2 : icon + Kirigami.Units.gridUnit * 3.2
+    readonly property real cellH: compact ? PreviewLogic.rowHeight : icon + Kirigami.Units.gridUnit * 3.2
     readonly property int perRow: Math.max(1, Math.floor(grid.width / cellW))
     readonly property int perColumn: Math.max(1, Math.floor(grid.height / cellH))
 

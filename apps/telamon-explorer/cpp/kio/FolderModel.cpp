@@ -698,6 +698,33 @@ QItemSelection FolderModel::rangeSelection(int from, int to) const
     return QItemSelection(index(std::min(from, to)), index(std::max(from, to)));
 }
 
+QVariantMap FolderModel::detailsAt(int row) const
+{
+    if (row < 0 || row >= m_rows.size()) {
+        return {};
+    }
+    const QModelIndex idx = index(row, 0);
+    const Entry &e = m_rows.at(row);
+    const auto when = [](qint64 secs) { return secs > 0 ? QLocale().toString(QDateTime::fromSecsSinceEpoch(secs), QLocale::ShortFormat) : QString(); };
+    // Where the file is on this computer, if it is: a file: URL, or what the
+    // worker says (the Trash lists its files with their real place).
+    QString local = e.item.localPath();
+    if (!QDir::isAbsolutePath(local)) {
+        local.clear();
+    }
+    return {{QStringLiteral("name"), data(idx, NameRole)},
+            {QStringLiteral("url"), e.item.url()},
+            {QStringLiteral("localPath"), local},
+            {QStringLiteral("isDir"), e.isDir},
+            {QStringLiteral("isLink"), e.item.isLink()},
+            {QStringLiteral("typeText"), data(idx, TypeTextRole)},
+            {QStringLiteral("iconName"), data(idx, IconNameRole)},
+            {QStringLiteral("sizeText"), data(idx, SizeTextRole)},
+            {QStringLiteral("modifiedText"), when(e.mtime)},
+            {QStringLiteral("createdText"), when(e.ctime)},
+            {QStringLiteral("pathText"), data(idx, PathTextRole)}};
+}
+
 QVariantMap FolderModel::selectionStats(const QVariantList &rows) const
 {
     int files = 0, folders = 0;

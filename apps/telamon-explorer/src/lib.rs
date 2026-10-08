@@ -4,6 +4,7 @@
 
 mod backend;
 mod ffi;
+mod preview_ffi;
 mod search_ffi;
 
 telamon_framework_ui::app! {
