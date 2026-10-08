@@ -18,17 +18,47 @@ Item {
     readonly property int perRow: Math.max(1, Math.floor(grid.width / cellW))
     readonly property int perColumn: Math.max(1, Math.floor(grid.height / cellH))
 
+    // Group by: lines of cells and headers in a list (a grid can't have a header
+    // across its width). Off, the folder is one grid.
+    readonly property bool grouped: !compact && fv.folder.grouped
+
     function reveal(row) {
-        grid.positionViewAtIndex(row, GridView.Contain);
+        if (grouped) {
+            const line = lines.lineOf(row);
+            if (line >= 0) {
+                list.positionViewAtIndex(line, ListView.Contain);
+            }
+        } else {
+            grid.positionViewAtIndex(row, GridView.Contain);
+        }
     }
 
     // The row at a point in this item's coordinates, -1 for none.
     function rowAt(x, y) {
-        return grid.indexAt(x + grid.contentX, y + grid.contentY);
+        if (!grouped) {
+            return grid.indexAt(x + grid.contentX, y + grid.contentY);
+        }
+        const cy = y + list.contentY;
+        const line = list.indexAt(0, cy);
+        const item = line >= 0 ? list.itemAtIndex(line) : null;
+        if (!item || cy < item.y || cy >= item.y + item.height) {
+            return -1;
+        }
+        return lines.rowAtCell(line, Math.floor(x / cellW));
     }
 
     // Where a row is, in the folder view's coordinates (the row may be off screen).
     function rowRect(row) {
+        if (grouped) {
+            const line = lines.lineOf(row);
+            const item = line >= 0 ? list.itemAtIndex(line) : null;
+            if (item) {
+                const at = item.mapToItem(root.fv, ((row - item.first) * cellW), 0);
+                return Qt.rect(at.x, at.y, cellW, cellH);
+            }
+            const at = list.mapToItem(root.fv, 0, -list.contentY);
+            return Qt.rect(at.x, at.y, cellW, cellH);
+        }
         const item = grid.itemAtIndex(row);
         if (item) {
             const at = item.mapToItem(root.fv, 0, 0);
@@ -65,7 +95,8 @@ Item {
     GridView {
         id: grid
         anchors.fill: parent
-        model: root.visible ? root.fv.folder : null
+        visible: !root.grouped
+        model: root.visible && !root.grouped ? root.fv.folder : null
         reuseItems: true
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -76,99 +107,66 @@ Item {
         QQC2.ScrollBar.vertical: TelamonScrollBar {}
         QQC2.ScrollBar.horizontal: TelamonScrollBar {}
 
-        delegate: Item {
-            id: cell
+        delegate: IconCell {
             required property int index
-            required property string name
-            required property string iconName
-            required property bool isHidden
-            required property bool isCut
-            required property string thumbnailSource
-            width: root.cellW
-            height: root.cellH
-            readonly property bool selected: root.fv.isSelected(index, root.fv.selRevision)
-            readonly property bool current: root.fv.currentRow === index
+            view: root
+            row: index
+        }
+    }
 
-            Rectangle {
+    GroupLines {
+        id: lines
+        source: root.visible && root.grouped ? root.fv.folder : null
+        perRow: root.perRow
+    }
+
+    ListView {
+        id: list
+        anchors.fill: parent
+        visible: root.grouped
+        model: root.grouped ? lines : null
+        reuseItems: true
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        cacheBuffer: root.cellH * 4
+        QQC2.ScrollBar.vertical: TelamonScrollBar {}
+
+        delegate: Item {
+            id: line
+            required property int kind
+            required property string label
+            required property int count
+            required property bool collapsed
+            required property int first
+            required property int cells
+            width: list.width
+            height: kind === 0 ? header.implicitHeight : root.cellH
+
+            GroupHeader {
+                id: header
                 anchors.fill: parent
-                anchors.margins: 2
-                radius: 6
-                color: cell.selected ? Qt.alpha(Kirigami.Theme.highlightColor, 0.35) : (mouse.containsMouse ? Qt.alpha(Kirigami.Theme.textColor, 0.07) : "transparent")
-                border.width: cell.current && root.fv.activeFocus ? 1 : 0
-                border.color: Kirigami.Theme.highlightColor
+                visible: line.kind === 0
+                fv: root.fv
+                label: line.label
+                count: line.count
+                collapsed: line.collapsed
             }
-            Item {
-                id: iconBox
-                x: root.compact ? Kirigami.Units.largeSpacing : (parent.width - width) / 2
-                y: root.compact ? (parent.height - height) / 2 : Kirigami.Units.smallSpacing * 2
-                width: root.icon
-                height: root.icon
-                opacity: (cell.isHidden ? 0.6 : 1) * (cell.isCut ? 0.5 : 1)
-                Kirigami.Icon {
-                    anchors.fill: parent
-                    source: cell.iconName
-                }
-                Image {
-                    anchors.fill: parent
-                    // Thumbnails only in the Icons view; a file without one
-                    // comes back 1x1 and the icon stays.
-                    source: !root.compact && cell.thumbnailSource.length > 0 ? cell.thumbnailSource : ""
-                    sourceSize: Qt.size(root.icon * Screen.devicePixelRatio, root.icon * Screen.devicePixelRatio)
-                    fillMode: Image.PreserveAspectFit
-                    asynchronous: true
-                    cache: false
-                    visible: status === Image.Ready && implicitWidth > 1
-                }
-            }
-            Text {
-                x: root.compact ? iconBox.x + iconBox.width + Kirigami.Units.largeSpacing : Kirigami.Units.smallSpacing
-                y: root.compact ? 0 : iconBox.y + iconBox.height + Kirigami.Units.smallSpacing
-                width: cell.width - x - Kirigami.Units.smallSpacing
-                height: root.compact ? cell.height : cell.height - y
-                verticalAlignment: root.compact ? Text.AlignVCenter : Text.AlignTop
-                horizontalAlignment: root.compact ? Text.AlignLeft : Text.AlignHCenter
-                textFormat: Text.PlainText
-                wrapMode: root.compact ? Text.NoWrap : Text.WrapAnywhere
-                maximumLineCount: root.compact ? 1 : 2
-                elide: Text.ElideRight
-                text: cell.name
-                color: Kirigami.Theme.textColor
-            }
-            MouseArea {
-                id: mouse
-                anchors.fill: parent
-                hoverEnabled: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                property point start
-                property bool narrow: false
-                property bool dragged: false
-                onPressed: mouseEvent => {
-                    if (mouseEvent.button === Qt.RightButton) {
-                        const at = mouse.mapToItem(root.fv, mouseEvent.x, mouseEvent.y);
-                        root.fv.rowMenu(cell.index, at.x, at.y);
-                        return;
-                    }
-                    if (mouseEvent.button === Qt.MiddleButton) {
-                        root.fv.middleRow(cell.index);
-                        return;
-                    }
-                    start = Qt.point(mouseEvent.x, mouseEvent.y);
-                    dragged = false;
-                    narrow = !root.fv.pressRow(cell.index, mouseEvent.modifiers);
-                }
-                onPositionChanged: mouseEvent => {
-                    if (pressed && !dragged && (pressedButtons & Qt.LeftButton) && Math.hypot(mouseEvent.x - start.x, mouseEvent.y - start.y) > Application.styleHints.startDragDistance) {
-                        dragged = true;
-                        root.fv.beginDrag();
+            Loader {
+                active: line.kind === 1
+                sourceComponent: Row {
+                    Repeater {
+                        model: RowSlice {
+                            source: root.fv.folder
+                            first: line.first
+                            count: line.cells
+                        }
+                        delegate: IconCell {
+                            required property int sourceRow
+                            view: root
+                            row: sourceRow
+                        }
                     }
                 }
-                onReleased: mouseEvent => {
-                    if (narrow && !dragged) {
-                        root.fv.chooseRow(cell.index, 0, false);
-                    }
-                    narrow = false;
-                }
-                onDoubleClicked: root.fv.activateRow(cell.index)
             }
         }
     }

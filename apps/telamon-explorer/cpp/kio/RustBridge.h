@@ -17,6 +17,8 @@ struct TelamonSortRow {
     size_t key_len;
     const uint8_t *kind;
     size_t kind_len;
+    const uint8_t *group;
+    size_t group_len;
     uint64_t size;
     int64_t mtime;
     int64_t ctime;
@@ -28,7 +30,27 @@ size_t telamon_name_key(const uint8_t *name, size_t len, uint8_t *out, size_t ca
 int telamon_validate_name(const uint8_t *name, size_t len, uint8_t *out, size_t cap, size_t *textLen);
 int telamon_parse_address(const uint8_t *text, size_t len, const uint8_t *current, size_t currentLen, const uint8_t *home, size_t homeLen, uint8_t *out,
                         size_t cap, size_t *textLen);
-bool telamon_sort_permutation(const TelamonSortRow *rows, size_t n, uint32_t column, bool descending, bool foldersFirst, uint32_t *out);
+bool telamon_sort_permutation(const TelamonSortRow *rows, size_t n, uint32_t column, bool descending, bool foldersFirst, bool groupsReversed,
+                              uint32_t *out);
+size_t telamon_group_of(uint32_t by, const uint8_t *key, size_t keyLen, const uint8_t *kind, size_t kindLen, bool isDir, int64_t mtime, int64_t now,
+                        int64_t tz, uint32_t weekStart, uint8_t *out, size_t cap);
+bool telamon_group_reversed(uint32_t by, uint32_t column, bool descending);
+
+// ---- What each folder remembers of its view (src/views_ffi.rs) ----
+struct TelamonViewPrefs {
+    uint32_t mode;
+    uint32_t sort;
+    bool descending;
+    int32_t icon;
+    uint32_t group;
+};
+bool telamon_views_get(const uint8_t *saved, size_t savedLen, const uint8_t *key, size_t keyLen, TelamonViewPrefs *out);
+size_t telamon_views_set(const uint8_t *saved, size_t savedLen, const uint8_t *key, size_t keyLen, const TelamonViewPrefs *prefs, uint8_t *out, size_t cap);
+size_t telamon_views_forget(const uint8_t *saved, size_t savedLen, const uint8_t *key, size_t keyLen, uint8_t *out, size_t cap);
+bool telamon_views_valid_key(const uint8_t *key, size_t keyLen);
+size_t telamon_views_limit(uint32_t which);
+size_t telamon_views_mode_name(uint32_t mode, uint8_t *out, size_t cap);
+int32_t telamon_views_mode_code(const uint8_t *name, size_t len);
 size_t telamon_path_segments(const uint8_t *url, size_t len, const uint8_t *home, size_t homeLen, uint8_t *out, size_t cap);
 int telamon_split_for_completion(const uint8_t *text, size_t len, const uint8_t *current, size_t currentLen, const uint8_t *home, size_t homeLen,
                                uint8_t *out, size_t cap, size_t *textLen);

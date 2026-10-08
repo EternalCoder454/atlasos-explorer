@@ -14,6 +14,7 @@ fn main() {
                 ctime: 0,
                 atime: 0,
                 kind: "JPEG image".into(),
+                group: Vec::new(),
             }
         })
         .collect();

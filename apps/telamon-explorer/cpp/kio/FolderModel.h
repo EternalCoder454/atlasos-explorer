@@ -38,6 +38,14 @@ class FolderModel : public QAbstractListModel
     // True while the rows are search results (SearchController) and not the
     // folder's items. `url` stays the folder the search started in.
     Q_PROPERTY(bool searching READ searching NOTIFY searchingChanged)
+    // What the rows are grouped by (Group by in the Sort menu). The rows of a
+    // group are together, the groups first in the order the core gives; each
+    // row's `groupKey` is its group's name. Search results are never grouped.
+    Q_PROPERTY(GroupBy groupBy READ groupBy WRITE setGroupBy NOTIFY groupChanged)
+    // Whether the rows are grouped now (groupBy is set and these are not results).
+    Q_PROPERTY(bool grouped READ grouped NOTIFY groupChanged)
+    // Bumped when the groups were worked out again (the headers' counts are read again).
+    Q_PROPERTY(int groupRevision READ groupRevision NOTIFY groupRevisionChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
@@ -45,6 +53,10 @@ public:
     // only exists while searching; the core knows the others.
     enum SortColumn { Name, Size, Type, Modified, Created, Accessed, Relevance };
     Q_ENUM(SortColumn)
+
+    // Same order as atlas_explorer_core::group::GroupBy.
+    enum GroupBy { GroupNone, GroupName, GroupType, GroupModified };
+    Q_ENUM(GroupBy)
 
     enum Roles {
         NameRole = Qt::UserRole + 1,
@@ -61,7 +73,18 @@ public:
         ModifiedTextRole,
         PathTextRole,
         IsCutRole,
+        GroupRole,
+        GroupCollapsedRole,
     };
+
+    // A run of rows in one group (the groups are together): the group's
+    // name, its first row and how many rows it has.
+    struct GroupSpan {
+        QString label;
+        int first = 0;
+        int count = 0;
+    };
+    QList<GroupSpan> groupSpans() const;
 
     // One search result: a lossless URL, the name made safe to show, and what
     // the row's columns need.
@@ -104,6 +127,10 @@ public:
     void setFoldersFirst(bool on);
     bool canWrite() const { return m_canWrite; }
     bool searching() const { return m_searching; }
+    GroupBy groupBy() const { return m_groupBy; }
+    void setGroupBy(GroupBy g);
+    bool grouped() const { return m_groupBy != GroupNone && !m_searching; }
+    int groupRevision() const { return m_groupRevision; }
 
     // Search mode: the rows are results until endSearch(), which lists the
     // folder again. Navigating (setUrl) ends it too.
@@ -127,7 +154,22 @@ public:
     Q_INVOKABLE bool isDirAt(int row) const;
     // The KFileItem of the shown entry with this URL (null when it isn't listed).
     KFileItem fileItemOf(const QUrl &url) const;
+    // The rows from `from` to `to`, leaving out the ones in collapsed groups.
     Q_INVOKABLE QItemSelection rangeSelection(int from, int to) const;
+    // Collapsing a group hides its rows in the views (they stay in the model;
+    // the views skip them and the keyboard goes past them). Collapsed groups
+    // are forgotten when another folder is shown or the grouping changes.
+    Q_INVOKABLE bool isGroupCollapsed(const QString &group) const { return m_collapsed.contains(group); }
+    Q_INVOKABLE void toggleGroup(const QString &group);
+    // {first, last} rows of a group (they are together); empty for none.
+    Q_INVOKABLE QVariantList groupRange(const QString &group) const;
+    // How many rows the group had when the rows were last grouped.
+    Q_INVOKABLE int groupCount(const QString &group) const { return m_groupCounts.value(group, 0); }
+    // Whether the row is in a collapsed group.
+    Q_INVOKABLE bool isRowCollapsed(int row) const;
+    // The row from `row` going by `step` (1 or -1) that is not in a collapsed
+    // group (`row` itself when it is not); -1 when there is none.
+    Q_INVOKABLE int visibleRowFrom(int row, int step) const;
     // What a row shows, for Quick Look and the preview pane (no I/O):
     // {name, url, localPath, isDir, isLink, typeText, iconName, sizeText,
     // modifiedText, createdText, pathText}. Empty for a row that isn't there.
@@ -148,6 +190,8 @@ Q_SIGNALS:
     void sortChanged();
     void canWriteChanged();
     void searchingChanged();
+    void groupChanged();
+    void groupRevisionChanged();
     // Refresh (F5, the Retry button) while searching: run the search again.
     void searchRefreshRequested();
 
@@ -167,6 +211,8 @@ private:
         // the result is in, written for the Path column (made when first shown).
         quint32 rank = 0;
         QString path;
+        // The name of the group the row is in; set by the sort that groups.
+        QString group;
     };
     struct SortRowIn {
         QString name;
@@ -184,6 +230,7 @@ private:
         QList<quint32> perm;
         QList<QByteArray> keys;
         QList<QString> displays;
+        QList<QString> groups;
         bool ok = false;
     };
 
@@ -227,6 +274,10 @@ private:
     bool m_foldersFirst = true;
     bool m_descending = false;
     SortColumn m_sortColumn = Name;
+    GroupBy m_groupBy = GroupNone;
+    QSet<QString> m_collapsed;
+    QHash<QString, int> m_groupCounts;
+    int m_groupRevision = 0;
     // Bumped by anything that moves or replaces rows (not by appends): a
     // sort result from before it is dropped.
     quint64 m_structGen = 0;

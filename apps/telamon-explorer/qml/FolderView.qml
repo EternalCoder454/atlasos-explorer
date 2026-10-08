@@ -4,17 +4,25 @@ import QtQml.Models
 import org.kde.kirigami as Kirigami
 import Telamon.Ui
 
-// A folder shown as details, icons or a compact list: selection, keyboard
-// navigation and type-ahead live here, the views only draw rows. Opening a
-// file is not done here: `openRequested` hands the URLs to whoever owns the
-// trust prompts.
+// A folder shown as details, icons, a compact list, columns or a gallery:
+// selection, keyboard navigation and type-ahead live here, the views only draw
+// rows. Opening a file is not done here: `openRequested` hands the URLs to
+// whoever owns the trust prompts. How the folder is shown (view, sort, icon
+// size, grouping) is remembered for it (ViewMemory) and brought back when the
+// tab goes to it.
 FocusScope {
     id: top
 
-    // "details", "icons" or "compact"
+    // "details", "icons", "compact", "columns" or "gallery"
     property string viewMode: "details"
-    // The size of the icons in the Icons view (Ctrl+scroll, Ctrl+plus, Ctrl+minus; kept).
-    readonly property int iconSize: PreviewLogic.iconSize
+    // The size of the icons in the Icons view (Ctrl+scroll, Ctrl+plus, Ctrl+minus;
+    // each folder's own).
+    property int iconSize: ViewMemory.iconDefault()
+    // What the rows are grouped by (FolderModel.GroupNone, GroupName, GroupType,
+    // GroupModified); only the Details and Icons views show groups.
+    property int groupBy: FolderModel.GroupNone
+    // Quick Look is over the window: a player in the gallery stops meanwhile.
+    property bool covered: false
     property alias folder: folderModel
     property alias selection: sel
     property alias url: folderModel.url
@@ -24,8 +32,20 @@ FocusScope {
     property int anchorRow: -1
     property string typed: ""
     // Search results are always a Details view (they have a Path column).
-    readonly property bool showsDetails: viewMode === "details" || folderModel.searching
-    readonly property var activeView: showsDetails ? details : icons
+    readonly property string shown: folderModel.searching ? "details" : viewMode
+    readonly property bool showsDetails: shown === "details"
+    readonly property var activeView: {
+        switch (shown) {
+        case "details":
+            return details;
+        case "columns":
+            return columns;
+        case "gallery":
+            return gallery;
+        default:
+            return icons;
+        }
+    }
     // The FileActions that drags and drops go to.
     property var actions
     // The tab's SearchController: why a search has no results shows in place of them.
@@ -50,9 +70,77 @@ FocusScope {
     signal searchCloseRequested()
     // Space: Quick Look for the selected file.
     signal quickLookRequested()
+    // In the columns: go to `target` (a folder) with the items selected there,
+    // and keep the view (the folder's own remembered view is not brought back).
+    signal columnNavigateRequested(url target, var select)
 
     FolderModel {
         id: folderModel
+        groupBy: (top.shown === "details" || top.shown === "icons") ? top.groupBy : FolderModel.GroupNone
+    }
+
+    // ---- What the folder remembers of its view ----
+    // True while the remembered view is being put back (nothing is remembered then).
+    property bool restoring: false
+    // A move between the columns keeps the view.
+    property bool keepView: false
+
+    function currentPrefs() {
+        return {
+            "mode": viewMode,
+            "sort": folderModel.sortColumn,
+            "descending": folderModel.sortDescending,
+            "icon": iconSize,
+            "group": groupBy
+        };
+    }
+    // Shows the folder the way it remembers.
+    function applyRemembered() {
+        if (keepView || folderModel.searching) {
+            return;
+        }
+        const p = ViewMemory.prefsFor(folderModel.url);
+        restoring = true;
+        viewMode = p.mode;
+        iconSize = p.icon;
+        groupBy = p.group;
+        folderModel.sortColumn = p.sort;
+        folderModel.sortDescending = p.descending;
+        restoring = false;
+    }
+    // The view was changed: the folder keeps it (only when it differs from what it has).
+    function remember() {
+        if (restoring || folderModel.searching || !(folderModel.url.toString().length > 0)) {
+            return;
+        }
+        const now = currentPrefs();
+        const had = ViewMemory.prefsFor(folderModel.url);
+        if (had.mode === now.mode && had.sort === now.sort && had.descending === now.descending && had.icon === now.icon && had.group === now.group) {
+            return;
+        }
+        ViewMemory.remember(folderModel.url, now.mode, now.sort, now.descending, now.icon, now.group);
+    }
+    // "Reset This Folder's View": back to the shared view.
+    function resetRemembered() {
+        ViewMemory.forget(folderModel.url);
+        applyRemembered();
+    }
+    // Sort by `column`, ascending or descending (the Sort menu, the column headers).
+    function sortBy(column, descending) {
+        folderModel.sortColumn = column;
+        folderModel.sortDescending = descending;
+    }
+    onViewModeChanged: remember()
+    onIconSizeChanged: remember()
+    onGroupByChanged: remember()
+    Connections {
+        target: folderModel
+        function onUrlChanged() {
+            top.applyRemembered();
+        }
+        function onSortChanged() {
+            top.remember();
+        }
     }
 
     ItemSelectionModel {
@@ -188,10 +276,143 @@ FocusScope {
             return;
         }
         if (folderModel.isDirAt(row)) {
-            navigateRequested(folderModel.urlAt(row));
+            if (shown === "columns") {
+                enterColumn(folderModel.urlAt(row));
+            } else {
+                navigateRequested(folderModel.urlAt(row));
+            }
         } else {
             openRequested([folderModel.urlAt(row)]);
         }
+    }
+
+    // ---- Columns ----
+    // Goes to `target` and selects `select` there, keeping the view (a step
+    // between the columns is not a move to another folder's own view).
+    function columnNavigate(target, select) {
+        keepView = true;
+        columnNavigateRequested(target, select);
+        keepView = false;
+    }
+    // Right arrow, Enter or a double click on a folder: its column becomes
+    // the one with the keyboard, with its first item selected.
+    function enterColumn(target) {
+        selectFirst = true;
+        selectFirstTimer.restart();
+        columnNavigate(target, []);
+    }
+    // Left arrow: back to the folder this one is in, with this one selected.
+    function leaveColumn() {
+        const here = folderModel.url;
+        const up = StandardPlaces.parentUrl(here);
+        if (up.toString() === here.toString()) {
+            return;
+        }
+        columnNavigate(up, [here]);
+    }
+    // A click on an item in another column: that column's folder is shown
+    // with the item selected.
+    function pickInColumn(folder, item) {
+        columnNavigate(folder, [item]);
+    }
+    // A right click on an item in another column: its menu is shown once its
+    // folder is the tab's and the item is listed.
+    property var pendingMenu: null
+    function menuAfterLoad(folder, item, x, y) {
+        pendingMenu = {
+            "folder": folder,
+            "item": item,
+            "x": x,
+            "y": y
+        };
+        pendingMenuTimer.restart();
+    }
+    function showPendingMenu() {
+        const m = pendingMenu;
+        if (!m || folderModel.loading || folderModel.url.toString().replace(/\/+$/, "") !== m.folder.toString().replace(/\/+$/, "")) {
+            return;
+        }
+        const row = folderModel.rowOfUrl(m.item);
+        if (row >= 0) {
+            pendingMenu = null;
+            pendingMenuTimer.stop();
+            rowMenu(row, m.x, m.y);
+        }
+    }
+    Timer {
+        id: pendingMenuTimer
+        interval: 2000
+        onTriggered: top.pendingMenu = null
+    }
+    // Entering a column selects its first item once it is listed (and sorted).
+    property bool selectFirst: false
+    function selectFirstNow() {
+        if (selectFirst && folderModel.count > 0 && !folderModel.loading && selectedRows().length <= 1) {
+            const row = folderModel.visibleRowFrom(0, 1);
+            if (row >= 0) {
+                chooseRow(row, 0, false);
+            }
+        }
+    }
+    Timer {
+        id: selectFirstTimer
+        interval: 1200
+        onTriggered: top.selectFirst = false
+    }
+    Connections {
+        target: folderModel
+        function onLoadingChanged() {
+            top.selectFirstNow();
+            top.showPendingMenu();
+        }
+        function onLayoutChanged() {
+            top.selectFirstNow();
+            top.showPendingMenu();
+        }
+    }
+    // Going up: in the columns it is Left.
+    function goUp() {
+        if (shown === "columns") {
+            leaveColumn();
+        } else {
+            navigateRequested(StandardPlaces.parentUrl(folderModel.url));
+        }
+    }
+
+    // ---- Groups ----
+    // A group's header was clicked: its items are hidden (and deselected) or shown again.
+    function toggleGroup(label) {
+        if (!folderModel.isGroupCollapsed(label)) {
+            const r = folderModel.groupRange(label);
+            if (r.length === 2) {
+                sel.select(folderModel.rangeSelection(r[0], r[1]), ItemSelectionModel.Deselect);
+            }
+        }
+        folderModel.toggleGroup(label);
+        if (folderModel.isRowCollapsed(currentRow)) {
+            let to = folderModel.visibleRowFrom(currentRow, 1);
+            if (to < 0) {
+                to = folderModel.visibleRowFrom(currentRow, -1);
+            }
+            if (to >= 0) {
+                setCurrent(to);
+            }
+        }
+    }
+    // The row the keyboard reaches from `from` going to `target`: not in a
+    // collapsed group (else the nearest in that direction, else where it was).
+    function skipCollapsed(from, target) {
+        if (!folderModel.grouped) {
+            return target;
+        }
+        const n = folderModel.count;
+        const t = Math.max(0, Math.min(n - 1, target));
+        const dir = t >= from ? 1 : -1;
+        let v = folderModel.visibleRowFrom(t, dir);
+        if (v < 0) {
+            v = folderModel.visibleRowFrom(t, -dir);
+        }
+        return v < 0 ? from : v;
     }
 
     // A middle click on a row: a folder opens in a new background tab.
@@ -238,7 +459,7 @@ FocusScope {
         switch (event.key) {
         case Qt.Key_Up:
             if (mods & Qt.AltModifier) {
-                navigateRequested(StandardPlaces.parentUrl(folderModel.url));
+                goUp();
                 event.accepted = true;
                 return;
             }
@@ -253,6 +474,18 @@ FocusScope {
             if (mods & Qt.AltModifier) {
                 return;
             }
+            // In the columns Right goes into a folder and Left back out of it.
+            if (shown === "columns" && !(mods & (Qt.ControlModifier | Qt.ShiftModifier))) {
+                if (event.key === Qt.Key_Right) {
+                    if (cur >= 0 && currentRow >= 0 && folderModel.isDirAt(currentRow)) {
+                        enterColumn(folderModel.urlAt(currentRow));
+                    }
+                } else {
+                    leaveColumn();
+                }
+                event.accepted = true;
+                return;
+            }
             target = activeView.neighbor(cur, event.key === Qt.Key_Left ? "left" : "right");
             break;
         case Qt.Key_PageUp:
@@ -262,10 +495,10 @@ FocusScope {
             target = activeView.neighbor(cur, "pageDown");
             break;
         case Qt.Key_Home:
-            target = 0;
+            target = folderModel.grouped ? Math.max(0, folderModel.visibleRowFrom(0, 1)) : 0;
             break;
         case Qt.Key_End:
-            target = n - 1;
+            target = folderModel.grouped ? Math.max(0, folderModel.visibleRowFrom(n - 1, -1)) : n - 1;
             break;
         case Qt.Key_Return:
         case Qt.Key_Enter:
@@ -293,7 +526,7 @@ FocusScope {
         case Qt.Key_Backspace:
             // Among search results it is not "go up": the folder is not what is shown.
             if (!folderModel.searching) {
-                navigateRequested(StandardPlaces.parentUrl(folderModel.url));
+                goUp();
             }
             event.accepted = true;
             return;
@@ -332,7 +565,7 @@ FocusScope {
         }
         if (target !== -2) {
             if (n > 0) {
-                const t = Math.max(0, Math.min(n - 1, target));
+                const t = skipCollapsed(cur, Math.max(0, Math.min(n - 1, target)));
                 if ((mods & Qt.ControlModifier) && !(mods & Qt.ShiftModifier)) {
                     setCurrent(t);
                 } else {
@@ -384,6 +617,34 @@ FocusScope {
         }
     }
 
+    // Ctrl+plus, Ctrl+minus (steps) and Ctrl+0 (0): the icons' size in the
+    // Icons view, the rows' height in the others (the gallery has neither).
+    function zoom(steps) {
+        if (shown === "gallery") {
+            return;
+        }
+        if (shown === "icons") {
+            iconSize = steps === 0 ? ViewMemory.iconDefault() : ViewMemory.iconStep(iconSize, steps);
+        } else if (steps === 0) {
+            PreviewLogic.resetZoom();
+        } else {
+            PreviewLogic.zoom(steps);
+        }
+    }
+    function zoomByWheel(delta) {
+        if (shown === "gallery") {
+            return;
+        }
+        if (shown === "icons") {
+            const steps = ViewMemory.iconWheelSteps(delta);
+            if (steps !== 0) {
+                iconSize = ViewMemory.iconStep(iconSize, steps);
+            }
+        } else {
+            PreviewLogic.zoomByWheel(delta);
+        }
+    }
+
     // Ctrl and the wheel change the size of the icons or of the rows. Any
     // other wheel movement goes on to the view below.
     MouseArea {
@@ -392,7 +653,7 @@ FocusScope {
         acceptedButtons: Qt.NoButton
         onWheel: wheel => {
             if (wheel.modifiers & Qt.ControlModifier) {
-                PreviewLogic.zoomByWheel(!top.showsDetails && top.viewMode === "icons", wheel.angleDelta.y);
+                top.zoomByWheel(wheel.angleDelta.y);
                 wheel.accepted = true;
             } else {
                 wheel.accepted = false;
@@ -403,15 +664,29 @@ FocusScope {
     DetailsView {
         id: details
         anchors.fill: parent
-        visible: top.showsDetails
+        visible: top.shown === "details"
         fv: top
     }
 
     IconsView {
         id: icons
         anchors.fill: parent
-        visible: !top.showsDetails
-        compact: top.viewMode === "compact"
+        visible: top.shown === "icons" || top.shown === "compact"
+        compact: top.shown === "compact"
+        fv: top
+    }
+
+    ColumnsView {
+        id: columns
+        anchors.fill: parent
+        visible: top.shown === "columns"
+        fv: top
+    }
+
+    GalleryView {
+        id: gallery
+        anchors.fill: parent
+        visible: top.shown === "gallery"
         fv: top
     }
 

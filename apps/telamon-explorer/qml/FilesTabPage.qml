@@ -189,6 +189,13 @@ FocusScope {
         onQuickLookRequested: page.quickLookRequested()
         onSearchCloseRequested: tabSearch.clear()
         onNavigateRequested: target => page.navigate(target)
+        // A step between the columns: the folder, with the items selected in it.
+        onColumnNavigateRequested: (target, select) => {
+            page.navigate(target);
+            if (select.length > 0) {
+                page.showItems(select);
+            }
+        }
         onOpenInNewTabRequested: target => page.openInNewTab(target)
         // KIO's own prompts apply (Run or open?, untrusted .desktop files).
         onOpenRequested: urls => page.actions.openUrls(urls)

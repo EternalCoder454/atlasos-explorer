@@ -5,6 +5,7 @@
 pub mod address;
 pub mod conflict;
 pub mod display;
+pub mod group;
 pub mod history;
 pub mod launch;
 pub mod legacy;
@@ -20,6 +21,7 @@ pub mod search;
 pub mod sort;
 pub mod tabs;
 pub mod undo;
+pub mod views;
 pub mod zoom;
 
 pub use display::{MAX_DISPLAY_CHARS, NameBytes, display_name};
