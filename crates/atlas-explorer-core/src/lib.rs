@@ -4,9 +4,12 @@
 
 pub mod address;
 pub mod archive;
+pub mod attrs;
 pub mod batch;
+pub mod checksum;
 pub mod conflict;
 pub mod display;
+pub mod foldersize;
 pub mod group;
 pub mod history;
 pub mod home;
@@ -16,6 +19,7 @@ pub mod location;
 pub mod menu;
 pub mod names;
 pub mod optext;
+pub mod perms;
 pub mod places;
 pub mod preflight;
 pub mod preview;
@@ -24,9 +28,11 @@ pub mod search;
 pub mod servers;
 pub mod sort;
 pub mod tabs;
+pub mod tags;
 pub mod trash;
 pub mod undo;
 pub mod views;
+pub mod xattr;
 pub mod zoom;
 
 pub use display::{MAX_DISPLAY_CHARS, NameBytes, display_name};

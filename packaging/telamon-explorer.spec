@@ -47,6 +47,7 @@ BuildRequires:  cmake(KF6Solid)
 BuildRequires:  cmake(KF6Service)
 BuildRequires:  cmake(KF6CoreAddons)
 BuildRequires:  cmake(KF6Config)
+BuildRequires:  cmake(KF6FileMetaData)
 # QML modules qmlcachegen resolves at build time (not linked). telamon-ui comes
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
@@ -68,6 +69,8 @@ Requires:       qt6-qtsvg
 # KIO's workers beyond file:/ and trash:/ (smb, sftp, mtp, network,
 # recentlyused, thumbnail) and its thumbnailers
 Requires:       kf6-kio-core >= 6.30
+# Properties and the Details columns read dimensions, duration, camera and pages
+Requires:       kf6-kfilemetadata
 Recommends:     kio-extras
 Recommends:     kdegraphics-thumbnailers
 Recommends:     ffmpegthumbs

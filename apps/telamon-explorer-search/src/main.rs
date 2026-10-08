@@ -2,7 +2,7 @@
 //! (`net.eterneon.telamon.explorer.Search1` over the session bus).
 //!
 //!   telamon-explorer-search [--kind K] [--in DIR] [--modified 7d] [--larger 10M]
-//!                         [--smaller 1G] [--limit N] [--json] QUERY
+//!                         [--smaller 1G] [--tag NAME] [--limit N] [--json] QUERY
 //!
 //! File names are untrusted: they are printed as display names (controls and
 //! bidi characters made visible), never raw.
@@ -43,6 +43,9 @@ fn options(a: &Args) -> HashMap<String, Value<'static>> {
     }
     if let Some(n) = a.size_max {
         o.insert("size_max".into(), Value::from(n));
+    }
+    if let Some(t) = &a.tag {
+        o.insert("tag".into(), Value::from(t.clone()));
     }
     o
 }

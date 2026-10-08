@@ -20,6 +20,7 @@ Item {
     required property bool isHidden
     required property bool isCut
     required property string thumbnailSource
+    required property var tagColours
 
     width: cell.view.cellW
     height: cell.view.cellH
@@ -63,10 +64,18 @@ Item {
             visible: status === Image.Ready && implicitWidth > 1
         }
     }
+    // The tag dots: at the foot of the picture, or at the end of a compact row.
+    TagDots {
+        id: dots
+        x: cell.view.compact ? cell.width - width - Kirigami.Units.largeSpacing : iconBox.x + iconBox.width - width + Math.round(dot * 0.4)
+        y: cell.view.compact ? (cell.height - height) / 2 : iconBox.y + iconBox.height - height + Math.round(dot * 0.2)
+        colours: cell.tagColours
+        dot: cell.view.compact ? Kirigami.Units.gridUnit * 0.7 : Math.max(9, Math.round(cell.view.icon * 0.2))
+    }
     Text {
         x: cell.view.compact ? iconBox.x + iconBox.width + Kirigami.Units.largeSpacing : Kirigami.Units.smallSpacing
         y: cell.view.compact ? 0 : iconBox.y + iconBox.height + Kirigami.Units.smallSpacing
-        width: cell.width - x - Kirigami.Units.smallSpacing
+        width: cell.width - x - Kirigami.Units.smallSpacing - (cell.view.compact && dots.visible ? dots.width + Kirigami.Units.smallSpacing : 0)
         height: cell.view.compact ? cell.height : cell.height - y
         verticalAlignment: cell.view.compact ? Text.AlignVCenter : Text.AlignTop
         horizontalAlignment: cell.view.compact ? Text.AlignLeft : Text.AlignHCenter

@@ -12,6 +12,8 @@ use zbus::zvariant::{OwnedValue, Value};
 const MAX_KEYS: usize = 64;
 /// Entries accepted in `kinds`.
 const MAX_KINDS: usize = 32;
+/// Longest `tag`, in bytes (a tag name is at most 64 characters).
+const MAX_TAG_BYTES: usize = 512;
 
 /// A variant inside a variant is read as the inner one.
 fn peel<'a, 'b>(mut v: &'a Value<'b>) -> &'a Value<'b> {
@@ -120,6 +122,13 @@ pub fn parse(options: &HashMap<String, OwnedValue>) -> Result<Options, String> {
                     _ => return Err(bad("\"name\" or \"path\"")),
                 };
             }
+            "tag" => {
+                let s = as_str(v).ok_or_else(|| bad("a string"))?.trim();
+                if s.is_empty() || s.len() > MAX_TAG_BYTES {
+                    return Err(bad("a tag name (not empty, at most 512 bytes)"));
+                }
+                o.tag = Some(s.to_string());
+            }
             _ => {} // unknown keys are ignored
         }
     }
@@ -152,6 +161,7 @@ mod tests {
             ("size_min", Value::from(5u64)),
             ("size_max", Value::from(6u64)),
             ("match", Value::from("path")),
+            ("tag", Value::from("  Red ")),
             ("unknown", Value::from(1u8)),
         ]))
         .unwrap();
@@ -159,6 +169,7 @@ mod tests {
         assert_eq!(o.kinds, Some(Category::Image.bit() | Category::Pdf.bit()));
         assert_eq!(o.root, Some(b"/home/a b".to_vec()));
         assert!(o.include_hidden && o.path_match);
+        assert_eq!(o.tag.as_deref(), Some("Red"));
         assert_eq!(
             (o.modified_after, o.modified_before, o.size_min, o.size_max),
             (Some(100), Some(200), Some(5), Some(6))
@@ -186,6 +197,11 @@ mod tests {
             ("size_min", Value::from(-1i64)),
             ("size_max", Value::from(1.5f64)),
             ("match", Value::from("both")),
+            ("tag", Value::from(5u32)),
+            ("tag", Value::from(vec!["a".to_string()])),
+            ("tag", Value::from("")),
+            ("tag", Value::from("   ")),
+            ("tag", Value::from("x".repeat(600))),
         ] {
             let e = parse(&map(vec![(k, v)])).expect_err(k);
             assert!(

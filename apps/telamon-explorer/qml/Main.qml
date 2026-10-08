@@ -254,6 +254,17 @@ TelamonWindow {
         id: namePrompt
         actions: fileActions
     }
+    // Properties (it replaces KDE's dialog): opened from the menus and by FileManager1.
+    PropertiesDialog {
+        id: propertiesDialog
+        actions: fileActions
+    }
+    Connections {
+        target: fileActions
+        function onPropertiesRequested(urls) {
+            propertiesDialog.showFor(urls);
+        }
+    }
     // Several items renamed together.
     BatchRenameDialog {
         id: batchRename
@@ -328,6 +339,13 @@ TelamonWindow {
     PlacesModel {
         id: trashModel
         section: PlacesLogic.Trash
+    }
+
+    // Lists every item with a tag, wherever it is (this tab's search).
+    function showTag(name) {
+        if (root.search) {
+            root.search.showTag(name);
+        }
     }
 
     // A place in the sidebar: its menu opens at the pointer.
@@ -1241,6 +1259,20 @@ TelamonWindow {
                 symbol: Symbols.AddLink
                 Accessible.description: "Ctrl+Shift+K"
                 onClicked: connectDialog.ask()
+            }
+
+            // The tags in use: a click lists every item with the tag.
+            SectionLabel {
+                visible: TagLogic.sidebarTags.length > 0
+                text: qsTr("Tags")
+            }
+            Repeater {
+                model: TagLogic.sidebarTags
+                delegate: TagItem {
+                    Layout.fillWidth: true
+                    current: root.search ? root.search.tag : ""
+                    onChosen: name => root.showTag(name)
+                }
             }
 
             // Places that were hidden come back from here.

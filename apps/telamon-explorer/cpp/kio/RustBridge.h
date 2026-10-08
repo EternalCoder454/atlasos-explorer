@@ -153,7 +153,7 @@ void *telamon_matcher_new(const uint8_t *query, size_t queryLen, const TelamonSe
 uint32_t telamon_matcher_test(const void *matcher, const uint8_t *name, size_t nameLen, bool isDir, uint64_t size, int64_t mtime);
 void telamon_matcher_free(void *matcher);
 void *telamon_walk_start(const uint8_t *root, size_t rootLen, const uint8_t *query, size_t queryLen, const TelamonSearchFilter *filter, bool includeHidden,
-                         size_t maxHits, TelamonWalkCallback callback, void *user);
+                         const uint8_t *tag, size_t tagLen, size_t maxHits, TelamonWalkCallback callback, void *user);
 void telamon_walk_stop(void *handle);
 void telamon_walk_free(void *handle);
 

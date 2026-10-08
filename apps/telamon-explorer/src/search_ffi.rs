@@ -253,8 +253,9 @@ pub unsafe extern "C" fn telamon_search_covers(
     covers(Path::new(std::ffi::OsStr::from_bytes(folder)), &roots)
 }
 
-fn options_of(f: &TelamonSearchFilter, include_hidden: bool) -> Options {
+fn options_of(f: &TelamonSearchFilter, include_hidden: bool, tag: Option<String>) -> Options {
     Options {
+        tag,
         kind: f.files_only.then_some(KindFilter::File),
         kinds: (f.kinds_mask != 0).then_some(f.kinds_mask),
         include_hidden,
@@ -270,6 +271,7 @@ fn matcher_of(
     query_len: usize,
     filter: *const TelamonSearchFilter,
     include_hidden: bool,
+    tag: Option<String>,
 ) -> Option<LiveMatcher> {
     if filter.is_null() {
         return None;
@@ -281,7 +283,7 @@ fn matcher_of(
             &*filter,
         )
     };
-    Some(LiveMatcher::new(&q, options_of(f, include_hidden)))
+    Some(LiveMatcher::new(&q, options_of(f, include_hidden, tag)))
 }
 
 /// A matcher for entries a KIO listing delivers one at a time. Free it with
@@ -297,7 +299,7 @@ pub unsafe extern "C" fn telamon_matcher_new(
     filter: *const TelamonSearchFilter,
     include_hidden: bool,
 ) -> *mut c_void {
-    matcher_of(query, query_len, filter, include_hidden)
+    matcher_of(query, query_len, filter, include_hidden, None)
         .map_or(std::ptr::null_mut(), |m| Box::into_raw(Box::new(m)).cast())
 }
 
@@ -373,7 +375,7 @@ unsafe impl Send for UserPtr {}
 /// could not start (the callback is then not called).
 ///
 /// # Safety
-/// `root` and `query` cover their lengths; `filter` is valid; `user` stays
+/// `root`, `query` and `tag` cover their lengths; `filter` is valid; `user` stays
 /// valid until the callback has been called with a non-zero `end`.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
@@ -384,11 +386,16 @@ pub unsafe extern "C" fn telamon_walk_start(
     query_len: usize,
     filter: *const TelamonSearchFilter,
     include_hidden: bool,
+    tag: *const u8,
+    tag_len: usize,
     max_hits: usize,
     callback: WalkCallback,
     user: *mut c_void,
 ) -> *mut c_void {
-    let Some(matcher) = matcher_of(query, query_len, filter, include_hidden) else {
+    // SAFETY: `tag` covers `tag_len` (contract).
+    let tag = String::from_utf8_lossy(unsafe { bytes(tag, tag_len) }).into_owned();
+    let tag = (!tag.is_empty()).then_some(tag);
+    let Some(matcher) = matcher_of(query, query_len, filter, include_hidden, tag) else {
         return std::ptr::null_mut();
     };
     // SAFETY: `root` covers `root_len` (contract).
@@ -663,6 +670,8 @@ mod tests {
                 q.len(),
                 &f,
                 false,
+                std::ptr::null(),
+                0,
                 100,
                 sink,
                 user,
@@ -702,6 +711,8 @@ mod tests {
                 q.len(),
                 &f,
                 false,
+                std::ptr::null(),
+                0,
                 100,
                 sink,
                 user,

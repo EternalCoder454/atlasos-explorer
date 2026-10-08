@@ -102,6 +102,7 @@ Item {
             required property bool isDir
             required property bool isHidden
             required property bool isCut
+            required property var tagColours
             width: list.width
             height: col.rowHeight
             readonly property bool selected: col.primary && col.fv.isSelected(index, col.fv.selRevision)
@@ -141,7 +142,7 @@ Item {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - icon.width - chevron.width - parent.spacing * 2
+                    width: parent.width - icon.width - chevron.width - dots.width - parent.spacing * 3
                     visible: !row.editing
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
@@ -157,6 +158,12 @@ Item {
                         itemUrl: row.url
                         isDir: row.isDir
                     }
+                }
+                TagDots {
+                    id: dots
+                    anchors.verticalCenter: parent.verticalCenter
+                    colours: row.tagColours
+                    dot: Math.round(col.iconSide * 0.5)
                 }
                 Symbol {
                     id: chevron

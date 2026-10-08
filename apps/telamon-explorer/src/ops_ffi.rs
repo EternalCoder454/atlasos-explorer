@@ -38,6 +38,7 @@ fn kind_from(n: u32) -> Option<Kind> {
         7 => Kind::Restore,
         8 => Kind::EmptyTrash,
         9 => Kind::External,
+        10 => Kind::Attrs,
         _ => return None,
     })
 }
@@ -365,6 +366,7 @@ pub unsafe extern "C" fn telamon_ops_info(
             Kind::Restore => 7,
             Kind::EmptyTrash => 8,
             Kind::External => 9,
+            Kind::Attrs => 10,
         },
         state: state_code(&o.state),
         bytes_done: o.bytes_done,
@@ -553,7 +555,9 @@ pub unsafe extern "C" fn telamon_hist_paths(
 /// What the next undo (`side` 0) or redo (1) would do, given how the paths
 /// are (`states`: `undo::parse_states`). Returns 0 and writes one step per
 /// line (`kind`, tab, path, tab, destination; kinds are `trash_copy`,
-/// `move_back`, `remove_folder`, `restore`, `make_folder`), or 1 and writes
+/// `move_back`, `remove_folder`, `restore`, `make_folder`, and `set_attr` whose
+/// destination field holds the attribute, the value it must have and the value
+/// to give it, tab-separated), or 1 and writes
 /// the refusal as the reason, a tab and the path it is about (empty for
 /// none). The length goes to `*len`.
 ///
@@ -586,6 +590,7 @@ pub unsafe extern "C" fn telamon_hist_plan(
                         undo::StepKind::RemoveEmptyFolder => "remove_folder",
                         undo::StepKind::RestoreFromTrash => "restore",
                         undo::StepKind::MakeFolder => "make_folder",
+                        undo::StepKind::SetAttr => "set_attr",
                     };
                     format!("{kind}\t{}\t{}", s.path, s.to.as_deref().unwrap_or(""))
                 })

@@ -4,6 +4,7 @@
 #include "ArchiveGuard.h"
 #include "OperationAsker.h"
 #include "OpsBridge.h"
+#include "PropsBridge.h"
 #include "RustBridge.h"
 
 #include <KDirNotify>
@@ -39,6 +40,7 @@
 #include <QTimeZone>
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 
 #include <dirent.h>
@@ -352,6 +354,99 @@ private:
 };
 }
 
+namespace
+{
+// What a change of tags, rating or permissions shares between the queue and
+// its worker: the flag that stops it, and what it did.
+struct AttrRun {
+    std::atomic<bool> cancel{false};
+    // The changes made: for each, path, key, before and after, every field ended by a NUL byte.
+    QByteArray changes;
+    quint64 items = 0;
+    quint64 failed = 0;
+    // 1 more changes than Undo can keep, 2 stopped, 4 the file system can't keep tags.
+    uint32_t flags = 0;
+    QString problem;
+    // The items the change was for (and the ones an undo changes): looked at again when it ends.
+    QList<QUrl> touched;
+};
+
+// Runs a core call that edits or reverts attributes, on a worker thread. It
+// starts itself, as KIO's jobs do.
+class AttrJob : public KJob
+{
+public:
+    using Call = std::function<TelamonOutcome *(const uint8_t *cancel)>;
+
+    AttrJob(std::shared_ptr<AttrRun> run, Call call)
+        : m_run(std::move(run))
+        , m_call(std::move(call))
+    {
+        QMetaObject::invokeMethod(this, &AttrJob::start, Qt::QueuedConnection);
+    }
+
+    void start() override
+    {
+        QPointer<AttrJob> self(this);
+        auto run = m_run;
+        auto call = m_call;
+        QThreadPool::globalInstance()->start([self, run, call] {
+            TelamonOutcome *o = call(reinterpret_cast<const uint8_t *>(&run->cancel));
+            uint64_t items = 0, failed = 0;
+            uint32_t flags = 0;
+            QByteArray changes;
+            QString problem;
+            if (o) {
+                flags = telamon_attrs_summary(o, &items, &failed);
+                changes = PropsBridge::bytesOf([&](uint8_t *out, size_t cap) { return telamon_attrs_changes(o, out, cap); });
+                problem = QString::fromUtf8(PropsBridge::bytesOf([&](uint8_t *out, size_t cap) { return telamon_attrs_problem(o, out, cap); }));
+                telamon_attrs_free(o);
+            } else {
+                failed = 1;
+                problem = OperationQueue::tr("The change couldn't be made.");
+            }
+            // Written before the result is delivered, so the queue can record what was done.
+            run->items = items;
+            run->failed = failed;
+            run->flags = flags;
+            run->changes = changes;
+            run->problem = problem;
+            if (!self) {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, failed, flags, problem] {
+                if (!self) {
+                    return;
+                }
+                if (flags & 2) {
+                    self->setError(KJob::KilledJobError);
+                } else if (failed > 0) {
+                    self->setError(KJob::UserDefinedError);
+                    self->setErrorText(problem);
+                }
+                self->emitResult();
+            });
+        });
+    }
+
+    // The user cancelled: the worker stops after the item it is on, and the job
+    // ends with KilledJobError. The queue keeps the operation until then, so
+    // what was done is written down for Undo and nothing else runs meanwhile.
+    void requestStop() { m_run->cancel = true; }
+
+protected:
+    bool doKill() override
+    {
+        m_run->cancel = true;
+        return true;
+    }
+
+private:
+    std::shared_ptr<AttrRun> m_run;
+    Call m_call;
+};
+}
+
 struct OperationQueue::Work {
     quint64 id = 0;
     Kind kind = Copy;
@@ -388,6 +483,8 @@ struct OperationQueue::Work {
     QList<QUrl> results;
     // Background upkeep: no toast, and the row goes when it is done.
     bool quiet = false;
+    // A change of tags, rating or permissions.
+    std::shared_ptr<AttrRun> attrs;
 };
 
 OperationQueue::OperationQueue(QObject *parent)
@@ -734,6 +831,12 @@ void OperationQueue::pump()
             break;
         default: {
             Work &w = work(id);
+            // A change of attributes is stopped, not killed: its worker is
+            // still in the core, and its result (what it did) is awaited.
+            if (auto *attrJob = dynamic_cast<AttrJob *>(w.job.data())) {
+                attrJob->requestStop();
+                break;
+            }
             if (w.job) {
                 w.job->kill(KJob::Quietly);
             }
@@ -745,6 +848,10 @@ void OperationQueue::pump()
             // ones done are one step to undo.
             if (((cancelled.kind == Rename && cancelled.sources.size() > 1) || cancelled.kind == Restore) && cancelled.record && cancelled.side < 0
                 && !cancelled.pairs.isEmpty()) {
+                recordHistory(cancelled);
+            }
+            // A change of attributes stopped part way: what it did is one step to undo.
+            if (cancelled.kind == Attrs && cancelled.record && cancelled.side < 0 && cancelled.attrs && !cancelled.attrs->changes.isEmpty()) {
                 recordHistory(cancelled);
             }
             break;
@@ -866,6 +973,17 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
     Work &w = work(id);
     w.job = nullptr;
     if (job->error()) {
+        if (dynamic_cast<AttrJob *>(job) && job->error() == KJob::KilledJobError) {
+            // Stopped by the user: what the worker did before it stopped is one step to undo.
+            const Work stopped = w;
+            endOp(id);
+            if (stopped.record && stopped.side < 0 && stopped.attrs && !stopped.attrs->changes.isEmpty()) {
+                recordHistory(stopped);
+            }
+            refresh();
+            Q_EMIT jobFinished();
+            return;
+        }
         if (job->error() == KIO::ERR_USER_CANCELED || job->error() == KJob::KilledJobError) {
             cancel(id);
             return;
@@ -878,6 +996,16 @@ void OperationQueue::stepDone(quint64 id, KJob *job)
             Q_EMIT refused(job->error() == ArchiveGuardJob::Refused ? tr("Can't Extract")
                                                                     : (job->error() == ArchiveGuardJob::NeedsPassword ? tr("Needs a Password") : tr("Not Enough Space")),
                            text);
+            failOp(id, text, false);
+            return;
+        }
+        if (dynamic_cast<AttrJob *>(job)) {
+            // Said as it is (the core's sentence), once: an undo or redo says
+            // it in failOp's own line.
+            const QString text = job->errorString();
+            if (w.side < 0) {
+                Q_EMIT message(text);
+            }
             failOp(id, text, false);
             return;
         }
@@ -914,6 +1042,9 @@ void OperationQueue::finishOp(quint64 id)
         Q_EMIT message(tr("%1 replaced or merged files, so it can't be undone.").arg(w.title));
     } else if (w.record) {
         recordHistory(w);
+    }
+    if (w.kind == Attrs && w.attrs && (w.attrs->flags & 1) && w.side < 0) {
+        Q_EMIT message(tr("%1 can't be undone.").arg(w.title));
     }
     if (w.kind == EmptyTrash && !w.quiet) {
         Q_EMIT message(tr("Trash emptied."));
@@ -953,6 +1084,10 @@ void OperationQueue::failOp(quint64 id, const QString &why, bool say)
     if (((w.kind == Rename && w.sources.size() > 1) || w.kind == Restore) && w.record && w.side < 0 && !w.pairs.isEmpty()) {
         recordHistory(w);
     }
+    // A change of attributes that did some of its items: those are one step to undo.
+    if (w.kind == Attrs && w.record && w.side < 0 && w.attrs && !w.attrs->changes.isEmpty()) {
+        recordHistory(w);
+    }
     refresh();
     Q_EMIT jobFinished();
 }
@@ -979,11 +1114,15 @@ void OperationQueue::endOp(quint64 id, bool ok)
         m_oldTrashBusy = false;
     }
     delete it->data;
+    const QList<QUrl> touched = it->kind == Attrs && it->attrs ? it->attrs->touched : QList<QUrl>();
     auto doneFn = std::move(it->done);
     // A finished undo or redo reports itself when its entry is moved
     // (completeHistory); one that failed or was cancelled is over now.
     auto histFn = ok ? std::function<void()>() : std::move(it->histDone);
     m_work.erase(it);
+    if (!touched.isEmpty()) {
+        Q_EMIT attributesChanged(touched);
+    }
     if (doneFn) {
         doneFn(ok);
     }
@@ -1536,6 +1675,44 @@ void OperationQueue::setHidden(const QList<QUrl> &urls, bool hide, std::function
     enqueue(std::move(w), hide ? tr("Hiding %1").arg(what) : tr("Showing %1").arg(what));
 }
 
+void OperationQueue::setAttributes(const QList<QUrl> &urls, const AttrEdit &edit, const QString &title, std::function<void(bool)> done)
+{
+    QByteArray paths;
+    QList<QUrl> touched;
+    for (const QUrl &u : urls) {
+        if (u.isLocalFile()) {
+            paths += QFile::encodeName(u.adjusted(QUrl::StripTrailingSlash).toLocalFile());
+            paths.append('\0');
+            touched << u;
+        }
+    }
+    if (touched.isEmpty()) {
+        Q_EMIT message(tr("Tags, ratings and permissions are only for items on this computer."));
+        if (done) {
+            done(false);
+        }
+        return;
+    }
+    auto run = std::make_shared<AttrRun>();
+    run->touched = touched;
+    Work w;
+    w.kind = Attrs;
+    w.sources = touched;
+    w.done = std::move(done);
+    w.title = title;
+    w.attrs = run;
+    const QByteArray add = edit.add.join(QLatin1Char('\n')).toUtf8();
+    const QByteArray remove = edit.remove.join(QLatin1Char('\n')).toUtf8();
+    w.steps << [run, paths, add, remove, edit]() -> KJob * {
+        return new AttrJob(run, [paths, add, remove, edit](const uint8_t *cancel) {
+            return telamon_attrs_edit(uint32_t(edit.kind), PropsBridge::p(paths), PropsBridge::n(paths), PropsBridge::p(add), PropsBridge::n(add),
+                                      PropsBridge::p(remove), PropsBridge::n(remove), edit.clearAll, quint32(qMax(0, edit.rating)), edit.setBits, edit.clearBits,
+                                      cancel);
+        });
+    };
+    enqueue(std::move(w), title);
+}
+
 void OperationQueue::pasteData(const QMimeData *data, const QUrl &destination)
 {
     if (!data || !destination.isValid()) {
@@ -1821,6 +1998,10 @@ void OperationQueue::runHistory(int side, std::function<void()> next)
         w.record = false;
         w.title = title;
         QList<QUrl> trashList, restoreList;
+        // Attributes put back: the core's change text (path, key, the value it
+        // goes back to and the value it must have now, each ended by NUL).
+        QByteArray attrChanges;
+        auto attrRun = std::make_shared<AttrRun>();
         for (const QString &line : text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
             const QStringList f = line.split(QLatin1Char('\t'));
             const QString what = f.value(0);
@@ -1841,7 +2022,22 @@ void OperationQueue::runHistory(int side, std::function<void()> next)
             } else if (what == QLatin1String("make_folder")) {
                 w.kind = NewFolder;
                 w.steps << [path]() -> KJob * { return KIO::mkdir(path); };
+            } else if (what == QLatin1String("set_attr") && path.isLocalFile()) {
+                // set_attr, path, key, the value it must have, the value to give it.
+                for (const QByteArray &field : {QFile::encodeName(path.toLocalFile()), f.value(2).toUtf8(), f.value(4).toUtf8(), f.value(3).toUtf8()}) {
+                    attrChanges += field;
+                    attrChanges.append('\0');
+                }
+                attrRun->touched << path;
             }
+        }
+        if (!attrChanges.isEmpty()) {
+            w.kind = Attrs;
+            w.attrs = attrRun;
+            w.sources = attrRun->touched;
+            w.steps << [attrRun, attrChanges]() -> KJob * {
+                return new AttrJob(attrRun, [attrChanges](const uint8_t *cancel) { return telamon_attrs_revert(PropsBridge::p(attrChanges), PropsBridge::n(attrChanges), true, cancel); });
+            };
         }
         if (!trashList.isEmpty()) {
             w.kind = Trash;
@@ -1926,16 +2122,21 @@ void OperationQueue::recordHistory(const Work &w)
         if (created.isEmpty()) {
             return;
         }
+    } else if (kind == Attrs) {
+        if (!w.attrs || w.attrs->changes.isEmpty() || (w.attrs->flags & 1)) {
+            return;
+        }
     } else {
         return;
     }
     QPointer<OperationQueue> self(this);
     const quint64 opId = id;
-    histEnqueue([self, look, kind, title, pairs, created, opId](std::function<void()> next) {
+    const std::shared_ptr<AttrRun> attrs = w.attrs;
+    histEnqueue([self, look, kind, title, pairs, created, opId, attrs](std::function<void()> next) {
         if (!self) {
             return;
         }
-        StatBatch::run(look, self.data(), [self, kind, title, pairs, created, opId, next](const SeenMap &seen) {
+        StatBatch::run(look, self.data(), [self, kind, title, pairs, created, opId, next, attrs](const SeenMap &seen) {
             if (!self) {
                 return;
             }
@@ -1978,6 +2179,16 @@ void OperationQueue::recordHistory(const Work &w)
                     return;
                 }
                 rec = QStringLiteral("copy\n") + body;
+                break;
+            }
+            case Attrs: {
+                // The core wrote the changes as NUL-ended fields: path, key, before, after.
+                rec = QStringLiteral("attrs\n");
+                const QList<QByteArray> fields = attrs->changes.split('\0');
+                for (qsizetype i = 0; i + 3 < fields.size(); i += 4) {
+                    rec += urlKey(QUrl::fromLocalFile(QFile::decodeName(fields.at(i)))) + QLatin1Char('\t') + QString::fromUtf8(fields.at(i + 1)) + QLatin1Char('\t')
+                        + QString::fromUtf8(fields.at(i + 2)) + QLatin1Char('\t') + QString::fromUtf8(fields.at(i + 3)) + QLatin1Char('\n');
+                }
                 break;
             }
             case Trash:

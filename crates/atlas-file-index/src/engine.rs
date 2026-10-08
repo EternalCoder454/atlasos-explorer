@@ -27,6 +27,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Folders `NotifyChanged` accepts in one call.
 pub const MAX_NOTIFY: usize = 256;
+/// Tags `Engine::tags` lists.
+pub const MAX_TAGS_LISTED: usize = 500;
 /// Folders waiting from `NotifyChanged` calls; past this the hints are dropped
 /// and one walk over all folders takes their place.
 const MAX_PENDING_NOTIFY: usize = 4096;
@@ -271,6 +273,12 @@ impl Engine {
             .clone();
         self.maybe_recheck();
         search(&ix, query, limit, opts, now_secs())
+    }
+
+    /// The tags in use, most used first (see `Index::tag_counts`), at most
+    /// [`MAX_TAGS_LISTED`]; never waits for a scan.
+    pub fn tags(&self) -> Vec<(String, u32)> {
+        self.index().tag_counts(MAX_TAGS_LISTED)
     }
 
     /// The current index (for tests and tools).

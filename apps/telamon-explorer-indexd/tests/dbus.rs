@@ -455,7 +455,7 @@ fn activation_serves_a_restart_from_the_snapshot() {
         assert!(Instant::now() < end, "the service did not exit on SIGTERM");
         std::thread::sleep(Duration::from_millis(20));
     }
-    let snap = b.dir.join("home/.cache/telamon-explorer/index/v1.idx");
+    let snap = b.dir.join("home/.cache/telamon-explorer/index/v2.idx");
     assert!(snap.exists(), "no snapshot written");
     // the next call activates it again, now with a snapshot to answer from
     fs::write(b.root.join("file-new.txt"), b"x").unwrap();
@@ -730,4 +730,210 @@ fn the_search_fields_calls_work_through_activation() {
     assert_eq!(only_chips, ["Reports/report-photo.png"]);
     // More than the cap is never returned: the service answers at most 500.
     assert!(search(&p, "", 100_000, HashMap::new()).unwrap().len() <= 500);
+}
+
+fn tags_of(p: &Proxy) -> Vec<(String, u32)> {
+    p.call("Tags", &()).unwrap()
+}
+
+fn tagged_uris(p: &Proxy, tag: &str) -> Vec<String> {
+    let mut v: Vec<String> = search(p, "", 100, HashMap::from([("tag", Value::from(tag))]))
+        .unwrap()
+        .into_iter()
+        .map(|h| h.0)
+        .collect();
+    v.sort();
+    v
+}
+
+fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
+    let end = Instant::now() + Duration::from_secs(10);
+    while !f() {
+        assert!(Instant::now() < end, "{what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Stop the service the test started (SIGTERM: it writes its snapshot first).
+fn stop_service(b: &mut Bus) {
+    let mut child = b.service.take().expect("a service started by the test");
+    // SAFETY: plain kill(2) on a process this test started.
+    unsafe {
+        libc::kill(child.id() as i32, 15);
+    }
+    let end = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < end, "the service did not exit on SIGTERM");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn tags_are_listed_searched_and_kept_fresh() {
+    use atlas_file_index::testdir::{set_tags, skip_without_xattrs};
+
+    let Some(mut b) = bus("tags", 0, false) else {
+        return;
+    };
+    if skip_without_xattrs(&b.root) {
+        return;
+    }
+    let r = b.root.clone();
+    fs::create_dir_all(r.join("docs")).unwrap();
+    for f in ["a.txt", "docs/b.txt", "docs/c.txt", "plain.txt"] {
+        fs::write(r.join(f), b"x").unwrap();
+    }
+    set_tags(&r.join("a.txt"), "Red,Work").unwrap();
+    set_tags(&r.join("docs/b.txt"), "red, Taxes 2025").unwrap();
+    set_tags(&r.join("docs"), "WORK").unwrap();
+    b.start_service();
+    let conn = b.conn();
+    b.wait_for_name(&conn);
+    let p = b.proxy(&conn);
+    wait_state(&p, "ready");
+    let uri = |rel: &str| format!("file://{}/{}", r.display(), rel.replace(' ', "%20"));
+
+    // Tags(): (name, count), grouped ignoring case, most used first, then by name
+    assert_eq!(
+        tags_of(&p),
+        vec![
+            ("Red".to_string(), 2),
+            ("WORK".to_string(), 2), // "Work" and "WORK" once each: the first in order
+            ("Taxes 2025".to_string(), 1),
+        ]
+    );
+    // the same on the interface under the old name
+    let old = old_proxy(&conn);
+    wait_until("the old name", || {
+        old.call::<_, _, Vec<(String, u32)>>("Tags", &()).is_ok()
+    });
+    assert_eq!(tags_of(&old), tags_of(&p));
+
+    // Search("", n, {tag}): the tagged entries, any case, nothing untagged
+    let red = vec![uri("a.txt"), uri("docs/b.txt")];
+    assert_eq!(tagged_uris(&p, "Red"), red);
+    assert_eq!(tagged_uris(&p, "RED"), red);
+    assert_eq!(tagged_uris(&p, " red "), red);
+    assert_eq!(tagged_uris(&old, "red"), red);
+    assert_eq!(tagged_uris(&p, "work"), vec![uri("a.txt"), uri("docs")]);
+    assert_eq!(tagged_uris(&p, "taxes 2025"), vec![uri("docs/b.txt")]);
+    assert!(tagged_uris(&p, "blue").is_empty());
+    assert!(!tagged_uris(&p, "red").contains(&uri("plain.txt")));
+    // with words and other options
+    let hits = search(
+        &p,
+        "b.txt",
+        10,
+        HashMap::from([("tag", Value::from("red"))]),
+    )
+    .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        search(
+            &p,
+            "c.txt",
+            10,
+            HashMap::from([("tag", Value::from("red"))])
+        )
+        .unwrap()
+        .len(),
+        0
+    );
+    assert_eq!(
+        search(
+            &p,
+            "",
+            10,
+            HashMap::from([
+                ("tag", Value::from("work")),
+                ("kind", Value::from("folder"))
+            ])
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    // a wrong tag option is an error in plain words
+    for bad in [Value::from(""), Value::from(5u32), Value::from(true)] {
+        match search(&p, "", 10, HashMap::from([("tag", bad)])) {
+            Err(zbus::Error::MethodError(name, msg, _)) => {
+                assert_eq!(name.as_str(), "org.freedesktop.DBus.Error.InvalidArgs");
+                assert!(msg.unwrap_or_default().contains("tag"));
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
+    }
+
+    // a changed tag plus NotifyChanged updates both answers
+    set_tags(&r.join("docs/c.txt"), "Fresh,red").unwrap();
+    set_tags(&r.join("a.txt"), "Work").unwrap();
+    let _: () = p
+        .call("NotifyChanged", &(vec![uri("docs/c.txt"), uri("a.txt")],))
+        .unwrap();
+    wait_until("the tag change was not seen", || {
+        tagged_uris(&p, "fresh") == vec![uri("docs/c.txt")]
+            && tagged_uris(&p, "red") == vec![uri("docs/b.txt"), uri("docs/c.txt")]
+    });
+    // (the spelling used most; a tie goes to the one that sorts first, so
+    // "red" and "WORK" here)
+    assert_eq!(
+        tags_of(&p),
+        vec![
+            ("red".to_string(), 2),
+            ("WORK".to_string(), 2),
+            ("Fresh".to_string(), 1),
+            ("Taxes 2025".to_string(), 1),
+        ]
+    );
+    // a tag taken off
+    set_tags(&r.join("docs/c.txt"), "").unwrap();
+    let _: () = p.call("NotifyChanged", &(vec![uri("docs")],)).unwrap();
+    wait_until("the cleared tag was not seen", || {
+        tagged_uris(&p, "fresh").is_empty()
+    });
+    assert_eq!(tagged_uris(&p, "red"), vec![uri("docs/b.txt")]);
+    assert!(tags_of(&p).iter().all(|(n, _)| n != "Fresh"));
+}
+
+#[test]
+fn tags_survive_a_restart_through_the_snapshot() {
+    use atlas_file_index::testdir::{set_tags, skip_without_xattrs};
+
+    let Some(mut b) = bus("tags-snap", 0, false) else {
+        return;
+    };
+    if skip_without_xattrs(&b.root) {
+        return;
+    }
+    let r = b.root.clone();
+    for i in 0..10 {
+        fs::write(r.join(format!("f{i}.txt")), b"x").unwrap();
+    }
+    set_tags(&r.join("f1.txt"), "Kept,Also Kept").unwrap();
+    set_tags(&r.join("f2.txt"), "kept").unwrap();
+    b.start_service();
+    let conn = b.conn();
+    b.wait_for_name(&conn);
+    let p = b.proxy(&conn);
+    wait_state(&p, "ready");
+    let before = tags_of(&p);
+    assert_eq!(
+        before,
+        vec![("Kept".to_string(), 2), ("Also Kept".to_string(), 1)]
+    );
+    stop_service(&mut b);
+    let snap = b.dir.join("home/.cache/telamon-explorer/index/v2.idx");
+    assert!(snap.exists(), "no snapshot written");
+    // the next run loads the snapshot (its first scan, if any, is held back)
+    for (k, v) in b.env.iter_mut() {
+        if k == "TELAMON_EXPLORER_TEST_SCAN_DELAY_MS" {
+            *v = "20000".into();
+        }
+    }
+    b.start_service();
+    let conn = b.conn();
+    b.wait_for_name(&conn);
+    let p = b.proxy(&conn);
+    assert_eq!(tags_of(&p), before);
+    assert_eq!(tagged_uris(&p, "kept").len(), 2);
 }

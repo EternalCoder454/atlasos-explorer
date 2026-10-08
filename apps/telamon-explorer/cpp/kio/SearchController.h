@@ -55,6 +55,15 @@ public:
     using SearchDone = std::function<void(Failure failure, const QList<FolderModel::SearchHit> &hits)>;
     // Search(query, limit, options); `done` is not called when `context` is gone.
     void search(const QString &query, uint limit, const QVariantMap &options, QObject *context, SearchDone done);
+    // Tags(): the tags in use (name, number of items), most used first. With
+    // `activate` false the service is only asked when it is running already
+    // (a call would start it). `done(false, {})` when it can't answer; not
+    // called when `context` is gone.
+    using TagsDone = std::function<void(bool ok, const QList<QPair<QString, uint>> &tags)>;
+    void tags(QObject *context, bool activate, TagsDone done);
+    // NotifyChanged(uris): tells the service that these items changed in a way
+    // its watches may not show (a tag). Only when it is running; no answer is waited for.
+    void notifyChanged(const QList<QUrl> &urls);
 
 Q_SIGNALS:
     void stateChanged();
@@ -89,6 +98,9 @@ class SearchController : public QObject
     Q_PROPERTY(int kind READ kind WRITE setKind NOTIFY kindChanged)
     Q_PROPERTY(int modified READ modified WRITE setModified NOTIFY modifiedChanged)
     Q_PROPERTY(int size READ size WRITE setSize NOTIFY sizeChanged)
+    // Only items with this tag (a name; empty for any): the sidebar's Tags
+    // section and the "tag" chip.
+    Q_PROPERTY(QString tag READ tag WRITE setTag NOTIFY tagChanged)
     // Something is being searched for: words or a chip.
     Q_PROPERTY(bool active READ active NOTIFY activeChanged)
     // A live walk is running (the Stop button shows).
@@ -129,6 +141,8 @@ public:
     void setModified(int m);
     int size() const { return m_size; }
     void setSize(int s);
+    QString tag() const { return m_tag; }
+    void setTag(const QString &t);
     bool active() const;
     bool walking() const { return m_walking; }
     bool pending() const { return m_pending; }
@@ -142,6 +156,10 @@ public:
 
     // Ends the search: no words, no chips, the folder shown again.
     Q_INVOKABLE void clear();
+    // Lists every item with the tag, from everywhere: the words and chips are
+    // cleared and the scope is Everywhere (the index, or a walk of the home
+    // folder with a Stop button when the index is off).
+    Q_INVOKABLE void showTag(const QString &name);
     // Stops a live walk; what it found stays.
     Q_INVOKABLE void stop();
     // The field was focused: ask the service for its state now, so the first
@@ -163,6 +181,7 @@ Q_SIGNALS:
     void kindChanged();
     void modifiedChanged();
     void sizeChanged();
+    void tagChanged();
     void activeChanged();
     void walkingChanged();
     void pendingChanged();
@@ -198,6 +217,7 @@ private:
     int m_kind = 0;
     int m_modified = 0;
     int m_size = 0;
+    QString m_tag;
     bool m_wasActive = false;
     SearchService::State m_lastState = SearchService::Unknown;
     bool m_resetting = false;

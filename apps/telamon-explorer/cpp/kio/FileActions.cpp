@@ -4,7 +4,10 @@
 #include "ArchiveGuard.h"
 #include "OpsBridge.h"
 #include "PlacesLogic.h"
+#include "PropsBridge.h"
 #include "RustBridge.h"
+#include "SearchController.h"
+#include "TagLogic.h"
 
 #include <KConfigGroup>
 #include <KDesktopFile>
@@ -15,7 +18,6 @@
 #include <KIO/Paste>
 #include <KJobWindows>
 #include <KProtocolManager>
-#include <KPropertiesDialog>
 #include <KSharedConfig>
 #include <KTerminalLauncherJob>
 #include <KUrlMimeData>
@@ -95,6 +97,14 @@ FileActions::FileActions(QObject *parent)
     connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &FileActions::clipboardChanged);
     connect(m_ops, &OperationQueue::jobFinished, this, &FileActions::jobFinished);
     connect(m_ops, &OperationQueue::resultsReady, this, &FileActions::resultsReady);
+    // Tags, ratings and permissions changed (also by an undo): every folder
+    // shown reads the items again.
+    connect(m_ops, &OperationQueue::attributesChanged, this, [](const QList<QUrl> &urls) {
+        FolderModel::invalidateAttributes(urls);
+        // The index sees an attribute change on its own (inotify); this makes it sure.
+        SearchService::instance()->notifyChanged(urls);
+        TagLogic::noteChanged();
+    });
     m_ops->setArchiveProbe([this] { return archiveInstalled(); });
     connect(&m_templateWatch, &QFileSystemWatcher::directoryChanged, this, &FileActions::loadTemplates);
     clipboardChanged();
@@ -451,6 +461,10 @@ void FileActions::newFile(const QUrl &templateFile)
 
 QVariantMap FileActions::checkName(const QString &name, const QVariantMap &request) const
 {
+    if (request.value(QStringLiteral("mode")).toString() == QLatin1String("tag")) {
+        const QVariantMap c = TagLogic::instance() ? TagLogic::instance()->checkName(name) : QVariantMap{{QStringLiteral("ok"), false}, {QStringLiteral("text"), QString()}};
+        return {{QStringLiteral("ok"), c.value(QStringLiteral("ok"))}, {QStringLiteral("text"), c.value(QStringLiteral("text"))}};
+    }
     const RustCheck check = rustValidateName(name);
     if (!check.ok) {
         return {{QStringLiteral("ok"), false}, {QStringLiteral("text"), check.text}};
@@ -468,6 +482,13 @@ QVariantMap FileActions::checkName(const QString &name, const QVariantMap &reque
 
 void FileActions::acceptName(const QVariantMap &request, const QString &name)
 {
+    if (request.value(QStringLiteral("mode")).toString() == QLatin1String("tag")) {
+        const QVariantMap c = TagLogic::instance() ? TagLogic::instance()->checkName(name) : QVariantMap();
+        if (c.value(QStringLiteral("ok")).toBool()) {
+            toggleTag(request.value(QStringLiteral("urls")).value<QList<QUrl>>(), c.value(QStringLiteral("name")).toString(), true);
+        }
+        return;
+    }
     if (request.value(QStringLiteral("mode")).toString() == QLatin1String("rename")) {
         renameTo(request.value(QStringLiteral("url")).toUrl(), name, true);
     }
@@ -626,10 +647,136 @@ void FileActions::redo()
 void FileActions::showProperties(const QList<QUrl> &urls)
 {
     if (urls.isEmpty() && m_folder) {
-        KPropertiesDialog::showDialog(m_folder->url(), nullptr, false);
+        Q_EMIT propertiesRequested({m_folder->url()});
     } else if (!urls.isEmpty()) {
-        KPropertiesDialog::showDialog(urls.mid(0, 64), nullptr, false);
+        Q_EMIT propertiesRequested(urls.mid(0, 64));
     }
+}
+
+// ---- Tags, ratings and permissions ----
+
+void FileActions::toggleTag(const QList<QUrl> &urls, const QString &name, bool on)
+{
+    if (urls.isEmpty() || name.isEmpty()) {
+        return;
+    }
+    OperationQueue::AttrEdit edit;
+    edit.kind = OperationQueue::AttrEdit::Tags;
+    (on ? edit.add : edit.remove) << name;
+    const QString shown = rustDisplayName(name.toUtf8());
+    m_ops->setAttributes(urls, edit, on ? tr("Tag %1 %2").arg(labelOf(urls), shown) : tr("Remove Tag %1 from %2").arg(shown, labelOf(urls)));
+}
+
+void FileActions::clearTags(const QList<QUrl> &urls)
+{
+    if (urls.isEmpty()) {
+        return;
+    }
+    OperationQueue::AttrEdit edit;
+    edit.kind = OperationQueue::AttrEdit::Tags;
+    edit.clearAll = true;
+    m_ops->setAttributes(urls, edit, tr("Clear Tags of %1").arg(labelOf(urls)));
+}
+
+void FileActions::newTag(const QList<QUrl> &urls)
+{
+    if (urls.isEmpty()) {
+        return;
+    }
+    Q_EMIT namePromptRequested({{QStringLiteral("mode"), QStringLiteral("tag")},
+                                {QStringLiteral("title"), tr("New Tag")},
+                                {QStringLiteral("label"), tr("Tag name:")},
+                                {QStringLiteral("initial"), QString()},
+                                {QStringLiteral("okText"), tr("Add Tag")},
+                                {QStringLiteral("urls"), QVariant::fromValue(urls)},
+                                {QStringLiteral("isDir"), true}});
+}
+
+void FileActions::setRating(const QList<QUrl> &urls, int rating)
+{
+    if (urls.isEmpty()) {
+        return;
+    }
+    OperationQueue::AttrEdit edit;
+    edit.kind = OperationQueue::AttrEdit::Rating;
+    edit.rating = qBound(0, rating, 10);
+    m_ops->setAttributes(urls, edit, edit.rating == 0 ? tr("Clear Rating of %1").arg(labelOf(urls)) : tr("Rate %1").arg(labelOf(urls)));
+}
+
+void FileActions::setPermissions(const QList<QUrl> &urls, uint setBits, uint clearBits, bool recursive)
+{
+    if (urls.isEmpty() || ((setBits | clearBits) & 0777) == 0) {
+        return;
+    }
+    OperationQueue::AttrEdit edit;
+    edit.kind = recursive ? OperationQueue::AttrEdit::ModeTree : OperationQueue::AttrEdit::Mode;
+    edit.setBits = setBits & 0777;
+    edit.clearBits = clearBits & 0777;
+    m_ops->setAttributes(urls, edit, tr("Change Permissions of %1").arg(labelOf(urls)));
+}
+
+// What the Tags submenu offers for these items, from what the folder has read
+// of their tags (nothing is read here). {available, why, colours: [{name,
+// colour, state}], named: [{name, text, state}], hasTags}; state 0 no item has
+// the tag, 1 some, 2 all.
+QVariantMap FileActions::tagMenu(const QList<QUrl> &urls) const
+{
+    QString why;
+    QList<QStringList> lists;
+    bool any = false;
+    for (const QUrl &u : urls) {
+        if (!u.isLocalFile()) {
+            why = tr("This location can't keep tags.");
+            lists << QStringList();
+            continue;
+        }
+        const FolderModel::TagInfo info = m_folder ? m_folder->tagInfoOf(u) : FolderModel::TagInfo();
+        lists << info.names;
+        any = any || !info.names.isEmpty();
+        if (info.known && info.status != 0) {
+            QString t = QString::fromUtf8(PropsBridge::bytesOf([&](uint8_t *o, size_t c) { return telamon_tags_status_text(uint32_t(info.status), o, c); }));
+            if (why.isEmpty() || info.status == 1) {
+                why = t;
+            }
+        }
+    }
+    QByteArray packed;
+    for (qsizetype i = 0; i < lists.size(); ++i) {
+        if (i > 0) {
+            packed.append('\x1e');
+        }
+        packed += lists.at(i).join(QLatin1Char('\n')).toUtf8();
+    }
+    auto stateOf = [&](const QString &name) {
+        const QByteArray n = name.toUtf8();
+        return int(telamon_tags_have(PropsBridge::p(packed), PropsBridge::n(packed), PropsBridge::p(n), PropsBridge::n(n)));
+    };
+    QVariantList colours, named;
+    QStringList seenNames;
+    for (const QVariant &c : TagLogic::instance() ? TagLogic::instance()->colours() : QVariantList()) {
+        const QVariantMap m = c.toMap();
+        colours << QVariantMap{{QStringLiteral("name"), m.value(QStringLiteral("name"))}, {QStringLiteral("colour"), m.value(QStringLiteral("colour"))},
+                               {QStringLiteral("state"), stateOf(m.value(QStringLiteral("name")).toString())}};
+    }
+    // Named tags: those on the items first, then the ones in use elsewhere.
+    QStringList candidates;
+    for (const QStringList &l : std::as_const(lists)) {
+        candidates << l;
+    }
+    if (TagLogic::instance()) {
+        for (const QVariant &t : TagLogic::instance()->sidebarTags()) {
+            candidates << t.toMap().value(QStringLiteral("name")).toString();
+        }
+    }
+    for (const QString &name : std::as_const(candidates)) {
+        if (!PropsBridge::colourOf(name).isEmpty() || seenNames.contains(name, Qt::CaseInsensitive) || named.size() >= 12) {
+            continue;
+        }
+        seenNames << name;
+        named << QVariantMap{{QStringLiteral("name"), name}, {QStringLiteral("text"), rustDisplayName(name.toUtf8())}, {QStringLiteral("state"), stateOf(name)}};
+    }
+    return {{QStringLiteral("available"), why.isEmpty()}, {QStringLiteral("why"), why},     {QStringLiteral("colours"), colours},
+            {QStringLiteral("named"), named},              {QStringLiteral("hasTags"), any}};
 }
 
 void FileActions::openTerminal(const QUrl &folder)
@@ -875,7 +1022,8 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
             {QStringLiteral("pasteIntoFolder"), telamon_menu_paste_into_folder(size_t(items.size()), size_t(folders))},
             {QStringLiteral("terminalFolder"), terminal},
             {QStringLiteral("openWith"), openWith},
-            {QStringLiteral("services"), services}};
+            {QStringLiteral("services"), services},
+            {QStringLiteral("tags"), tagMenu(itemUrls)}};
 }
 
 QVariantMap FileActions::backgroundMenu()

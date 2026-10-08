@@ -21,6 +21,7 @@ Options:
   --modified 7d   changed within the last 7 days (units: s, m, h, d, w)
   --larger 10M    at least this big (units: K, M, G, T; plain numbers are bytes)
   --smaller 1G    at most this big
+  --tag NAME      only files and folders tagged NAME (ignoring case)
   --limit N       at most N results (1 to 500, default 20)
   --json          print the results as a JSON array
   -h, --help      show this help
@@ -40,6 +41,7 @@ pub struct Args {
     pub modified_after: Option<i64>,
     pub size_min: Option<u64>,
     pub size_max: Option<u64>,
+    pub tag: Option<String>,
     pub limit: u32,
     pub json: bool,
 }
@@ -51,6 +53,7 @@ pub enum Parsed {
 }
 
 const MAX_QUERY: usize = 1024;
+const MAX_TAG: usize = 512;
 
 /// `7d`, `12h`, `90m`, `30s`, `2w` (a plain number is seconds), in seconds.
 pub fn parse_duration(s: &str) -> Result<u64, String> {
@@ -190,6 +193,14 @@ pub fn parse_at(mut args: impl Iterator<Item = OsString>, now: i64) -> Result<Pa
             }
             "--larger" => a.size_min = Some(parse_size(&text(args.next(), "--larger")?)?),
             "--smaller" => a.size_max = Some(parse_size(&text(args.next(), "--smaller")?)?),
+            "--tag" => {
+                let t = text(args.next(), "--tag")?;
+                let t = t.trim();
+                if t.is_empty() || t.len() > MAX_TAG {
+                    return Err(format!("--tag needs a tag name (at most {MAX_TAG} bytes)"));
+                }
+                a.tag = Some(t.to_string());
+            }
             "--limit" => {
                 let v = text(args.next(), "--limit")?;
                 let n: u32 = v.parse().map_err(|_| format!("'{v}' is not a number"))?;
@@ -211,10 +222,11 @@ pub fn parse_at(mut args: impl Iterator<Item = OsString>, now: i64) -> Result<Pa
         || a.root_uri.is_some()
         || a.modified_after.is_some()
         || a.size_min.is_some()
-        || a.size_max.is_some();
+        || a.size_max.is_some()
+        || a.tag.is_some();
     if a.query.trim().is_empty() && !has_filter {
         return Err(
-            "give a query, or at least one filter (--kind, --in, --modified, --larger, --smaller)"
+            "give a query, or at least one filter (--kind, --in, --modified, --larger, --smaller, --tag)"
                 .into(),
         );
     }
@@ -267,6 +279,8 @@ mod tests {
             "10M",
             "--smaller",
             "1G",
+            "--tag",
+            " Taxes 2025 ",
             "--limit",
             "5",
             "--json",
@@ -280,6 +294,7 @@ mod tests {
         assert_eq!(a.modified_after, Some(1_000_000 - 604_800));
         assert_eq!((a.size_min, a.size_max), (Some(10 << 20), Some(1 << 30)));
         assert_eq!(a.limit, 5);
+        assert_eq!(a.tag.as_deref(), Some("Taxes 2025"));
         assert!(a.json);
         assert_eq!(
             run(&["--kind", "folder", "x"]).kind.as_deref(),
@@ -306,12 +321,21 @@ mod tests {
             &["--bogus", "x"],
             &["--modified", "soon", "x"],
             &["--larger", "big", "x"],
+            &["--tag"],
+            &["--tag", "", "x"],
+            &["--tag", "   ", "x"],
             &["  "],
         ] {
             let e = p(bad).expect_err(&format!("{bad:?}"));
             assert!(!e.is_empty());
         }
         assert!(p(&["--kind", "image"]).is_ok(), "a filter alone is a query");
+        assert_eq!(
+            run(&["--tag", "Red"]).tag.as_deref(),
+            Some("Red"),
+            "a tag alone is a query"
+        );
+        assert_eq!(run(&["x"]).tag, None);
         assert!(p(&["x".repeat(2000).as_str()]).is_err());
         assert_eq!(p(&["--help"]), Ok(Parsed::Help));
     }
