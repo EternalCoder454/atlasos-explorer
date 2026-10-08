@@ -172,6 +172,7 @@ Q_SIGNALS:
     void failureChanged();
 
 private:
+    QUrl searchFolder() const;
     void changed();
     void run();
     void startRoute(quint64 serial);

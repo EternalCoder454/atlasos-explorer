@@ -10,11 +10,14 @@
 #include <QAbstractListModel>
 #include <QItemSelection>
 #include <QMimeDatabase>
+#include <QPointer>
 #include <QQmlEngine>
 #include <QSet>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
+
+class QTcpSocket;
 
 class FolderModel : public QAbstractListModel
 {
@@ -49,6 +52,18 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(bool grouped READ grouped NOTIFY groupChanged)
     // Bumped when the groups were worked out again (the headers' counts are read again).
     Q_PROPERTY(int groupRevision READ groupRevision NOTIFY groupRevisionChanged)
+    // "home" or "network" while `url` is one of Files' own pages (the window
+    // draws the page; nothing is listed), else empty.
+    Q_PROPERTY(QString pageKind READ pageKind NOTIFY urlChanged)
+    // The folder is on a server (smb, sftp, ftp, webdav, nfs ...).
+    Q_PROPERTY(bool onServer READ onServer NOTIFY urlChanged)
+    // "Not encrypted" for a folder on FTP, plain WebDAV or NFS; empty otherwise.
+    Q_PROPERTY(QString securityNote READ securityNote NOTIFY urlChanged)
+    // The server did not answer (or refused the connection): errorText says
+    // so in plain words and Retry lists the folder again.
+    Q_PROPERTY(bool unreachable READ unreachable NOTIFY unreachableChanged)
+    // The listing was stopped by the user.
+    Q_PROPERTY(bool stopped READ stopped NOTIFY stoppedChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
@@ -114,6 +129,11 @@ public:
     QUrl url() const { return m_url; }
     void setUrl(const QUrl &url);
     bool inArchive() const;
+    QString pageKind() const;
+    bool onServer() const;
+    QString securityNote() const;
+    bool unreachable() const { return m_unreachable; }
+    bool stopped() const { return m_stopped; }
     bool loading() const { return m_loading; }
     QString errorText() const { return m_error; }
     QString notice() const { return m_notice; }
@@ -150,6 +170,10 @@ public:
     Q_INVOKABLE void pruneSearchResults();
 
     Q_INVOKABLE void refresh();
+    // Stops listing (the Stop button): what has arrived stays.
+    Q_INVOKABLE void stop();
+    // The thumbnails are asked for again (the Settings switch for previews on servers changed).
+    Q_INVOKABLE void thumbnailsChanged();
     Q_INVOKABLE QUrl urlAt(int row) const;
     Q_INVOKABLE int rowOfUrl(const QUrl &url) const;
     Q_INVOKABLE QVariantList urlsOf(const QVariantList &rows) const;
@@ -202,6 +226,10 @@ Q_SIGNALS:
     void groupRevisionChanged();
     // Refresh (F5, the Retry button) while searching: run the search again.
     void searchRefreshRequested();
+    // Refresh (F5) on one of Files' own pages: the page reads its data again.
+    void pageRefreshRequested();
+    void unreachableChanged();
+    void stoppedChanged();
 
 private:
     struct Entry {
@@ -251,6 +279,15 @@ private:
     void resetRows();
     void setLoading(bool on);
     void setError(const QString &text);
+    void setUnreachable(bool on);
+    // A connection test to the server, with a 10 s limit: a server that does
+    // not answer shows "Can't reach the server" and Retry instead of waiting
+    // for KIO's much longer timeouts. Once the server accepts the connection
+    // the test is over and KIO's job alone goes on (it may be waiting for a
+    // password; Stop ends it).
+    void startProbe(const QUrl &url);
+    void stopProbe();
+    void onUnreachable();
     void addItems(const KFileItemList &items);
     void removeItems(const KFileItemList &items);
     void refreshItems(const QList<QPair<KFileItem, KFileItem>> &items);
@@ -292,6 +329,10 @@ private:
     bool m_sortDirty = false;
     bool m_sortRunning = false;
     bool m_gone = false;
+    bool m_unreachable = false;
+    bool m_stopped = false;
+    QPointer<QTcpSocket> m_probe;
+    QTimer m_probeTimer;
     bool m_searching = false;
     quint32 m_nextRank = 0;
     // The sort the folder had before the search, back when it ends.

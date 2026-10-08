@@ -113,6 +113,7 @@ pub const LAUNCH_SCHEMES: &[&str] = &[
     "trash",
     "recentlyused",
     "network",
+    "home",
     "remote",
     "desktop",
     "mtp",

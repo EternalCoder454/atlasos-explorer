@@ -111,6 +111,10 @@ qt_add_qml_module(telamon-explorer-app
         qml/ColumnList.qml
         qml/GalleryView.qml
         qml/GroupHeader.qml
+        qml/HomePage.qml
+        qml/HomeTile.qml
+        qml/NetworkPage.qml
+        qml/ConnectDialog.qml
     SOURCES
         cpp/kio/FolderModel.h cpp/kio/FolderModel.cpp
         cpp/kio/StandardPlaces.h cpp/kio/StandardPlaces.cpp
@@ -130,6 +134,9 @@ qt_add_qml_module(telamon-explorer-app
         cpp/kio/PreviewLoader.h cpp/kio/PreviewLoader.cpp
         cpp/kio/ViewMemory.h cpp/kio/ViewMemory.cpp
         cpp/kio/GroupLines.h cpp/kio/GroupLines.cpp
+        cpp/kio/HomeLogic.h cpp/kio/HomeLogic.cpp
+        cpp/kio/ServerLogic.h cpp/kio/ServerLogic.cpp
+        cpp/kio/NetworkModel.h cpp/kio/NetworkModel.cpp
         cpp/kio/RustBridge.h
 )
 

@@ -618,6 +618,16 @@ void SearchController::run()
     startRoute(serial);
 }
 
+// The folder a search of "this folder" looks in: on Files' own pages (Home,
+// Network) there is no folder to look in, so it is the home folder.
+QUrl SearchController::searchFolder() const
+{
+    if (m_folder && !m_folder->pageKind().isEmpty()) {
+        return QUrl::fromLocalFile(QDir::homePath());
+    }
+    return m_folder ? m_folder->url() : QUrl();
+}
+
 void SearchController::startRoute(quint64 serial)
 {
     SearchService *svc = SearchService::instance();
@@ -626,7 +636,7 @@ void SearchController::startRoute(quint64 serial)
             return;
         }
         SearchService *svc = SearchService::instance();
-        const QUrl folder = m_folder->url();
+        const QUrl folder = searchFolder();
         // Whether the index holds the folder is asked of a worker: it reads a few folders.
         if (m_scope == 0 && folder.isLocalFile() && telamon_search_index_on(uint32_t(svc->state()))) {
             const QString path = folder.toLocalFile();
@@ -664,7 +674,7 @@ void SearchController::routeNow(quint64 serial, bool covered)
         return;
     }
     SearchService *svc = SearchService::instance();
-    const QUrl folder = m_folder->url();
+    const QUrl folder = searchFolder();
     const Route r = Route(telamon_search_route(uint32_t(m_scope), folder.isLocalFile(), covered, telamon_search_index_on(uint32_t(svc->state()))));
     setRoute(r);
     switch (r) {
@@ -710,7 +720,7 @@ void SearchController::searchIndex(quint64 serial, Route route)
         o.insert(QStringLiteral("include_hidden"), true);
     }
     if (route == IndexFolder && m_folder) {
-        o.insert(QStringLiteral("root"), QString::fromLatin1(m_folder->url().toEncoded()));
+        o.insert(QStringLiteral("root"), QString::fromLatin1(searchFolder().toEncoded()));
     }
     const uint limit = uint(telamon_search_limit(0));
     SearchService::instance()->search(m_text.trimmed(), limit, o, this, [this, serial, route, limit](SearchService::Failure failure, const QList<FolderModel::SearchHit> &hits) {

@@ -523,6 +523,11 @@ void PlacesLogic::open(const QString &key, bool newTab)
         emit message(tr("Can't open %1.").arg(e.text));
         return;
     }
+    // The Home place opens the Home page; the folder is "Home Folder" on it.
+    if (e.kind == Folder && e.section == Favourites && isHomeFolder(e.url)) {
+        emit openRequested(QUrl(QStringLiteral("home:/")), newTab);
+        return;
+    }
     emit openRequested(e.url, newTab);
 }
 
@@ -601,7 +606,18 @@ void PlacesLogic::moveTo(const QString &src, const QString &dst)
 
 bool PlacesLogic::sameLocation(const QUrl &a, const QUrl &b) const
 {
+    // The Home page and the home folder are one place in the sidebar.
+    const bool pageA = a.scheme() == QLatin1String("home");
+    const bool pageB = b.scheme() == QLatin1String("home");
+    if (a.isValid() && b.isValid() && pageA != pageB) {
+        return isHomeFolder(pageA ? b : a);
+    }
     return a.isValid() && b.isValid() && normalized(a) == normalized(b);
+}
+
+bool PlacesLogic::isHomeFolder(const QUrl &u) const
+{
+    return u.isLocalFile() && QDir::cleanPath(u.toLocalFile()) == QDir::cleanPath(QDir::homePath());
 }
 
 bool PlacesLogic::isPinned(const QUrl &url) const
@@ -753,6 +769,31 @@ void PlacesLogic::pinFolder(const QUrl &url)
         self->pinDirs({url}, QString());
     });
     job->start();
+}
+
+void PlacesLogic::pinServer(const QUrl &address)
+{
+    const QUrl url = address.adjusted(QUrl::RemovePassword);
+    // A server: a name to connect to, and a scheme that can be opened again.
+    if (!url.isValid() || url.host().isEmpty() || !rustPlacesPinnable(url.scheme())) {
+        emit message(tr("This server can't be added to the sidebar."));
+        return;
+    }
+    const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const QString host = clean(url.host());
+    const QString label = parts.isEmpty() ? host : tr("%1 on %2").arg(clean(parts.last()), host);
+    const QModelIndex have = indexForUrl(url);
+    if (have.isValid()) {
+        if (m_src->isHidden(have)) {
+            m_src->setPlaceHidden(have, false);
+            emit message(tr("%1 is back in the sidebar.").arg(label));
+        } else {
+            emit message(tr("%1 is already in the sidebar.").arg(label));
+        }
+        return;
+    }
+    m_src->addPlace(rustPlacesText(0, label), url, QStringLiteral("folder-remote"), QString(), QModelIndex());
+    emit message(tr("%1 was added to the sidebar.").arg(label));
 }
 
 QString PlacesLogic::nameOf(const QString &key) const

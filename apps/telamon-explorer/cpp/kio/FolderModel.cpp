@@ -1,6 +1,7 @@
 #include "FolderModel.h"
 
 #include "RustBridge.h"
+#include "ServerLogic.h"
 
 #include <KIO/Global>
 #include <KIO/Job>
@@ -12,6 +13,7 @@
 #include <QFileInfo>
 #include <QLocale>
 #include <QSet>
+#include <QTcpSocket>
 
 #include <sys/stat.h>
 
@@ -22,6 +24,37 @@
 
 namespace
 {
+// What a server that doesn't answer is told in (F101: plain words).
+QString unreachableText()
+{
+    return FolderModel::tr("Can't reach the server. Check the address and that it is on.");
+}
+
+// The errors that mean the server could not be reached at all.
+bool unreachableCode(int code)
+{
+    switch (code) {
+    case KIO::ERR_WORKER_DIED:
+    case KIO::ERR_CANNOT_CONNECT:
+    case KIO::ERR_UNKNOWN_HOST:
+    case KIO::ERR_SERVER_TIMEOUT:
+    case KIO::ERR_CONNECTION_BROKEN:
+    case KIO::ERR_UNKNOWN_PROXY_HOST:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Files' own pages: the window draws them and nothing is listed.
+QString pageOf(const QUrl &url)
+{
+    const QString s = url.scheme().toLower();
+    return s == QLatin1String("home") || s == QLatin1String("network") ? s : QString();
+}
+
+constexpr int ProbeTimeoutMs = 10000;
+
 QString errorMessage(KIO::Job *job, bool archive)
 {
     // Plain words, never the job's own text: it can hold file names.
@@ -39,7 +72,14 @@ QString errorMessage(KIO::Job *job, bool archive)
     case KIO::ERR_CANNOT_CONNECT:
     case KIO::ERR_UNKNOWN_HOST:
     case KIO::ERR_SERVER_TIMEOUT:
-        return FolderModel::tr("Couldn't reach the server.");
+    case KIO::ERR_CONNECTION_BROKEN:
+    case KIO::ERR_UNKNOWN_PROXY_HOST:
+        return unreachableText();
+    case KIO::ERR_CANNOT_LOGIN:
+    case KIO::ERR_CANNOT_AUTHENTICATE:
+        return FolderModel::tr("Couldn't sign in. Check the user name and password.");
+    case KIO::ERR_USER_CANCELED:
+        return FolderModel::tr("The connection was canceled.");
     case KIO::ERR_UNSUPPORTED_PROTOCOL:
         return FolderModel::tr("This kind of location isn't supported.");
     default:
@@ -67,46 +107,49 @@ FolderModel::FolderModel(QObject *parent)
     m_hiddenTimer.setSingleShot(true);
     m_hiddenTimer.setInterval(100);
     connect(&m_hiddenTimer, &QTimer::timeout, this, &FolderModel::recountHidden);
+    m_probeTimer.setSingleShot(true);
+    m_probeTimer.setInterval(ProbeTimeoutMs);
+    connect(&m_probeTimer, &QTimer::timeout, this, &FolderModel::onUnreachable);
 
     // While the rows are search results the lister is stopped and its signals
     // change nothing; the folder is listed again when the search ends.
     connect(m_lister, &KCoreDirLister::itemsAdded, this, [this](const QUrl &, const KFileItemList &items) {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             addItems(items);
         }
     });
     connect(m_lister, &KCoreDirLister::itemsDeleted, this, [this](const KFileItemList &items) {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             removeItems(items);
         }
     });
     connect(m_lister, &KCoreDirLister::refreshItems, this, [this](const QList<QPair<KFileItem, KFileItem>> &items) {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             refreshItems(items);
         }
     });
     connect(m_lister, &KCoreDirLister::clear, this, [this] {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             resetRows();
         }
     });
     connect(m_lister, &KCoreDirLister::completed, this, [this] {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             onCompleted();
         }
     });
     connect(m_lister, &KCoreDirLister::canceled, this, [this] {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             setLoading(false);
         }
     });
     connect(m_lister, &KCoreDirLister::jobError, this, [this](KIO::Job *job) {
-        if (!m_searching) {
+        if (!m_searching && pageKind().isEmpty()) {
             onJobError(job);
         }
     });
     connect(m_lister, &KCoreDirLister::redirection, this, [this](const QUrl &, const QUrl &to) {
-        if (m_searching) {
+        if (m_searching || !pageKind().isEmpty()) {
             return;
         }
         m_url = to;
@@ -148,6 +191,24 @@ QHash<int, QByteArray> FolderModel::roleNames() const
 bool FolderModel::inArchive() const
 {
     return !m_searching && rustArchiveScheme(m_url.scheme());
+}
+
+QString FolderModel::pageKind() const
+{
+    return pageOf(m_url);
+}
+
+bool FolderModel::onServer() const
+{
+    return !m_searching && ServerLogic::isServerScheme(m_url.scheme()) && !m_url.host().isEmpty();
+}
+
+QString FolderModel::securityNote() const
+{
+    if (!ServerLogic::isServerScheme(m_url.scheme())) {
+        return QString();
+    }
+    return QString::fromUtf8(rustBytes(telamon_servers_note, m_url.toString(QUrl::FullyEncoded | QUrl::RemovePassword).toUtf8()));
 }
 
 bool FolderModel::isCut(const KFileItem &item) const
@@ -260,7 +321,9 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
         return e.path;
     case ThumbnailSourceRole: {
         const QUrl u = e.item.url();
-        if (e.isDir || !u.isLocalFile()) {
+        // A file on a server gets a thumbnail only if the Settings switch says
+        // so: downloading a file to draw it is the user's choice.
+        if (e.isDir || (!u.isLocalFile() && !(ServerLogic::previewRemoteEnabled() && ServerLogic::isServerScheme(u.scheme())))) {
             return QString();
         }
         return QStringLiteral("image://thumb/") + QString::fromLatin1(u.toEncoded().toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals))
@@ -299,6 +362,12 @@ void FolderModel::open(const QUrl &url, const QString &notice)
         Q_EMIT noticeChanged();
     }
     setError(QString());
+    setUnreachable(false);
+    stopProbe();
+    if (m_stopped) {
+        m_stopped = false;
+        Q_EMIT stoppedChanged();
+    }
     if (m_canWrite) {
         m_canWrite = false;
         Q_EMIT canWriteChanged();
@@ -311,7 +380,14 @@ void FolderModel::open(const QUrl &url, const QString &notice)
         setError(tr("This location can't be shown."));
         return;
     }
+    if (!pageOf(url).isEmpty()) {
+        // One of Files' own pages: whatever was being listed is let go.
+        m_lister->stop();
+        setLoading(false);
+        return;
+    }
     setLoading(true);
+    startProbe(url);
     m_lister->openUrl(url, KCoreDirLister::NoFlags);
 }
 
@@ -324,9 +400,102 @@ void FolderModel::refresh()
     if (!m_url.isValid()) {
         return;
     }
+    if (!pageKind().isEmpty()) {
+        Q_EMIT pageRefreshRequested();
+        return;
+    }
     setError(QString());
+    setUnreachable(false);
+    stopProbe();
+    if (m_stopped) {
+        m_stopped = false;
+        Q_EMIT stoppedChanged();
+    }
     setLoading(true);
+    startProbe(m_url);
     m_lister->openUrl(m_url, KCoreDirLister::Reload);
+}
+
+void FolderModel::stop()
+{
+    if (m_searching || !pageKind().isEmpty()) {
+        return;
+    }
+    stopProbe();
+    m_lister->stop();
+    setLoading(false);
+    if (!m_stopped) {
+        m_stopped = true;
+        Q_EMIT stoppedChanged();
+    }
+}
+
+void FolderModel::thumbnailsChanged()
+{
+    if (m_rows.isEmpty()) {
+        return;
+    }
+    Q_EMIT dataChanged(index(0, 0), index(int(m_rows.size()) - 1, 0), {ThumbnailSourceRole});
+}
+
+void FolderModel::setUnreachable(bool on)
+{
+    if (m_unreachable != on) {
+        m_unreachable = on;
+        Q_EMIT unreachableChanged();
+    }
+}
+
+void FolderModel::startProbe(const QUrl &url)
+{
+    stopProbe();
+    const int port = url.port(ServerLogic::defaultPort(url.scheme()));
+    if (url.host().isEmpty() || !ServerLogic::isServerScheme(url.scheme()) || port <= 0) {
+        return;
+    }
+    auto *sock = new QTcpSocket(this);
+    m_probe = sock;
+    // The server accepts the connection: it is there, and from here on only
+    // KIO's job is waited for (a password may be asked for; Stop ends it).
+    connect(sock, &QTcpSocket::connected, this, [this] { stopProbe(); });
+    connect(sock, &QAbstractSocket::errorOccurred, this, [this, url](QAbstractSocket::SocketError error) {
+        // A Windows name may only resolve through NetBIOS, which KIO's SMB
+        // worker tries and this test does not: not a verdict.
+        if (error == QAbstractSocket::HostNotFoundError && url.scheme() == QLatin1String("smb")) {
+            stopProbe();
+            return;
+        }
+        onUnreachable();
+    });
+    m_probeTimer.start();
+    sock->connectToHost(url.host(), quint16(port));
+}
+
+void FolderModel::stopProbe()
+{
+    m_probeTimer.stop();
+    if (m_probe) {
+        QTcpSocket *sock = m_probe;
+        m_probe = nullptr;
+        sock->disconnect(this);
+        sock->abort();
+        sock->deleteLater();
+    }
+}
+
+// Nothing answered in time, or the connection was refused or has no route:
+// the listing stops and the page says so, with Retry.
+void FolderModel::onUnreachable()
+{
+    if (!m_probe) {
+        return;
+    }
+    stopProbe();
+    ++m_structGen;
+    m_lister->stop();
+    setLoading(false);
+    setError(unreachableText());
+    setUnreachable(true);
 }
 
 void FolderModel::resetRows()
@@ -378,6 +547,8 @@ void FolderModel::recountHidden()
 
 void FolderModel::addItems(const KFileItemList &items)
 {
+    // The server is answering.
+    stopProbe();
     if (items.isEmpty()) {
         return;
     }
@@ -467,6 +638,7 @@ void FolderModel::refreshItems(const QList<QPair<KFileItem, KFileItem>> &items)
 
 void FolderModel::onCompleted()
 {
+    stopProbe();
     setLoading(false);
     m_hiddenTimer.start();
     m_listedUrl = m_url;
@@ -490,12 +662,14 @@ void FolderModel::onJobError(KIO::Job *job)
         return;
     }
     const int code = job->error();
+    stopProbe();
     setLoading(false);
     if (code == KIO::ERR_DOES_NOT_EXIST && m_url.isLocalFile() && !m_gone && m_listedUrl == m_url) {
         folderGone(QString());
         return;
     }
     setError(errorMessage(job, inArchive()));
+    setUnreachable(unreachableCode(code) && onServer());
 }
 
 // The folder is gone: the nearest parent that exists is shown instead.

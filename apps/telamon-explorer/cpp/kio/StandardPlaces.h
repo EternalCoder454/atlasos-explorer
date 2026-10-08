@@ -14,8 +14,9 @@ class StandardPlaces : public QObject
 public:
     explicit StandardPlaces(QObject *parent = nullptr);
 
-    // home, desktop, documents, downloads, pictures, music, videos, recent,
-    // network or trash; an unknown key gives the home folder.
+    // home, homepage (Files' Home page), desktop, documents, downloads,
+    // pictures, music, videos, recent, network or trash; an unknown key gives
+    // the home folder.
     Q_INVOKABLE QUrl place(const QString &key) const;
     // The folder above url (url itself at the top).
     Q_INVOKABLE QUrl parentUrl(const QUrl &url) const;
