@@ -182,7 +182,7 @@ Item {
                     id: git
                     anchors.verticalCenter: parent.verticalCenter
                     code: row.gitBadge
-                    dot: Math.round(col.iconSide * 0.6)
+                    dot: Math.round(col.iconSide * 0.8)
                 }
                 Symbol {
                     id: chevron

@@ -26,9 +26,11 @@ TelamonPreferencesDialog {
     preferredWidth: Kirigami.Units.gridUnit * 50
     stateKey: "files"
 
-    // Shows the page `index` (0 General ... 4 Trash).
+    // Shows the page `index` (0 General ... 4 Trash); with none, the page that was shown last.
     function showPage(index) {
-        currentIndex = index;
+        if (index !== undefined) {
+            currentIndex = index;
+        }
         open();
     }
     onAboutToShow: {

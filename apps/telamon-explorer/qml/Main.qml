@@ -744,7 +744,7 @@ TelamonWindow {
     // The one place every setting is changed (Ctrl+, the View menu, the tab
     // menu). `page` is 0 General, 1 View, 2 Search, 3 Context Menu and Actions, 4 Trash.
     function openSettings(page) {
-        settingsDialog.showPage(page ?? 0);
+        settingsDialog.showPage(page);
     }
     SettingsDialog {
         id: settingsDialog
@@ -1460,6 +1460,38 @@ TelamonWindow {
         }
     }
 
+    // A dialog or menu that closes leaves the keyboard nowhere (the window's
+    // own item has it): it goes back to what the tab shows, so the arrow keys,
+    // the Menu key and the shortcuts of the view work again without a click.
+    // No item has the keyboard: only the window's own root (or content) item.
+    function nowhereFocused() {
+        // The window's root item has no parent.
+        return activeFocusItem === null || activeFocusItem.parent === null || activeFocusItem === contentItem;
+    }
+    onActiveFocusItemChanged: {
+        if (nowhereFocused()) {
+            lostFocusTimer.restart();
+        }
+    }
+    Timer {
+        id: startFocusTimer
+        interval: 150
+        onTriggered: {
+            if (root.page) {
+                root.page.focusContent();
+            }
+        }
+    }
+    Timer {
+        id: lostFocusTimer
+        interval: 80
+        onTriggered: {
+            if (root.nowhereFocused() && root.page) {
+                root.page.focusContent();
+            }
+        }
+    }
+
     Component.onCompleted: {
         DragWatch.attach(root);
         PreviewLogic.rowDefault = Kirigami.Units.gridUnit * 2;
@@ -1482,6 +1514,8 @@ TelamonWindow {
             addTab(startUrl(), {});
         }
         TrashLogic.begin();
+        // The keyboard starts on what the tab shows (the arrow keys work at once).
+        startFocusTimer.restart();
     }
 
     // The keys. Those that mean something to a text field are off while the
@@ -1517,7 +1551,7 @@ TelamonWindow {
     Shortcut { sequence: "Alt+Right"; enabled: !root.typing; onActivated: root.goForward() }
     Shortcut { sequence: "F5"; enabled: !root.typing && !root.split; onActivated: { if (root.view) root.view.folder.refresh(); } }
     Shortcut { sequence: "Ctrl+R"; enabled: !root.typing; onActivated: { if (root.view) root.view.folder.refresh(); } }
-    Shortcut { sequences: ["Ctrl+,", "Ctrl+Comma"]; enabled: !quickLook.opened; onActivated: root.openSettings(0) }
+    Shortcut { sequences: ["Ctrl+,", "Ctrl+Comma"]; enabled: !quickLook.opened; onActivated: root.openSettings() }
     Shortcut { sequence: "Ctrl+Shift+K"; enabled: !quickLook.opened && !connectDialog.opened; onActivated: connectDialog.ask() }
     Shortcut { sequence: "Ctrl+T"; onActivated: root.newTab() }
     Shortcut { sequence: "Ctrl+W"; onActivated: root.closeTab(root.currentIndex) }
@@ -1579,7 +1613,7 @@ TelamonWindow {
         ContextMenuSeparator {}
         ContextMenuItem { text: qsTr("Restore Tabs on Start"); checkable: true; checked: root.restoreTabs; onTriggered: root.setRestoreTabs(!root.restoreTabs) }
         ContextMenuSeparator {}
-        ContextMenuItem { text: qsTr("Settings…"); shortcutText: "Ctrl+,"; onTriggered: root.openSettings(0) }
+        ContextMenuItem { text: qsTr("Settings…"); shortcutText: "Ctrl+,"; onTriggered: root.openSettings() }
     }
 
     // The menu of a tab (right click on it).

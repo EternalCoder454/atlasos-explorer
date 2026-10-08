@@ -43,7 +43,7 @@ ContextMenu {
     ContextMenuItem { text: qsTr("Preview Files on Servers"); checkable: true; checked: ServerLogic.previewRemote; onTriggered: menu.win.setPreviewRemote(!ServerLogic.previewRemote) }
     ContextMenuSeparator {}
     // Every setting is in the Settings window; the switches above are the quick ones.
-    ContextMenuItem { text: qsTr("Settings…"); shortcutText: "Ctrl+,"; onTriggered: menu.win.openSettings(0) }
+    ContextMenuItem { text: qsTr("Settings…"); shortcutText: "Ctrl+,"; onTriggered: menu.win.openSettings() }
     ContextMenuSeparator {}
     ContextMenuItem { text: qsTr("Zoom In"); shortcutText: "Ctrl++"; onTriggered: menu.win.zoom(1) }
     ContextMenuItem { text: qsTr("Zoom Out"); shortcutText: "Ctrl+-"; onTriggered: menu.win.zoom(-1) }

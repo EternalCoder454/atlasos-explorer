@@ -327,7 +327,7 @@ Item {
                         anchors.rightMargin: Kirigami.Units.largeSpacing
                         anchors.verticalCenter: parent.verticalCenter
                         code: row.gitBadge
-                        dot: Math.round(root.iconSide * 0.6)
+                        dot: Math.round(root.iconSide * 0.8)
                     }
                     TagDots {
                         id: dots
