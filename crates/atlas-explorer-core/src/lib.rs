@@ -4,6 +4,7 @@
 
 pub mod address;
 pub mod archive;
+pub mod batch;
 pub mod conflict;
 pub mod display;
 pub mod group;

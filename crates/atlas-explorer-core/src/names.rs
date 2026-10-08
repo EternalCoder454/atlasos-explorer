@@ -113,6 +113,17 @@ pub(crate) fn split_ext(name: &str) -> (&str, &str) {
     (&name[..dot], ext)
 }
 
+/// How many bytes of `name` an in-place rename selects first: all of a
+/// folder's name, and a file's name without its extension (`report` of
+/// `report.tar.gz`; a leading dot is not an extension).
+pub fn stem_len(name: &str, is_dir: bool) -> usize {
+    if is_dir {
+        name.len()
+    } else {
+        split_ext(name).0.len()
+    }
+}
+
 /// A name for the copy that keeps both: "Report (2).pdf", then "(3)" and so
 /// on, the first one `exists` says is free. Fits 255 bytes by trimming the
 /// stem. After 1000 tries it returns the last candidate anyway, and the
@@ -172,6 +183,16 @@ mod tests {
 
     fn free_after(taken: &'static [&'static str]) -> impl Fn(&str) -> bool {
         move |n| taken.contains(&n)
+    }
+
+    #[test]
+    fn the_stem_is_what_an_in_place_rename_selects() {
+        assert_eq!(stem_len("report.pdf", false), 6);
+        assert_eq!(stem_len("a.tar.gz", false), 1);
+        assert_eq!(stem_len(".bashrc", false), 7);
+        assert_eq!(stem_len("Makefile", false), 8);
+        assert_eq!(stem_len("v1.2", true), 4);
+        assert_eq!(stem_len("é.txt", false), 2, "bytes, not characters");
     }
 
     #[test]

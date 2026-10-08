@@ -206,8 +206,9 @@ FocusScope {
         // KIO's own prompts apply (Run or open?, untrusted .desktop files).
         onOpenRequested: urls => page.actions.openUrls(urls)
         onRenameRequested: {
-            if (view.selectedUrls.length === 1 && view.folder.canWrite) {
-                page.actions.rename(view.selectedUrls[0]);
+            // One item is renamed in place, several in Batch Rename (the window's).
+            if (view.selectedUrls.length > 0 && view.folder.canWrite) {
+                page.actions.rename(view.selectedUrls);
             }
         }
         onContextMenuRequested: (urls, x, y) => page.contextMenuRequested(urls, x, y)

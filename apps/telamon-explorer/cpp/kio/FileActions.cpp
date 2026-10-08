@@ -239,28 +239,63 @@ void FileActions::emptyTrash()
 
 // ---- Names: rename, new folder, new file ----
 //
-// The window asks (a Telamon.Ui dialog, `namePromptRequested`), checks the name
-// as it is typed (`checkName`) and answers with `acceptName`; the work is
-// queued like any other.
+// A rename is edited in place in the views (the window decides: `rename`
+// emits `renameRequested`); where a name can't be edited in place the window
+// asks in a Telamon.Ui dialog (`namePromptRequested`). Either way the name is
+// checked as it is typed (`checkName`) and the work is queued like any other.
+// A new folder or file is made at once under a free name and edited in place.
 
-void FileActions::prompt(const QVariantMap &request)
+void FileActions::rename(const QList<QUrl> &urls)
 {
-    Q_EMIT namePromptRequested(request);
+    if (!urls.isEmpty()) {
+        Q_EMIT renameRequested(urls);
+    }
 }
 
-void FileActions::rename(const QUrl &url)
+void FileActions::renameWithDialog(const QUrl &url)
 {
     if (url.isEmpty()) {
         return;
     }
     const KFileItem item = m_folder ? m_folder->fileItemOf(url) : KFileItem();
-    prompt({{QStringLiteral("mode"), QStringLiteral("rename")},
-            {QStringLiteral("title"), tr("Rename")},
-            {QStringLiteral("label"), tr("New name:")},
-            {QStringLiteral("initial"), url.adjusted(QUrl::StripTrailingSlash).fileName()},
-            {QStringLiteral("okText"), tr("Rename")},
-            {QStringLiteral("url"), url},
-            {QStringLiteral("isDir"), item.isDir()}});
+    Q_EMIT namePromptRequested({{QStringLiteral("mode"), QStringLiteral("rename")},
+                                {QStringLiteral("title"), tr("Rename")},
+                                {QStringLiteral("label"), tr("New name:")},
+                                {QStringLiteral("initial"), url.adjusted(QUrl::StripTrailingSlash).fileName()},
+                                {QStringLiteral("okText"), tr("Rename")},
+                                {QStringLiteral("url"), url},
+                                {QStringLiteral("isDir"), item.isDir()}});
+}
+
+void FileActions::renameTo(const QUrl &url, const QString &name, bool select)
+{
+    // Checked again here: the window is not the last word on a name.
+    if (url.isEmpty() || !rustValidateName(name).ok || name == url.adjusted(QUrl::StripTrailingSlash).fileName()) {
+        return;
+    }
+    QUrl target = url.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
+    target = childUrl(target, name);
+    QPointer<FileActions> self(this);
+    m_ops->rename(url, name, [self, target, select](bool ok) {
+        if (self && ok && select) {
+            Q_EMIT self->resultsReady({target});
+        }
+    });
+}
+
+QVariantMap FileActions::editableName(const QUrl &url, bool isDir) const
+{
+    const QString name = url.adjusted(QUrl::StripTrailingSlash).fileName();
+    const QByteArray bytes = name.toUtf8();
+    const size_t stemBytes = telamon_name_stem_len(reinterpret_cast<const uint8_t *>(bytes.constData()), size_t(bytes.size()), isDir);
+    // The core counts bytes; the field counts UTF-16 units.
+    const qsizetype stem = QString::fromUtf8(bytes.constData(), qsizetype(qMin(stemBytes, size_t(bytes.size())))).size();
+    return {{QStringLiteral("name"), name}, {QStringLiteral("stem"), int(stem)}};
+}
+
+void FileActions::tell(const QString &text)
+{
+    Q_EMIT failed(text);
 }
 
 // "name", or "name (2)" and on when the folder shown holds it already.
@@ -276,13 +311,13 @@ void FileActions::newFolder()
         return;
     }
     const QUrl dir = m_folder->url();
-    prompt({{QStringLiteral("mode"), QStringLiteral("newFolder")},
-            {QStringLiteral("title"), tr("New Folder")},
-            {QStringLiteral("label"), tr("Folder name:")},
-            {QStringLiteral("initial"), suggestName(dir, rustMenuText(4))},
-            {QStringLiteral("okText"), tr("Create")},
-            {QStringLiteral("dir"), dir},
-            {QStringLiteral("isDir"), true}});
+    const QString name = suggestName(dir, rustMenuText(4));
+    QPointer<FileActions> self(this);
+    m_ops->makeFolder(dir, name, [self, dir, name](bool ok) {
+        if (self && ok) {
+            Q_EMIT self->createdItem(childUrl(dir.adjusted(QUrl::StripTrailingSlash), name));
+        }
+    });
 }
 
 void FileActions::newFile(const QUrl &templateFile)
@@ -292,14 +327,13 @@ void FileActions::newFile(const QUrl &templateFile)
     }
     const QUrl dir = m_folder->url();
     const QString wanted = templateFile.isEmpty() ? rustMenuText(3) : rustMenuText(1, templateFile.fileName());
-    prompt({{QStringLiteral("mode"), QStringLiteral("newFile")},
-            {QStringLiteral("title"), tr("New File")},
-            {QStringLiteral("label"), tr("File name:")},
-            {QStringLiteral("initial"), suggestName(dir, wanted)},
-            {QStringLiteral("okText"), tr("Create")},
-            {QStringLiteral("dir"), dir},
-            {QStringLiteral("url"), templateFile},
-            {QStringLiteral("isDir"), false}});
+    const QString name = suggestName(dir, wanted);
+    QPointer<FileActions> self(this);
+    m_ops->makeFile(dir, name, templateFile, [self, dir, name](bool ok) {
+        if (self && ok) {
+            Q_EMIT self->createdItem(childUrl(dir.adjusted(QUrl::StripTrailingSlash), name));
+        }
+    });
 }
 
 QVariantMap FileActions::checkName(const QString &name, const QVariantMap &request) const
@@ -309,13 +343,10 @@ QVariantMap FileActions::checkName(const QString &name, const QVariantMap &reque
         return {{QStringLiteral("ok"), false}, {QStringLiteral("text"), check.text}};
     }
     // Taken by an item that is listed (a hidden one is KIO's to refuse).
-    const QString mode = request.value(QStringLiteral("mode")).toString();
-    const QUrl base = mode == QLatin1String("rename") ? request.value(QStringLiteral("url")).toUrl().adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename)
-                                                      : request.value(QStringLiteral("dir")).toUrl();
-    if (m_folder && !base.isEmpty()) {
-        const QUrl target = childUrl(base, name);
-        const bool same = mode == QLatin1String("rename") && target.adjusted(QUrl::StripTrailingSlash) == request.value(QStringLiteral("url")).toUrl().adjusted(QUrl::StripTrailingSlash);
-        if (!same && m_folder->rowOfUrl(target) >= 0) {
+    const QUrl url = request.value(QStringLiteral("url")).toUrl().adjusted(QUrl::StripTrailingSlash);
+    if (m_folder && !url.isEmpty()) {
+        const QUrl target = childUrl(url.adjusted(QUrl::RemoveFilename), name);
+        if (target.adjusted(QUrl::StripTrailingSlash) != url && m_folder->rowOfUrl(target) >= 0) {
             return {{QStringLiteral("ok"), false}, {QStringLiteral("text"), tr("\"%1\" is already here. Choose another name.").arg(rustDisplayName(name.toUtf8()))}};
         }
     }
@@ -324,21 +355,147 @@ QVariantMap FileActions::checkName(const QString &name, const QVariantMap &reque
 
 void FileActions::acceptName(const QVariantMap &request, const QString &name)
 {
-    // Checked again here: the window is not the last word on a name.
-    if (!rustValidateName(name).ok) {
+    if (request.value(QStringLiteral("mode")).toString() == QLatin1String("rename")) {
+        renameTo(request.value(QStringLiteral("url")).toUrl(), name, true);
+    }
+}
+
+// ---- Batch Rename ----
+
+namespace
+{
+TelamonBatchSpec batchSpec(const QVariantMap &spec, QByteArray &first, QByteArray &second)
+{
+    const QString mode = spec.value(QStringLiteral("mode")).toString();
+    TelamonBatchSpec s{};
+    s.mode = 99;
+    if (mode == QLatin1String("replace")) {
+        s.mode = 0;
+        first = spec.value(QStringLiteral("find")).toString().toUtf8();
+        second = spec.value(QStringLiteral("replace")).toString().toUtf8();
+    } else if (mode == QLatin1String("number")) {
+        s.mode = 1;
+        first = spec.value(QStringLiteral("separator")).toString().toUtf8();
+    } else if (mode == QLatin1String("case")) {
+        s.mode = 2;
+    } else if (mode == QLatin1String("text")) {
+        s.mode = 3;
+        first = spec.value(QStringLiteral("text")).toString().toUtf8();
+    }
+    s.first = reinterpret_cast<const uint8_t *>(first.constData());
+    s.firstLen = size_t(first.size());
+    s.second = reinterpret_cast<const uint8_t *>(second.constData());
+    s.secondLen = size_t(second.size());
+    s.matchCase = spec.value(QStringLiteral("matchCase")).toBool();
+    s.regex = spec.value(QStringLiteral("regex")).toBool();
+    // A number out of range is the core's to refuse; a negative one is nonsense.
+    auto number = [&](const char *key) { return quint64(qMax(qint64(0), spec.value(QLatin1String(key)).toLongLong())); };
+    s.start = number("start");
+    s.step = number("step");
+    s.padding = quint32(qBound(qint64(0), spec.value(QStringLiteral("padding")).toLongLong(), qint64(1000)));
+    s.atEnd = spec.value(QStringLiteral("atEnd")).toBool();
+    const QString c = spec.value(QStringLiteral("caseMode")).toString();
+    s.caseMode = c == QLatin1String("lower") ? 0 : (c == QLatin1String("upper") ? 1 : (c == QLatin1String("title") ? 2 : 3));
+    return s;
+}
+}
+
+// The items in the order the folder shows them (numbering follows it), the
+// ones still listed, all in the folder shown.
+QList<QUrl> FileActions::inFolderOrder(const QList<QUrl> &urls) const
+{
+    QList<QPair<int, QUrl>> rows;
+    if (!m_folder || m_folder->searching()) {
+        return {};
+    }
+    const QUrl dir = m_folder->url().adjusted(QUrl::StripTrailingSlash);
+    for (const QUrl &u : urls) {
+        const int row = m_folder->rowOfUrl(u);
+        if (row >= 0 && u.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename).adjusted(QUrl::StripTrailingSlash) == dir) {
+            rows.append({row, u});
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    QList<QUrl> out;
+    for (const auto &r : std::as_const(rows)) {
+        if (out.isEmpty() || out.last() != r.second) {
+            out.append(r.second);
+        }
+    }
+    return out;
+}
+
+QVariantMap FileActions::batchPreview(const QList<QUrl> &urls, const QVariantMap &spec) const
+{
+    const QList<QUrl> ordered = inFolderOrder(urls);
+    QVariantMap out{{QStringLiteral("valid"), false},   {QStringLiteral("canApply"), false}, {QStringLiteral("changed"), 0},
+                    {QStringLiteral("blocked"), 0},     {QStringLiteral("problem"), QString()}, {QStringLiteral("rows"), QVariantList()}};
+    if (ordered.isEmpty()) {
+        return out;
+    }
+    QList<QPair<QString, bool>> names;
+    for (const QUrl &u : ordered) {
+        names.append({u.adjusted(QUrl::StripTrailingSlash).fileName(), m_folder->fileItemOf(u).isDir()});
+    }
+    QByteArray first, second;
+    const TelamonBatchSpec s = batchSpec(spec, first, second);
+    const QUrl dir = m_folder->url().adjusted(QUrl::StripTrailingSlash);
+    QPointer<FolderModel> model = m_folder;
+    const RustBatch plan = rustBatchPlan(s, names, [&](const QString &name) { return model && model->rowOfUrl(childUrl(dir, name)) >= 0; });
+    if (!plan.valid) {
+        return out;
+    }
+    QVariantList rows;
+    for (qsizetype i = 0; i < plan.rows.size(); ++i) {
+        rows.append(QVariantMap{{QStringLiteral("old"), rustDisplayName(names.at(i).first.toUtf8())},
+                                {QStringLiteral("new"), rustDisplayName(plan.rows.at(i).name.toUtf8())},
+                                {QStringLiteral("code"), plan.rows.at(i).code},
+                                {QStringLiteral("text"), plan.rows.at(i).text}});
+    }
+    out[QStringLiteral("valid")] = true;
+    out[QStringLiteral("canApply")] = plan.canApply;
+    out[QStringLiteral("changed")] = plan.changed;
+    out[QStringLiteral("blocked")] = plan.blocked;
+    out[QStringLiteral("problem")] = plan.problem;
+    out[QStringLiteral("rows")] = rows;
+    return out;
+}
+
+void FileActions::batchApply(const QList<QUrl> &urls, const QVariantMap &spec)
+{
+    const QList<QUrl> ordered = inFolderOrder(urls);
+    if (ordered.isEmpty()) {
         return;
     }
-    const QString mode = request.value(QStringLiteral("mode")).toString();
-    if (mode == QLatin1String("rename")) {
-        const QUrl url = request.value(QStringLiteral("url")).toUrl();
-        if (!url.isEmpty() && name != url.adjusted(QUrl::StripTrailingSlash).fileName()) {
-            m_ops->rename(url, name);
-        }
-    } else if (mode == QLatin1String("newFolder")) {
-        m_ops->makeFolder(request.value(QStringLiteral("dir")).toUrl(), name);
-    } else if (mode == QLatin1String("newFile")) {
-        m_ops->makeFile(request.value(QStringLiteral("dir")).toUrl(), name, request.value(QStringLiteral("url")).toUrl());
+    QList<QPair<QString, bool>> names;
+    for (const QUrl &u : ordered) {
+        names.append({u.adjusted(QUrl::StripTrailingSlash).fileName(), m_folder->fileItemOf(u).isDir()});
     }
+    QByteArray first, second;
+    const TelamonBatchSpec s = batchSpec(spec, first, second);
+    const QUrl dir = m_folder->url().adjusted(QUrl::StripTrailingSlash);
+    QPointer<FolderModel> model = m_folder;
+    const RustBatch plan = rustBatchPlan(s, names, [&](const QString &name) { return model && model->rowOfUrl(childUrl(dir, name)) >= 0; });
+    // The folder may have changed since the list was shown: nothing happens
+    // unless the plan holds now.
+    if (!plan.valid || !plan.canApply) {
+        Q_EMIT failed(tr("The names can't be applied now. Look at the list again."));
+        return;
+    }
+    QList<QPair<QUrl, QString>> renames;
+    QList<QUrl> results;
+    for (qsizetype i = 0; i < ordered.size(); ++i) {
+        if (plan.rows.at(i).code != 0) {
+            renames.append({ordered.at(i), plan.rows.at(i).name});
+            results.append(childUrl(dir, plan.rows.at(i).name));
+        }
+    }
+    QPointer<FileActions> self(this);
+    m_ops->renameMany(renames, [self, results](bool ok) {
+        if (self && ok) {
+            Q_EMIT self->resultsReady(results);
+        }
+    });
 }
 
 void FileActions::undo()

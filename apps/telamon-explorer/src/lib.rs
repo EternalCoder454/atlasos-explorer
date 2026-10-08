@@ -3,6 +3,7 @@
 //! here as QObjects exposed to QML, over the Qt-free `atlas-explorer-core`.
 
 mod backend;
+mod batch_ffi;
 mod ffi;
 mod ops_ffi;
 mod preview_ffi;

@@ -54,18 +54,41 @@ public:
     Q_INVOKABLE void paste(const QUrl &destination = {});
     Q_INVOKABLE void trash(const QList<QUrl> &urls);
     Q_INVOKABLE void deleteForGood(const QList<QUrl> &urls);
-    // Asks for the new name (`namePromptRequested`), then `acceptName` renames.
-    Q_INVOKABLE void rename(const QUrl &url);
-    // Asks for a name and makes the folder in the folder shown.
+    // F2, Rename: asks the window to rename `urls` (`renameRequested`); it
+    // renames one item in place and several in the Batch Rename dialog.
+    Q_INVOKABLE void rename(const QList<QUrl> &urls);
+    // Asks for one item's new name in a dialog (`namePromptRequested`), for
+    // where a name can't be edited in place; `acceptName` renames.
+    Q_INVOKABLE void renameWithDialog(const QUrl &url);
+    // Renames `url` to `name` (checked again here), through the queue. With
+    // `select`, the renamed item is selected and shown when it is done.
+    Q_INVOKABLE void renameTo(const QUrl &url, const QString &name, bool select);
+    // Makes a folder in the folder shown, named "New Folder" (or the first
+    // free "New Folder (2)"...), and says `createdItem` when it is there.
     Q_INVOKABLE void newFolder();
-    // Asks for a name and makes a file in the folder shown: empty, or a copy
-    // of `templateFile`.
+    // The same for a file: empty, or a copy of `templateFile`.
     Q_INVOKABLE void newFile(const QUrl &templateFile = {});
-    // Whether `name` can be used for what `request` (from namePromptRequested)
-    // asks: {ok, text}; with ok, a text means a warning to confirm.
+    // Whether `name` can be used for what `request` (from namePromptRequested,
+    // or {mode: "rename", url}) asks: {ok, text}; with ok, a text means a
+    // warning to confirm.
     Q_INVOKABLE QVariantMap checkName(const QString &name, const QVariantMap &request) const;
     // The prompt was confirmed: carries out the request with `name`.
     Q_INVOKABLE void acceptName(const QVariantMap &request, const QString &name);
+    // The real name of `url` (not the display form), and how many of its
+    // characters to select first when it is edited: {name, stem}.
+    Q_INVOKABLE QVariantMap editableName(const QUrl &url, bool isDir) const;
+    // Says `text` in the window's line for problems.
+    Q_INVOKABLE void tell(const QString &text);
+    // Batch Rename. `spec`: {mode: "replace" | "number" | "case" | "text",
+    // find, replace, matchCase, regex, start, step, padding, atEnd, separator,
+    // text, caseMode: "lower" | "upper" | "title" | "sentence"}. The preview is
+    // {valid, canApply, changed, blocked, problem, rows: [{old, new, code,
+    // text}]} in the order of the folder shown (the names are display names;
+    // code: 0 unchanged, 1 fine, 2 warning, 3 not a name, 4 same as another,
+    // 5 a selected item has it, 6 in the folder). Apply plans again, and does
+    // nothing unless the plan can be applied.
+    Q_INVOKABLE QVariantMap batchPreview(const QList<QUrl> &urls, const QVariantMap &spec) const;
+    Q_INVOKABLE void batchApply(const QList<QUrl> &urls, const QVariantMap &spec);
     // Asks first ("Delete 3 items for good? This can't be undone."): the
     // window shows `deleteRequested`, and `confirmDelete` does it.
     Q_INVOKABLE void confirmDelete(const QList<QUrl> &urls);
@@ -131,10 +154,14 @@ Q_SIGNALS:
     void openInNewTabRequested(const QList<QUrl> &folders);
     // "Open File Location" on search results: the files chosen.
     void openLocationRequested(const QList<QUrl> &files);
-    // The name of a rename, new folder or new file is wanted: {mode, title,
-    // label, initial, okText, url, dir, isDir}. The window asks, `acceptName`
-    // answers.
+    // The name of a rename is wanted in a dialog: {mode, title, label,
+    // initial, okText, url, isDir}. The window asks, `acceptName` answers.
     void namePromptRequested(const QVariantMap &request);
+    // Rename these items (the window picks in place or Batch Rename).
+    void renameRequested(const QList<QUrl> &urls);
+    // A new folder or file is there (in the folder shown): the window shows it
+    // and puts its name in edit mode.
+    void createdItem(const QUrl &url);
     // A job started here has ended (done, failed or cancelled).
     void jobFinished();
     // Files an extraction or compression made: the window selects them.
@@ -153,6 +180,7 @@ private:
 
     void clipboardChanged();
     KFileItemList itemsOf(const QList<QUrl> &urls) const;
+    QList<QUrl> inFolderOrder(const QList<QUrl> &urls) const;
     // The entries of `menu` for the window, at most two levels deep; each
     // action gets an id for `runMenuAction`.
     QVariantList entriesOf(QMenu *menu, int depth = 0);
@@ -172,7 +200,6 @@ private:
     QString labelOf(const QList<QUrl> &urls) const;
     void loadTemplates();
     QString suggestName(const QUrl &folder, const QString &wanted) const;
-    void prompt(const QVariantMap &request);
 
     QPointer<FolderModel> m_folder;
     QPointer<QQuickWindow> m_window;

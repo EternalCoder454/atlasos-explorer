@@ -139,8 +139,11 @@ pub fn item_menu(count: usize, folders: usize, flags: u32) -> Vec<(Cmd, bool)> {
         writable && !has(F_SEARCHING)
     };
     out.push((Cmd::Paste, has(F_CAN_PASTE) && paste_target_ok));
-    // Items in the Trash keep the names they were deleted with.
-    out.push((Cmd::Rename, single && writable && !has(F_IN_TRASH)));
+    // Items in the Trash keep the names they were deleted with. Several items
+    // are renamed together (Batch Rename), which needs them in one folder:
+    // search results are from many.
+    let renamable = single || (count > 1 && !has(F_SEARCHING));
+    out.push((Cmd::Rename, renamable && writable && !has(F_IN_TRASH)));
     out.push((Cmd::Trash, writable && !has(F_IN_TRASH)));
     if has(F_ARCHIVE) {
         // Telamon Archive reads and writes files on this computer only.
@@ -471,9 +474,28 @@ mod tests {
     }
 
     #[test]
-    fn rename_needs_exactly_one() {
+    fn rename_takes_one_item_or_a_set_in_one_folder() {
         assert_eq!(on(&item_menu(1, 0, BASE), Cmd::Rename), Some(true));
-        assert_eq!(on(&item_menu(2, 0, BASE), Cmd::Rename), Some(false));
+        // Several items open Batch Rename.
+        assert_eq!(on(&item_menu(2, 0, BASE), Cmd::Rename), Some(true));
+        assert_eq!(on(&item_menu(2, 1, BASE), Cmd::Rename), Some(true));
+        // Results come from many folders: one at a time.
+        assert_eq!(
+            on(&item_menu(1, 0, BASE | F_SEARCHING), Cmd::Rename),
+            Some(true)
+        );
+        assert_eq!(
+            on(&item_menu(2, 0, BASE | F_SEARCHING), Cmd::Rename),
+            Some(false)
+        );
+        assert_eq!(
+            on(&item_menu(2, 0, BASE | F_IN_TRASH), Cmd::Rename),
+            Some(false)
+        );
+        assert_eq!(
+            on(&item_menu(2, 0, BASE & !F_WRITABLE), Cmd::Rename),
+            Some(false)
+        );
     }
 
     #[test]

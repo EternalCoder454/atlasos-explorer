@@ -105,11 +105,16 @@ public:
     void transfer(Kind kind, const QList<QUrl> &sources, const QUrl &destination, std::function<void(bool)> done = {});
     void trash(const QList<QUrl> &urls);
     void deleteForGood(const QList<QUrl> &urls);
-    void rename(const QUrl &url, const QString &newName);
-    void makeFolder(const QUrl &folder, const QString &name);
+    void rename(const QUrl &url, const QString &newName, std::function<void(bool)> done = {});
+    // Several renames as one operation, one undo step: `renames` are each item
+    // and the name it gets (all checked by the caller: no two the same, none
+    // that is taken). They run one after the other; when one fails the ones
+    // before it stay done, and are still one step to undo.
+    void renameMany(const QList<QPair<QUrl, QString>> &renames, std::function<void(bool)> done = {});
+    void makeFolder(const QUrl &folder, const QString &name, std::function<void(bool)> done = {});
     // A new file named `name` in `folder`: empty, or a copy of `templateFile`.
     // Undone like a copy (the new file goes to the Trash).
-    void makeFile(const QUrl &folder, const QString &name, const QUrl &templateFile = {});
+    void makeFile(const QUrl &folder, const QString &name, const QUrl &templateFile = {}, std::function<void(bool)> done = {});
     // Lists the items (all in one folder on this computer) in that folder's
     // `.hidden` file, or takes them out of it. Not undoable.
     void setHidden(const QList<QUrl> &urls, bool hide, std::function<void(bool)> done = {});

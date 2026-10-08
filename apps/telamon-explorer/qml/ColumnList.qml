@@ -107,6 +107,8 @@ Item {
             readonly property bool selected: col.primary && col.fv.isSelected(index, col.fv.selRevision)
             readonly property bool picked: !col.primary && index === col.highlightRow
             readonly property bool current: col.primary && col.fv.currentRow === index
+            // The name is being edited where it is shown (the tab's own column only).
+            readonly property bool editing: col.primary && col.fv.renaming && col.fv.renameUrl.toString() === url.toString()
 
             Rectangle {
                 anchors.fill: parent
@@ -140,10 +142,21 @@ Item {
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     width: parent.width - icon.width - chevron.width - parent.spacing * 2
+                    visible: !row.editing
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
                     text: row.name
                     color: Kirigami.Theme.textColor
+                }
+                Loader {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: row.editing ? parent.width - icon.width - chevron.width - parent.spacing * 2 : 0
+                    active: row.editing
+                    sourceComponent: InlineRename {
+                        fv: col.fv
+                        itemUrl: row.url
+                        isDir: row.isDir
+                    }
                 }
                 Symbol {
                     id: chevron

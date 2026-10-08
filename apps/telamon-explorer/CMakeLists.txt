@@ -104,6 +104,8 @@ qt_add_qml_module(telamon-explorer-app
         qml/ViewMenu.qml
         qml/SortMenu.qml
         qml/NamePrompt.qml
+        qml/InlineRename.qml
+        qml/BatchRenameDialog.qml
         qml/IconCell.qml
         qml/ColumnsView.qml
         qml/ColumnList.qml

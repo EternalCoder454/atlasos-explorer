@@ -89,6 +89,25 @@ size_t telamon_menu_free_name(const uint8_t *wanted, size_t wantedLen, bool (*ex
 int32_t telamon_menu_hidden(bool add, const uint8_t *content, size_t contentLen, const uint8_t *names, size_t namesLen, uint8_t *out, size_t cap,
                           size_t *textLen);
 
+// ---- Batch Rename (src/batch_ffi.rs) ----
+struct TelamonBatchSpec {
+    uint32_t mode;
+    const uint8_t *first;
+    size_t firstLen;
+    const uint8_t *second;
+    size_t secondLen;
+    bool matchCase;
+    bool regex;
+    uint64_t start;
+    uint64_t step;
+    uint32_t padding;
+    bool atEnd;
+    uint32_t caseMode;
+};
+size_t telamon_name_stem_len(const uint8_t *name, size_t len, bool isDir);
+size_t telamon_batch_plan(const TelamonBatchSpec *spec, const uint8_t *items, size_t itemsLen, bool (*exists)(void *, const uint8_t *, size_t), void *ctx,
+                        uint8_t *out, size_t cap);
+
 // ---- Search (src/search_ffi.rs) ----
 struct TelamonSearchFilter {
     uint32_t kinds_mask;
@@ -565,4 +584,100 @@ inline QString rustFreeName(const QString &wanted, F exists)
         len = call();
     }
     return QString::fromUtf8(buf.constData(), qsizetype(qMin(len, size_t(buf.size()))));
+}
+
+// ---- Batch Rename ----
+
+// One item of a batch: the code of what is the matter with its new name
+// (0 unchanged, 1 fine, 2 warning, 3 not a name, 4 twin, 5 taken by a selected
+// item, 6 in the folder already), the new name and the reason in words.
+struct RustBatchRow {
+    int code = 0;
+    QString name;
+    QString text;
+};
+struct RustBatch {
+    // The items were understood (else the rest is empty).
+    bool valid = false;
+    bool canApply = false;
+    quint32 changed = 0;
+    quint32 blocked = 0;
+    // Why no names could be made (a bad pattern); empty when there is none.
+    QString problem;
+    QList<RustBatchRow> rows;
+};
+
+// Plans a batch rename of `names` (a folder's flag with each, in order);
+// `exists(name)` says whether a name is already in the folder.
+template<typename F>
+inline RustBatch rustBatchPlan(const TelamonBatchSpec &spec, const QList<QPair<QString, bool>> &names, F exists)
+{
+    QByteArray items;
+    for (const auto &n : names) {
+        const QByteArray b = n.first.toUtf8();
+        items.append(char(n.second ? 1 : 0));
+        const quint32 len = quint32(b.size());
+        const char le[4] = {char(len & 0xff), char((len >> 8) & 0xff), char((len >> 16) & 0xff), char((len >> 24) & 0xff)};
+        items.append(le, 4);
+        items.append(b);
+    }
+    struct Ctx {
+        F *fn;
+    } ctx{&exists};
+    auto trampoline = [](void *c, const uint8_t *name, size_t len) -> bool {
+        return (*static_cast<Ctx *>(c)->fn)(QString::fromUtf8(reinterpret_cast<const char *>(name), qsizetype(len)));
+    };
+    QByteArray buf(4096, 0);
+    auto call = [&] {
+        return telamon_batch_plan(&spec, reinterpret_cast<const uint8_t *>(items.constData()), size_t(items.size()), trampoline, &ctx,
+                                  reinterpret_cast<uint8_t *>(buf.data()), size_t(buf.size()));
+    };
+    size_t len = call();
+    if (len > size_t(buf.size())) {
+        buf.resize(qsizetype(len));
+        len = call();
+    }
+    RustBatch out;
+    if (len == 0 || len > size_t(buf.size())) {
+        return out;
+    }
+    const auto *p = reinterpret_cast<const uint8_t *>(buf.constData());
+    size_t at = 0;
+    auto u32 = [&](quint32 &v) {
+        if (at + 4 > len) {
+            return false;
+        }
+        v = quint32(p[at]) | quint32(p[at + 1]) << 8 | quint32(p[at + 2]) << 16 | quint32(p[at + 3]) << 24;
+        at += 4;
+        return true;
+    };
+    auto text = [&](QString &s) {
+        quint32 n = 0;
+        if (!u32(n) || at + n > len) {
+            return false;
+        }
+        s = QString::fromUtf8(buf.constData() + at, qsizetype(n));
+        at += n;
+        return true;
+    };
+    if (len < 1) {
+        return out;
+    }
+    out.canApply = p[at++] != 0;
+    if (!u32(out.changed) || !u32(out.blocked) || !text(out.problem)) {
+        return out;
+    }
+    for (qsizetype i = 0; i < names.size(); ++i) {
+        RustBatchRow row;
+        if (at >= len) {
+            return out;
+        }
+        row.code = p[at++];
+        if (!text(row.name) || !text(row.text)) {
+            return out;
+        }
+        out.rows.append(row);
+    }
+    out.valid = true;
+    return out;
 }

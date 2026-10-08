@@ -31,6 +31,14 @@ FocusScope {
     property int currentRow: -1
     property int anchorRow: -1
     property string typed: ""
+    // The item being renamed in place (empty: none), what has been typed so
+    // far (kept if the row scrolls away and back), whether the editor is new
+    // (it selects the name without its extension once), and the editor.
+    property url renameUrl
+    property string renameText: ""
+    property bool renameDirty: false
+    property var activeEditor: null
+    readonly property bool renaming: renameUrl.toString().length > 0
     // Search results are always a Details view (they have a Path column).
     readonly property string shown: folderModel.searching ? "details" : viewMode
     readonly property bool showsDetails: shown === "details"
@@ -208,9 +216,110 @@ FocusScope {
         }
     }
 
+    // ---- Renaming in place ----
+    // F2, Rename: the name of `url` is edited where it is shown. Where it
+    // can't be (the gallery, search results, which show no name to edit in
+    // the folder), Files asks in a dialog.
+    function startRename(url) {
+        if (!actions) {
+            return;
+        }
+        const row = folderModel.rowOfUrl(url);
+        if (row < 0) {
+            return;
+        }
+        if (shown === "gallery" || folderModel.searching) {
+            actions.renameWithDialog(url);
+            return;
+        }
+        // An item in a folded group opens it: nothing is edited out of sight.
+        if (folderModel.isRowCollapsed(row)) {
+            folderModel.toggleGroup(folderModel.groupAt(row));
+        }
+        selectUrls([url]);
+        renameText = "";
+        renameDirty = false;
+        renameUrl = url;
+    }
+    // Something else was clicked: the edit ends the way a click away ends it
+    // (renamed when the name can be used). The editor keeps the keyboard until
+    // it is gone, so this can't wait for the focus to move.
+    function leaveRename() {
+        if (renaming && activeEditor) {
+            activeEditor.leave();
+        }
+    }
+    // The edit is over (renamed, cancelled or abandoned); the view has the keyboard back.
+    function endRename() {
+        renameUrl = "";
+        renameText = "";
+        renameDirty = false;
+        renameWanted = "";
+        forceActiveFocus();
+    }
+    // A new folder or file: edited as soon as it is listed.
+    property url renameWanted
+    function renameWhenListed(url) {
+        renameWanted = url;
+        renameWantedTimer.restart();
+        tryRenameWanted();
+    }
+    function tryRenameWanted() {
+        if (renameWanted.toString().length === 0 || folderModel.rowOfUrl(renameWanted) < 0) {
+            return;
+        }
+        // The rows are still settling (the new item was just added, and the
+        // sort moves it): the edit starts when they have.
+        renameSettle.restart();
+    }
+    Timer {
+        id: renameSettle
+        interval: 120
+        onTriggered: {
+            const url = top.renameWanted;
+            if (url.toString().length > 0 && folderModel.rowOfUrl(url) >= 0) {
+                top.renameWanted = "";
+                renameWantedTimer.stop();
+                top.startRename(url);
+            }
+        }
+    }
+    Timer {
+        id: renameWantedTimer
+        interval: 4000
+        onTriggered: top.renameWanted = ""
+    }
+    Connections {
+        target: folderModel
+        function onCountChanged() {
+            top.tryRenameWanted();
+            top.checkRenameStillThere();
+        }
+        function onLayoutChanged() {
+            top.tryRenameWanted();
+            top.checkRenameStillThere();
+        }
+        function onLoadingChanged() {
+            top.tryRenameWanted();
+        }
+        // The folder was left: the edit is over.
+        function onUrlChanged() {
+            if (top.renaming) {
+                top.endRename();
+            }
+        }
+    }
+    // The item went away (deleted elsewhere): there is nothing to edit.
+    function checkRenameStillThere() {
+        if (renaming && !folderModel.loading && folderModel.rowOfUrl(renameUrl) < 0) {
+            endRename();
+        }
+    }
+
     // A press on a row. Pressing a selected row with no modifier keeps the
     // selection, so a drag can take all of it; the release then narrows it.
     function pressRow(row, mods) {
+        leaveRename();
         forceActiveFocus();
         selectFirst = false;
         if (mods === 0 && isSelected(row, selRevision)) {
@@ -224,6 +333,7 @@ FocusScope {
     // A right click on a row at (x, y) of this view: the menu is for the
     // selection, which first becomes this row when it wasn't part of it.
     function rowMenu(row, x, y) {
+        leaveRename();
         forceActiveFocus();
         if (!isSelected(row, selRevision)) {
             chooseRow(row, 0, false);
@@ -300,6 +410,7 @@ FocusScope {
     // Goes to `target` and selects `select` there, keeping the view (a step
     // between the columns is not a move to another folder's own view).
     function columnNavigate(target, select) {
+        leaveRename();
         keepView = true;
         columnNavigateRequested(target, select);
         keepView = false;
@@ -427,6 +538,7 @@ FocusScope {
 
     // A middle click on a row: a folder opens in a new background tab.
     function middleRow(row) {
+        leaveRename();
         if (row >= 0 && folderModel.isDirAt(row)) {
             openInNewTabRequested(folderModel.urlAt(row));
         }
@@ -596,6 +708,22 @@ FocusScope {
                 chooseRow(hit, 0, false);
             }
             event.accepted = true;
+        }
+    }
+
+    // A click anywhere in the view outside the name being edited ends the edit.
+    TapHandler {
+        acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+        enabled: top.renaming
+        onTapped: point => {
+            const e = top.activeEditor;
+            if (!e) {
+                return;
+            }
+            const at = e.mapFromItem(top, point.position.x, point.position.y);
+            if (at.x < 0 || at.y < 0 || at.x >= e.width || at.y >= e.height) {
+                top.leaveRename();
+            }
         }
     }
 
