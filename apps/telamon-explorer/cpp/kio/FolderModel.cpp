@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QLocale>
 #include <QSet>
+#include <QTimeZone>
 #include <QHostAddress>
 #include <QTcpSocket>
 
@@ -61,6 +62,14 @@ QString pageOf(const QUrl &url)
 
 constexpr int ProbeTimeoutMs = 10000;
 
+// The name a row is shown and ordered by. In the Trash KIO's own name for an
+// item is "<trash id>-<name>" (`0-photo.png`); the name it had is its display
+// name.
+QString shownName(const KFileItem &item)
+{
+    return item.url().scheme() == QLatin1String("trash") ? item.text() : item.name();
+}
+
 QString errorMessage(KIO::Job *job, bool archive)
 {
     // Plain words, never the job's own text: it can hold file names.
@@ -106,6 +115,8 @@ FolderModel::FolderModel(QObject *parent)
     connect(this, &FolderModel::searchingChanged, this, &FolderModel::archiveChanged);
     connect(this, &FolderModel::urlChanged, this, &FolderModel::pageChanged);
     connect(this, &FolderModel::searchingChanged, this, &FolderModel::pageChanged);
+    connect(this, &FolderModel::urlChanged, this, &FolderModel::trashChanged);
+    connect(this, &FolderModel::searchingChanged, this, &FolderModel::trashChanged);
     m_pool.setMaxThreadCount(1);
     m_lister->setDelayedMimeTypes(true);
     m_lister->setAutoErrorHandlingEnabled(false);
@@ -193,7 +204,25 @@ QHash<int, QByteArray> FolderModel::roleNames() const
         {IsCutRole, "isCut"},
         {GroupRole, "groupKey"},
         {GroupCollapsedRole, "groupCollapsed"},
+        {OriginTextRole, "originText"},
+        {DeletedTextRole, "deletedText"},
     };
+}
+
+bool FolderModel::inTrash() const
+{
+    return !m_searching && m_url.scheme() == QLatin1String("trash");
+}
+
+bool FolderModel::trashTop() const
+{
+    return inTrash() && (m_url.path().isEmpty() || m_url.path() == QLatin1String("/"));
+}
+
+QString FolderModel::originalPathOf(const QUrl &url) const
+{
+    const int row = rowOfUrl(url);
+    return row < 0 ? QString() : m_rows.at(row).originPath;
 }
 
 bool FolderModel::inArchive() const
@@ -262,6 +291,12 @@ FolderModel::Entry FolderModel::makeEntry(const KFileItem &item)
     e.mtime = u.numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME, 0);
     e.ctime = u.numberValue(KIO::UDSEntry::UDS_CREATION_TIME, 0);
     e.atime = u.numberValue(KIO::UDSEntry::UDS_ACCESS_TIME, 0);
+    if (item.url().scheme() == QLatin1String("trash")) {
+        // The Trash's worker says where the item was and when it was deleted.
+        e.originPath = u.stringValue(KIO::UDSEntry::UDS_EXTRA);
+        const QByteArray when = u.stringValue(KIO::UDSEntry::UDS_EXTRA + 1).toUtf8();
+        e.deleted = telamon_trash_parse_date(reinterpret_cast<const uint8_t *>(when.constData()), size_t(when.size()));
+    }
     return e;
 }
 
@@ -276,7 +311,7 @@ void FolderModel::fillType(Entry &e) const
         e.icon = QStringLiteral("folder");
         return;
     }
-    const QMimeType mt = m_mime.mimeTypeForFile(e.item.name(), QMimeDatabase::MatchExtension);
+    const QMimeType mt = m_mime.mimeTypeForFile(shownName(e.item), QMimeDatabase::MatchExtension);
     e.type = mt.isDefault() ? tr("File") : mt.comment();
     e.icon = mt.iconName().isEmpty() ? QStringLiteral("application-octet-stream") : mt.iconName();
 }
@@ -291,7 +326,7 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
     case Qt::DisplayRole:
     case NameRole:
         if (e.display.isEmpty()) {
-            e.display = rustDisplayName(e.item.name().toUtf8());
+            e.display = rustDisplayName(shownName(e.item).toUtf8());
         }
         return e.display;
     case UrlRole:
@@ -332,6 +367,18 @@ QVariant FolderModel::data(const QModelIndex &index, int role) const
             e.path = rustSearchPathText(parent.toString(QUrl::FullyEncoded | QUrl::RemovePassword), QDir::homePath());
         }
         return e.path;
+    case OriginTextRole:
+        if (e.originPath.isEmpty()) {
+            return QString();
+        }
+        if (e.origin.isNull()) {
+            const qsizetype cut = e.originPath.lastIndexOf(QLatin1Char('/'));
+            const QString dir = cut <= 0 ? QStringLiteral("/") : e.originPath.left(cut);
+            e.origin = rustSearchPathText(QUrl::fromLocalFile(dir).toString(QUrl::FullyEncoded), QDir::homePath());
+        }
+        return e.origin;
+    case DeletedTextRole:
+        return e.deleted > 0 ? QLocale().toString(QDateTime::fromSecsSinceEpoch(e.deleted, QTimeZone::UTC), QLocale::ShortFormat) : QString();
     case ThumbnailSourceRole: {
         const QUrl u = e.item.url();
         // A file on a server gets a thumbnail only if the Settings switch says
@@ -813,6 +860,7 @@ void FolderModel::startSort()
     }
     m_sortDirty = false;
     const bool byType = m_sortColumn == Type;
+    const bool byOrigin = m_sortColumn == OriginalLocation;
     const GroupBy group = grouped() && m_sortColumn != Relevance ? m_groupBy : GroupNone;
     const bool needKind = byType || group == GroupType;
     auto rows = std::make_shared<QList<SortRowIn>>();
@@ -822,8 +870,9 @@ void FolderModel::startSort()
             fillType(e);
         }
         const bool needKey = e.key.isEmpty();
-        rows->append({needKey || e.display.isEmpty() ? e.item.name() : QString(), e.key, needKind ? e.type.toUtf8() : QByteArray(), e.size, e.mtime, e.ctime,
-                      e.atime, e.isDir, e.display.isEmpty(), e.rank});
+        rows->append({needKey || e.display.isEmpty() ? shownName(e.item) : QString(), e.key, needKind ? e.type.toUtf8() : QByteArray(), e.size, e.mtime, e.ctime,
+                      e.atime, e.isDir, e.display.isEmpty(), e.rank, byOrigin ? e.originPath.left(qMax<qsizetype>(0, e.originPath.lastIndexOf(QLatin1Char('/')))) : QString(),
+                      e.deleted});
     }
     const quint64 gen = m_structGen;
     const quint32 column = quint32(m_sortColumn);
@@ -845,6 +894,8 @@ void FolderModel::startSort()
             res.groups.resize(res.n);
         }
         std::vector<TelamonSortRow> flat(size_t(res.n));
+        // The Trash's Original Location: the natural key of each folder, kept alive until the sort is done.
+        std::vector<QByteArray> originKeys(column == quint32(OriginalLocation) ? size_t(res.n) : 0);
         // The order key of each row's group, kept alive until the sort is done.
         std::vector<QByteArray> orders(group != GroupNone ? size_t(res.n) : 0);
         QHash<QByteArray, QString> labels;
@@ -882,6 +933,9 @@ void FolderModel::startSort()
                 }
                 res.groups[i] = *found;
             }
+            if (!originKeys.empty()) {
+                originKeys[size_t(i)] = rustNameKey(r.originDir.toUtf8());
+            }
             flat[size_t(i)] = {reinterpret_cast<const uint8_t *>(r.key.constData()),
                                size_t(r.key.size()),
                                reinterpret_cast<const uint8_t *>(r.kind.constData()),
@@ -892,6 +946,9 @@ void FolderModel::startSort()
                                r.mtime,
                                r.ctime,
                                r.atime,
+                               originKeys.empty() ? nullptr : reinterpret_cast<const uint8_t *>(originKeys[size_t(i)].constData()),
+                               originKeys.empty() ? 0 : size_t(originKeys[size_t(i)].size()),
+                               r.deleted,
                                r.isDir};
         }
         res.perm.resize(res.n);
@@ -1019,7 +1076,7 @@ int FolderModel::findPrefix(const QString &prefix, int startRow) const
             continue;
         }
         if (e.display.isEmpty()) {
-            e.display = rustDisplayName(e.item.name().toUtf8());
+            e.display = rustDisplayName(shownName(e.item).toUtf8());
         }
         if (e.display.startsWith(prefix, Qt::CaseInsensitive)) {
             return (startRow + k) % n;

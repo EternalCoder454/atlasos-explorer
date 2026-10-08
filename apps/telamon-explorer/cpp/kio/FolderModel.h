@@ -65,12 +65,19 @@ class FolderModel : public QAbstractListModel
     Q_PROPERTY(bool unreachable READ unreachable NOTIFY unreachableChanged)
     // The listing was stopped by the user.
     Q_PROPERTY(bool stopped READ stopped NOTIFY stoppedChanged)
+    // The folder is the Trash or a folder in it (not while search results are
+    // shown): its rows have an Original Location and a Date Deleted.
+    Q_PROPERTY(bool inTrash READ inTrash NOTIFY trashChanged)
+    // The folder is the top of the Trash: what is listed there was trashed
+    // itself, and can be restored.
+    Q_PROPERTY(bool trashTop READ trashTop NOTIFY trashChanged)
 
 public:
     // Same order as atlas_explorer_core::sort::Column.
     // Relevance is the order search results arrive in (best match first) and
-    // only exists while searching; the core knows the others.
-    enum SortColumn { Name, Size, Type, Modified, Created, Accessed, Relevance };
+    // only exists while searching; the core knows the others. OriginalLocation
+    // and DateDeleted are the Trash's (the core's codes 7 and 8).
+    enum SortColumn { Name, Size, Type, Modified, Created, Accessed, Relevance, OriginalLocation, DateDeleted };
     Q_ENUM(SortColumn)
 
     // Same order as atlas_explorer_core::group::GroupBy.
@@ -94,6 +101,8 @@ public:
         IsCutRole,
         GroupRole,
         GroupCollapsedRole,
+        OriginTextRole,
+        DeletedTextRole,
     };
 
     // A run of rows in one group (the groups are together): the group's
@@ -131,6 +140,8 @@ public:
     void setUrl(const QUrl &url);
     bool inArchive() const;
     QString pageKind() const;
+    bool inTrash() const;
+    bool trashTop() const;
     // Which page `url` is, whatever else is shown now.
     QString pageOfUrl() const;
     bool onServer() const;
@@ -178,6 +189,9 @@ public:
     // The thumbnails are asked for again (the Settings switch for previews on servers changed).
     Q_INVOKABLE void thumbnailsChanged();
     Q_INVOKABLE QUrl urlAt(int row) const;
+    // Where the Trash's item `url` was before it was trashed, as a path
+    // ("" when it isn't a row, or the Trash did not say).
+    Q_INVOKABLE QString originalPathOf(const QUrl &url) const;
     Q_INVOKABLE int rowOfUrl(const QUrl &url) const;
     Q_INVOKABLE QVariantList urlsOf(const QVariantList &rows) const;
     // First row at or after startRow (wrapping) whose display name starts with prefix; -1 for none.
@@ -234,6 +248,7 @@ Q_SIGNALS:
     void unreachableChanged();
     void stoppedChanged();
     void pageChanged();
+    void trashChanged();
 
 private:
     struct Entry {
@@ -253,6 +268,12 @@ private:
         QString path;
         // The name of the group the row is in; set by the sort that groups.
         QString group;
+        // The Trash: where the item was (a path), the folder it was in
+        // written for the Original Location column (made when first shown),
+        // and when it was deleted (seconds of local wall-clock time as if UTC).
+        QString originPath;
+        QString origin;
+        qint64 deleted = 0;
     };
     struct SortRowIn {
         QString name;
@@ -263,6 +284,8 @@ private:
         bool isDir;
         bool needDisplay;
         quint32 rank;
+        QString originDir;
+        qint64 deleted;
     };
     struct SortResult {
         quint64 gen = 0;

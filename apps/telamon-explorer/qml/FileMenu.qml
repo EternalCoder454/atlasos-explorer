@@ -85,6 +85,15 @@ ContextMenu {
         shortcutText: "Enter"
         onTriggered: menu.later(() => menu.actions.openItems(menu.snap.urls))
     }
+    // Only in the Trash: puts the items back where they were.
+    ContextMenuItem {
+        text: qsTr("Restore")
+        symbol: Symbols.RestoreFromTrash
+        visible: menu.has("restore")
+        // A hidden row is off too: the arrow keys would stop on it.
+        enabled: menu.has("restore") && menu.on("restore")
+        onTriggered: menu.later(() => menu.actions.restore(menu.snap.urls))
+    }
     ActionMenu {
         id: openWith
         title: qsTr("Open With")

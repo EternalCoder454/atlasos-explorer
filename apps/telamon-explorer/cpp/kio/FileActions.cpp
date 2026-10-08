@@ -35,9 +35,12 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QSet>
 #include <QStandardPaths>
 #include <QThreadPool>
 #include <QTimer>
+
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <functional>
@@ -235,8 +238,7 @@ void FileActions::deleteForGood(const QList<QUrl> &urls)
     if (urls.isEmpty()) {
         return;
     }
-    const QString what = urls.size() == 1 ? tr("\"%1\"").arg(rustDisplayName(urls.first().adjusted(QUrl::StripTrailingSlash).fileName().toUtf8()))
-                                          : tr("these %1 items").arg(urls.size());
+    const QString what = urls.size() == 1 ? tr("\"%1\"").arg(rustDisplayName(OperationQueue::plainName(urls.first()).toUtf8())) : tr("these %1 items").arg(urls.size());
     Q_EMIT deleteRequested(urls, tr("Delete %1 for good? This can't be undone.").arg(what));
 }
 
@@ -248,6 +250,93 @@ void FileActions::confirmDelete(const QList<QUrl> &urls)
 void FileActions::emptyTrash()
 {
     m_ops->emptyTrash();
+}
+
+void FileActions::emptyOldTrash(int days)
+{
+    m_ops->emptyOldTrash(int(telamon_trash_clamp_days(days)));
+}
+
+// ---- Putting items back from the Trash ----
+
+void FileActions::restore(const QList<QUrl> &urls)
+{
+    if (!m_folder || !m_folder->trashTop() || urls.isEmpty()) {
+        return;
+    }
+    QList<OperationQueue::RestoreItem> items;
+    int unknown = 0;
+    QSet<QString> seen;
+    for (const QUrl &u : urls) {
+        if (seen.contains(u.toString())) {
+            continue;
+        }
+        seen.insert(u.toString());
+        // Where the Trash says it was; nothing else is believed.
+        const QString original = m_folder->originalPathOf(u);
+        if (original.isEmpty() || !QDir::isAbsolutePath(original)) {
+            ++unknown;
+            continue;
+        }
+        items.append({u, QUrl::fromLocalFile(QDir::cleanPath(original)), false});
+    }
+    if (unknown > 0) {
+        Q_EMIT failed(unknown == 1 ? tr("The Trash doesn't say where this item was, so it stays in the Trash.")
+                                   : tr("The Trash doesn't say where %1 of these items were, so they stay in the Trash.").arg(unknown));
+    }
+    if (items.isEmpty()) {
+        return;
+    }
+    // What is at the places, and which folders are gone, is read off the GUI thread.
+    QPointer<FileActions> self(this);
+    QThreadPool::globalInstance()->start([self, items]() mutable {
+        QSet<QString> claimed;
+        QStringList missing;
+        for (OperationQueue::RestoreItem &it : items) {
+            const QString path = it.target.toLocalFile();
+            struct stat st;
+            // Taken: something is there (a dangling link too), or an item before this one goes there.
+            it.taken = ::lstat(QFile::encodeName(path).constData(), &st) == 0 || claimed.contains(path);
+            claimed.insert(path);
+            const QString parent = QFileInfo(path).path();
+            if (!missing.contains(parent) && !QFileInfo::exists(parent)) {
+                missing << parent;
+            }
+        }
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, items, missing] {
+            if (!self) {
+                return;
+            }
+            if (missing.isEmpty()) {
+                self->m_ops->restore(items, {});
+                return;
+            }
+            self->m_restoreItems = items;
+            self->m_restoreFolders = missing;
+            QStringList shown;
+            for (const QString &m : missing) {
+                shown << rustSearchPathText(QUrl::fromLocalFile(m).toString(QUrl::FullyEncoded), QDir::homePath());
+            }
+            const QString list = shown.join(QLatin1Char('\n'));
+            Q_EMIT self->restoreAsk(rustTrashText(0, list, quint64(items.size())), rustTrashText(1, list, quint64(items.size())));
+        });
+    });
+}
+
+void FileActions::confirmRestore()
+{
+    const auto items = std::exchange(m_restoreItems, {});
+    const auto folders = std::exchange(m_restoreFolders, {});
+    m_ops->restore(items, folders);
+}
+
+void FileActions::cancelRestore()
+{
+    m_restoreItems.clear();
+    m_restoreFolders.clear();
 }
 
 // ---- Names: rename, new folder, new file ----
@@ -742,6 +831,7 @@ QVariantMap FileActions::itemMenu(const QList<QUrl> &urls)
     set(searching, MenuFlag::Searching);
     set(scheme == QLatin1String("recentlyused"), MenuFlag::Recent);
     set(scheme == QLatin1String("trash"), MenuFlag::InTrash);
+    set(m_folder && m_folder->trashTop(), MenuFlag::TrashTop);
     set(local, MenuFlag::Local);
     set(canPaste(), MenuFlag::CanPaste);
     const bool haveArchive = archiveInstalled();

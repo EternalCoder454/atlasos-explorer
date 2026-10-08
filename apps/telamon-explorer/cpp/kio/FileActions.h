@@ -93,6 +93,16 @@ public:
     // window shows `deleteRequested`, and `confirmDelete` does it.
     Q_INVOKABLE void confirmDelete(const QList<QUrl> &urls);
     Q_INVOKABLE void emptyTrash();
+    // Puts items of the Trash (its top) back where they were. A folder that
+    // is gone is made again only after the user says so (`restoreAsk`, then
+    // `confirmRestore` or `cancelRestore`); an original place that is taken
+    // opens the conflict dialog.
+    Q_INVOKABLE void restore(const QList<QUrl> &urls);
+    Q_INVOKABLE void confirmRestore();
+    Q_INVOKABLE void cancelRestore();
+    // Removes what has been in the Trash for more than `days` days (quiet;
+    // the Trash setting). Not undoable.
+    Q_INVOKABLE void emptyOldTrash(int days);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     // What the context menu of `urls` (of the background when empty) holds,
@@ -169,6 +179,9 @@ Q_SIGNALS:
     void cutChanged();
     // Delete for good was asked: the window asks the user, then confirmDelete.
     void deleteRequested(const QList<QUrl> &urls, const QString &text);
+    // Restore found folders that are gone: the window asks (title, text), and
+    // `confirmRestore` or `cancelRestore` answers.
+    void restoreAsk(const QString &title, const QString &text);
     // A drop without a modifier key: show Move Here, Copy Here, Link Here at x, y.
     void dropMenuRequested(const QList<QUrl> &urls, const QUrl &destination, int x, int y);
 
@@ -205,6 +218,9 @@ private:
     QPointer<QQuickWindow> m_window;
     OperationQueue *m_ops = nullptr;
     int m_cutCount = 0;
+    // A restore that waits for the answer about folders that are gone.
+    QList<OperationQueue::RestoreItem> m_restoreItems;
+    QStringList m_restoreFolders;
     // What the latest menu's "Open With" and service entries run; replaced
     // (and the old ones deleted) when the next menu is made.
     QMenu *m_scratch = nullptr;

@@ -9,6 +9,7 @@ mod home_ffi;
 mod ops_ffi;
 mod preview_ffi;
 mod search_ffi;
+mod trash_ffi;
 mod views_ffi;
 
 telamon_framework_ui::app! {

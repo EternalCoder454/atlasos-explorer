@@ -125,7 +125,8 @@ FocusScope {
         viewMode = p.mode;
         iconSize = p.icon;
         groupBy = p.group;
-        folderModel.sortColumn = p.sort;
+        // The Trash's columns (7 and 8) only exist in the Trash.
+        folderModel.sortColumn = p.sort >= FolderModel.OriginalLocation && !folderModel.trashTop ? FolderModel.Name : p.sort;
         folderModel.sortDescending = p.descending;
         restoring = false;
     }

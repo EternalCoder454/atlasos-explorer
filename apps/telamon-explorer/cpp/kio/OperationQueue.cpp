@@ -6,6 +6,7 @@
 #include "OpsBridge.h"
 #include "RustBridge.h"
 
+#include <KDirNotify>
 #include <KIO/CopyJob>
 #include <KIO/DeleteJob>
 #include <KIO/EmptyTrashJob>
@@ -13,6 +14,7 @@
 #include <KIO/Job>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/MkdirJob>
+#include <KIO/MkpathJob>
 #include <KIO/Paste>
 #include <KIO/PasteJob>
 #include <KIO/RestoreJob>
@@ -29,9 +31,12 @@
 #include <QMimeData>
 #include <QMimeDatabase>
 #include <QMutex>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QStandardPaths>
 #include <QThreadPool>
+#include <QTimeZone>
 
 #include <algorithm>
 #include <memory>
@@ -297,6 +302,54 @@ private:
     QStringList m_names;
     bool m_hide;
 };
+
+// Empties what has been in the Trash for more than `days` days, on a worker
+// thread (the core looks at every trash folder; the journal gets the count).
+class TrashPurgeJob : public KJob
+{
+public:
+    explicit TrashPurgeJob(int days)
+        : m_days(days)
+    {
+        QMetaObject::invokeMethod(this, &TrashPurgeJob::start, Qt::QueuedConnection);
+    }
+
+    void start() override
+    {
+        QPointer<TrashPurgeJob> self(this);
+        const int days = m_days;
+        // The Trash lists a deletion date in local wall-clock time, so "now" is too.
+        const QDateTime now = QDateTime::currentDateTime();
+        const qint64 local = QDateTime(now.date(), now.time(), QTimeZone::UTC).toSecsSinceEpoch();
+        const QByteArray dataHome = QFile::encodeName(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+        QThreadPool::globalInstance()->start([self, days, local, dataHome] {
+            TelamonTrashReport report{};
+            const bool ok = telamon_trash_purge(quint32(days), local, 2, reinterpret_cast<const uint8_t *>(dataHome.constData()), size_t(dataHome.size()), &report);
+            if (!self) {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, ok, report] {
+                if (!self) {
+                    return;
+                }
+                if (!ok) {
+                    self->setError(KJob::UserDefinedError);
+                    self->setErrorText(OperationQueue::tr("The Trash couldn't be looked at."));
+                } else if (report.failed > 0) {
+                    self->setError(KJob::UserDefinedError);
+                    self->setErrorText(OperationQueue::tr("Some old items in the Trash couldn't be removed."));
+                }
+                self->emitResult();
+            });
+        });
+    }
+
+protected:
+    bool doKill() override { return true; }
+
+private:
+    int m_days;
+};
 }
 
 struct OperationQueue::Work {
@@ -331,6 +384,8 @@ struct OperationQueue::Work {
     std::shared_ptr<ArchivePlan> plan;
     // What a finished job made, to be selected.
     QList<QUrl> results;
+    // Background upkeep: no toast, and the row goes when it is done.
+    bool quiet = false;
 };
 
 OperationQueue::OperationQueue(QObject *parent)
@@ -603,11 +658,21 @@ QString OperationQueue::folderName(const QUrl &folder)
     return folder.isLocalFile() ? QStringLiteral("/") : rustDisplayName(folder.host().toUtf8());
 }
 
+QString OperationQueue::plainName(const QUrl &url)
+{
+    QString name = url.adjusted(QUrl::StripTrailingSlash).fileName();
+    if (url.scheme() == QLatin1String("trash")) {
+        static const QRegularExpression id(QStringLiteral("^[0-9]+-"));
+        name.remove(id);
+    }
+    return name;
+}
+
 QString OperationQueue::nameList(const QList<QUrl> &urls, int max) const
 {
     QStringList names;
     for (const QUrl &u : urls.mid(0, max)) {
-        names << rustDisplayName(u.adjusted(QUrl::StripTrailingSlash).fileName().toUtf8());
+        names << rustDisplayName(plainName(u).toUtf8());
     }
     return names.join(QLatin1Char('\n'));
 }
@@ -837,7 +902,16 @@ void OperationQueue::finishOp(quint64 id)
         recordHistory(w);
     }
     if (w.kind == EmptyTrash) {
-        Q_EMIT message(tr("Trash emptied."));
+        // The Trash's lists (the sidebar's count, a tab showing it) read it
+        // again: KIO tells only when nothing at all is left in it, and Files'
+        // own emptying works behind KIO's back.
+        org::kde::KDirNotify::emitFilesAdded(QUrl(QStringLiteral("trash:/")));
+        if (!w.quiet) {
+            Q_EMIT message(tr("Trash emptied."));
+        }
+    }
+    if (w.quiet) {
+        telamon_ops_dismiss(m_engine, id);
     }
     refresh();
     Q_EMIT jobFinished();
@@ -865,12 +939,17 @@ void OperationQueue::failOp(quint64 id, const QString &why, bool say)
         m_undoableId = 0;
         refreshHistory();
         Q_EMIT message(tr("Couldn't %1 \"%2\": %3").arg(w.side == 0 ? tr("undo") : tr("redo"), w.title, why));
-    } else if (say) {
+    } else if (say && !w.quiet) {
         Q_EMIT message(tr("%1 didn't finish: %2").arg(w.title, why));
     }
     endOp(id, false);
-    // A batch of renames that stopped half way: the ones done are one step to undo.
-    if (w.kind == Rename && w.record && w.side < 0 && w.sources.size() > 1 && !w.pairs.isEmpty()) {
+    if (w.quiet) {
+        // Upkeep that went wrong is no business of the window's: the journal has it.
+        telamon_ops_dismiss(m_engine, id);
+    }
+    // A batch of renames (or of items put back) that stopped half way: the
+    // ones done are one step to undo.
+    if (((w.kind == Rename && w.sources.size() > 1) || w.kind == Restore) && w.record && w.side < 0 && !w.pairs.isEmpty()) {
         recordHistory(w);
     }
     refresh();
@@ -989,7 +1068,7 @@ namespace
 QVariantMap sideOf(const QUrl &url, bool isDir, KIO::filesize_t size, const QDateTime &when)
 {
     QVariantMap m;
-    const QString name = url.adjusted(QUrl::StripTrailingSlash).fileName();
+    const QString name = OperationQueue::plainName(url);
     m.insert(QStringLiteral("name"), rustDisplayName(name.toUtf8()));
     m.insert(QStringLiteral("isDir"), isDir);
     m.insert(QStringLiteral("sizeText"), isDir || size == KIO::filesize_t(-1) ? QString() : KIO::convertSize(size));
@@ -1177,8 +1256,7 @@ void OperationQueue::askDelete(OperationAsker *asker, quint64 opId, const QList<
     QVariantMap q;
     q.insert(QStringLiteral("type"), QStringLiteral("delete"));
     q.insert(QStringLiteral("opId"), opId);
-    const QString what = urls.size() == 1 ? tr("\"%1\"").arg(rustDisplayName(urls.first().adjusted(QUrl::StripTrailingSlash).fileName().toUtf8()))
-                                          : tr("These %n items", "", int(urls.size()));
+    const QString what = urls.size() == 1 ? tr("\"%1\"").arg(rustDisplayName(plainName(urls.first()).toUtf8())) : tr("These %n items", "", int(urls.size()));
     q.insert(QStringLiteral("text"),
              type == KIO::AskUserActionInterface::Trash || type == KIO::AskUserActionInterface::EmptyTrash
                  ? tr("Delete %1 for good? This can't be undone.").arg(what)
@@ -1482,6 +1560,83 @@ void OperationQueue::emptyTrash()
     enqueue(std::move(w), tr("Emptying the Trash"));
 }
 
+void OperationQueue::restore(const QList<RestoreItem> &items, const QStringList &makeFolders, std::function<void(bool)> done)
+{
+    if (items.isEmpty()) {
+        if (done) {
+            done(false);
+        }
+        return;
+    }
+    Work w;
+    w.kind = Restore;
+    w.done = std::move(done);
+    QList<QUrl> free;
+    for (const RestoreItem &it : items) {
+        w.sources << it.trashUrl;
+        w.top.insert(key(it.trashUrl));
+        if (!it.taken) {
+            free << it.trashUrl;
+            // Where it goes, written down now: the undo record looks at what is there when it is done.
+            w.pairs.insert(key(it.trashUrl), it.target);
+        }
+    }
+    w.dest = items.first().target.adjusted(QUrl::StripTrailingSlash | QUrl::RemoveFilename);
+    // Named by what they were called: the Trash's own names carry an id.
+    QList<QUrl> named;
+    for (const RestoreItem &it : items) {
+        named << it.target;
+    }
+    w.title = textFor(0, Restore, named, QString(), QString());
+    // Folders that are gone are made again first.
+    for (const QString &dir : makeFolders) {
+        const QUrl url = QUrl::fromLocalFile(dir);
+        w.steps << [url]() -> KJob * { return KIO::mkpath(url, QUrl(), KIO::HideProgressInfo); };
+    }
+    // The Trash's own restore for what has a free place (a rename where it can be)...
+    if (!free.isEmpty()) {
+        w.steps << [free]() -> KJob * { return KIO::restoreFromTrash(free, KIO::HideProgressInfo); };
+    }
+    // ... and a move, with the conflict dialog, for what finds its place taken.
+    for (const RestoreItem &it : items) {
+        if (it.taken) {
+            const QUrl from = it.trashUrl, to = it.target;
+            w.steps << [from, to]() -> KJob * { return KIO::moveAs(from, to, KIO::HideProgressInfo); };
+        }
+    }
+    const QString running = textFor(1, Restore, named, QString(), QString());
+    enqueue(std::move(w), running);
+}
+
+void OperationQueue::emptyOldTrash(int days)
+{
+    // Looked at first, on a worker, with nothing changed: when nothing is old
+    // enough there is no operation, and so nothing to see.
+    const QDateTime now = QDateTime::currentDateTime();
+    const qint64 local = QDateTime(now.date(), now.time(), QTimeZone::UTC).toSecsSinceEpoch();
+    const QByteArray dataHome = QFile::encodeName(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+    QPointer<OperationQueue> self(this);
+    QThreadPool::globalInstance()->start([self, days, local, dataHome] {
+        TelamonTrashReport report{};
+        const bool ok = telamon_trash_purge(quint32(days), local, 1, reinterpret_cast<const uint8_t *>(dataHome.constData()), size_t(dataHome.size()), &report);
+        if (!self || !ok || report.removed == 0) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, days] {
+            if (!self) {
+                return;
+            }
+            Work w;
+            w.kind = EmptyTrash;
+            w.record = false;
+            w.quiet = true;
+            w.title = tr("Empty Old Trash Items");
+            w.steps << [days]() -> KJob * { return new TrashPurgeJob(days); };
+            self->enqueue(std::move(w), tr("Emptying old items from the Trash"));
+        });
+    });
+}
+
 void OperationQueue::archive(const QString &method, const QVariantList &args, const QVariantMap &options, const QString &title, const QString &running)
 {
     Work w;
@@ -1734,7 +1889,7 @@ void OperationQueue::recordHistory(const Work &w)
     }
     const QList<QUrl> created = w.created;
     QList<QUrl> look;
-    if (kind == Copy || kind == Link || kind == Move || kind == Rename || kind == Trash) {
+    if (kind == Copy || kind == Link || kind == Move || kind == Rename || kind == Trash || kind == Restore) {
         if (pairs.isEmpty()) {
             return;
         }
@@ -1785,6 +1940,20 @@ void OperationQueue::recordHistory(const Work &w)
                     rec += urlKey(p.first) + QLatin1Char('\t') + urlKey(p.second) + QLatin1Char('\t') + stateFields(state(p.second)) + QLatin1Char('\n');
                 }
                 break;
+            case Restore: {
+                // What is back where it was; undone by trashing it again, like a copy.
+                QString body;
+                for (const auto &p : pairs) {
+                    if (state(p.second).exists) {
+                        body += urlKey(p.second) + QLatin1Char('\t') + stateFields(state(p.second)) + QLatin1Char('\n');
+                    }
+                }
+                if (body.isEmpty()) {
+                    return;
+                }
+                rec = QStringLiteral("copy\n") + body;
+                break;
+            }
             case Trash:
                 rec = QStringLiteral("trash\n");
                 for (const auto &p : pairs) {
