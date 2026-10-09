@@ -36,7 +36,7 @@
 //! the file is opened with `O_NOFOLLOW` and must be a regular file of the user's
 //! own; it is written to a temp file, synced, then renamed.
 
-use crate::index::{Index, MAX_ARENA, MAX_RECORDS, Record, TagRef, TagTable};
+use crate::index::{Index, MAX_ARENA, MAX_RECORDS, MAX_TAG_ARENA, Record, TagRef, TagTable};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
@@ -53,8 +53,10 @@ const FILE_NAME: &str = "v2.idx";
 const TMP_NAME: &str = "v2.idx.tmp";
 /// The names of the version before: removed when a snapshot is written.
 const OLD_NAMES: [&str; 2] = ["v1.idx", "v1.idx.tmp"];
-/// Largest snapshot file read or written.
-pub const MAX_FILE: u64 = 512 * 1024 * 1024;
+/// Largest snapshot file read or written: the records, the arena and the tags
+/// at their limits (see `index::MAX_ARENA`), and well below the service's
+/// memory ceiling when the file is read.
+pub const MAX_FILE: u64 = 384 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotError {
@@ -176,7 +178,8 @@ pub fn decode_with(
     let arena_len = le64(bytes, 24);
     let tag_n = le32(bytes, 48) as usize;
     let tag_arena_len = le32(bytes, 52) as usize;
-    if n > MAX_RECORDS || arena_len > MAX_ARENA as u64 || tag_n > n || tag_arena_len > MAX_ARENA {
+    if n > MAX_RECORDS || arena_len > MAX_ARENA as u64 || tag_n > n || tag_arena_len > MAX_TAG_ARENA
+    {
         return Err(Corrupt("counts out of range"));
     }
     let arena_len = arena_len as usize;
@@ -319,6 +322,31 @@ impl CacheDir {
             cur = next;
         }
         Ok(Some(CacheDir { fd: cur }))
+    }
+
+    /// Size and modification time (nanoseconds) of the snapshot file as it is
+    /// now, without following a link; `None` when there is none.
+    pub fn stamp(&self) -> Option<(u64, i128)> {
+        let c = cstr(FILE_NAME).ok()?;
+        let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: the folder fd is open; c is NUL-terminated; st is filled on success.
+        let r = unsafe {
+            libc::fstatat(
+                self.fd.as_raw_fd(),
+                c.as_ptr(),
+                st.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if r != 0 {
+            return None;
+        }
+        // SAFETY: filled by the successful call.
+        let st = unsafe { st.assume_init() };
+        Some((
+            st.st_size as u64,
+            i128::from(st.st_mtime) * 1_000_000_000 + i128::from(st.st_mtime_nsec),
+        ))
     }
 
     /// The snapshot's bytes; `Ok(None)` when there is none.
@@ -608,6 +636,13 @@ mod tests {
         });
         bad("tag arena length huge", &|b| {
             b[52..56].copy_from_slice(&u32::MAX.to_le_bytes())
+        });
+        // Under u32, but over what the service's memory allows.
+        bad("arena past the memory limit", &|b| {
+            b[24..32].copy_from_slice(&(MAX_ARENA as u64 + 1).to_le_bytes())
+        });
+        bad("tag arena past the memory limit", &|b| {
+            b[52..56].copy_from_slice(&(MAX_TAG_ARENA as u32 + 1).to_le_bytes())
         });
         bad("tag arena length short", &|b| {
             let n = le32(b, 52) - 1;

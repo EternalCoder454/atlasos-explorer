@@ -12,6 +12,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDBusConnection>
 #include <QDir>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
@@ -88,6 +89,12 @@ int main(int argc, char *argv[])
     // One instance per session. A second launch's arguments come here through
     // activateRequested; without a session bus each launch runs on its own.
     KDBusService service(KDBusService::Unique | KDBusService::NoExitOnFailure);
+    // KDBusService also exports the whole application object at
+    // /MainApplication, with its slots and properties: any process on the bus
+    // could call quit() and closeAllWindows() (ending a copy half way) or set
+    // the style sheet. Nothing needs that path: org.freedesktop.Application
+    // is served at the application's own path.
+    QDBusConnection::sessionBus().unregisterObject(QStringLiteral("/MainApplication"));
 
     // The backend outlives the engine: the window's bindings read it until
     // the engine is gone.
@@ -117,8 +124,8 @@ int main(int argc, char *argv[])
             return;
         }
         // `--` first: whatever the caller sent is never read as an option.
-        QStringList arguments{QStringLiteral("--")};
-        // The Rust side looks at 64 arguments (this `--` and 63 URLs) and
+        QStringList arguments{QStringLiteral("--bus"), QStringLiteral("--")};
+        // The Rust side looks at 64 arguments (`--bus`, this `--` and 62 URLs) and
         // counts the rest; one more is enough for it to say some were left
         // out.
         for (const QUrl &url : urls.mid(0, 64)) {
@@ -131,7 +138,8 @@ int main(int argc, char *argv[])
     // parsing; `--` first so nothing sent is read as an option.
     auto viaBackend = [e = engine.get(), b = backend.get()](const QStringList &uris, const QString &, const QString &option) {
         raise(e);
-        QStringList arguments;
+        // `--bus`: another program asked, so no server or device is opened for it.
+        QStringList arguments{QStringLiteral("--bus")};
         if (!option.isEmpty()) {
             arguments << option;
         }
@@ -143,7 +151,7 @@ int main(int argc, char *argv[])
         [viaBackend](const QStringList &u, const QString &id) { viaBackend(u, id, QStringLiteral("--select")); },
         [e = engine.get(), b = backend.get()](const QStringList &uris, const QString &) {
             raise(e);
-            QStringList arguments{QStringLiteral("--")};
+            QStringList arguments{QStringLiteral("--bus"), QStringLiteral("--")};
             arguments << uris;
             QMetaObject::invokeMethod(b, "inspect", Q_ARG(QStringList, arguments));
         });

@@ -60,30 +60,32 @@ pub unsafe extern "C" fn telamon_tags_read(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let (st, text) = match abs_path(path, len) {
-        None => (3, String::new()),
-        Some(p) => {
-            if xattr::is_link(&p) {
-                (2, String::new())
-            } else {
-                match xattr::get(&p, xattr::TAGS) {
-                    Ok(None) => (0, String::new()),
-                    Ok(Some(raw)) => (
-                        if tags::is_clean(&raw) { 0 } else { 4 },
-                        tags::parse_shown(&raw).join("\n"),
-                    ),
-                    Err(xattr::Error::Unsupported) => (1, String::new()),
-                    Err(_) => (3, String::new()),
+    crate::ffi::guarded(0, || {
+        let (st, text) = match abs_path(path, len) {
+            None => (3, String::new()),
+            Some(p) => {
+                if xattr::is_link(&p) {
+                    (2, String::new())
+                } else {
+                    match xattr::get(&p, xattr::TAGS) {
+                        Ok(None) => (0, String::new()),
+                        Ok(Some(raw)) => (
+                            if tags::is_clean(&raw) { 0 } else { 4 },
+                            tags::parse_shown(&raw).join("\n"),
+                        ),
+                        Err(xattr::Error::Unsupported) => (1, String::new()),
+                        Err(_) => (3, String::new()),
+                    }
                 }
             }
+        };
+        if !status.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *status = st };
         }
-    };
-    if !status.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *status = st };
-    }
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The star rating (0 to 10) of a file; -1 when it can't be read.
@@ -113,10 +115,12 @@ pub unsafe extern "C" fn telamon_tags_colour(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let n = text_of(name, len);
-    let hex = tags::colour_of(&n).unwrap_or("");
-    // SAFETY: forwarded.
-    unsafe { put(hex.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let n = text_of(name, len);
+        let hex = tags::colour_of(&n).unwrap_or("");
+        // SAFETY: forwarded.
+        unsafe { put(hex.as_bytes(), out, cap) }
+    })
 }
 
 /// The seven colours: lines `Name`, tab, `#rrggbb`.
@@ -125,13 +129,15 @@ pub unsafe extern "C" fn telamon_tags_colour(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_tags_colours(out: *mut u8, cap: usize) -> usize {
-    let text = tags::COLOURS
-        .iter()
-        .map(|(n, h)| format!("{n}\t{h}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let text = tags::COLOURS
+            .iter()
+            .map(|(n, h)| format!("{n}\t{h}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// A tag name a person typed, made into a tag. Returns the name's length and
@@ -149,25 +155,27 @@ pub unsafe extern "C" fn telamon_tags_new_name(
     cap: usize,
     problem: *mut u32,
 ) -> usize {
-    let typed = text_of(name, len);
-    let (code, text) = match tags::new_name(&typed) {
-        Ok(n) => (0, n),
-        Err(p) => (
-            match p {
-                tags::NameProblem::Empty => 1,
-                tags::NameProblem::Comma => 2,
-                tags::NameProblem::Control => 3,
-                tags::NameProblem::TooLong => 4,
-            },
-            p.text().to_string(),
-        ),
-    };
-    if !problem.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *problem = code };
-    }
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let typed = text_of(name, len);
+        let (code, text) = match tags::new_name(&typed) {
+            Ok(n) => (0, n),
+            Err(p) => (
+                match p {
+                    tags::NameProblem::Empty => 1,
+                    tags::NameProblem::Comma => 2,
+                    tags::NameProblem::Control => 3,
+                    tags::NameProblem::TooLong => 4,
+                },
+                p.text().to_string(),
+            ),
+        };
+        if !problem.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *problem = code };
+        }
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The tags to list (menu, sidebar): `seen` are names a line each, `indexed`
@@ -184,25 +192,27 @@ pub unsafe extern "C" fn telamon_tags_in_use(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let seen: Vec<String> = text_of(seen, seen_len)
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect();
-    let indexed: Vec<(String, u32)> = text_of(indexed, indexed_len)
-        .lines()
-        .filter_map(|l| {
-            let (n, c) = l.split_once('\t')?;
-            (!n.is_empty()).then(|| (n.to_string(), c.parse().unwrap_or(0)))
-        })
-        .collect();
-    let text = tags::in_use(&seen, &indexed)
-        .iter()
-        .map(|(n, c)| format!("{n}\t{c}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let seen: Vec<String> = text_of(seen, seen_len)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        let indexed: Vec<(String, u32)> = text_of(indexed, indexed_len)
+            .lines()
+            .filter_map(|l| {
+                let (n, c) = l.split_once('\t')?;
+                (!n.is_empty()).then(|| (n.to_string(), c.parse().unwrap_or(0)))
+            })
+            .collect();
+        let text = tags::in_use(&seen, &indexed)
+            .iter()
+            .map(|(n, c)| format!("{n}\t{c}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Whether none (0), some (1) or all (2) of the items have the tag. `items`
@@ -244,14 +254,16 @@ pub unsafe extern "C" fn telamon_tags_have(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_tags_status_text(status: u32, out: *mut u8, cap: usize) -> usize {
-    let t = match status {
-        1 => xattr::Error::Unsupported.text(),
-        2 => xattr::Error::Link.text(),
-        4 => "The tags of this item are in a form Files doesn't change.",
-        _ => xattr::Error::Denied.text(),
-    };
-    // SAFETY: forwarded.
-    unsafe { put(t.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let t = match status {
+            1 => xattr::Error::Unsupported.text(),
+            2 => xattr::Error::Link.text(),
+            4 => "The tags of this item are in a form Files doesn't change.",
+            _ => xattr::Error::Denied.text(),
+        };
+        // SAFETY: forwarded.
+        unsafe { put(t.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Changes ----
@@ -324,71 +336,73 @@ pub unsafe extern "C" fn telamon_attrs_edit(
     clear_bits: u32,
     cancel: *const u8,
 ) -> *mut TelamonOutcome {
-    // SAFETY: forwarded.
-    let raw = unsafe { bytes(paths, paths_len) };
-    let list: Vec<PathBuf> = raw
-        .split(|b| *b == 0)
-        .filter(|p| p.first() == Some(&b'/'))
-        .map(|p| PathBuf::from(OsStr::from_bytes(p)))
-        .collect();
-    if list.is_empty() {
-        return std::ptr::null_mut();
-    }
-    // SAFETY: forwarded.
-    let cancel = unsafe { flag(cancel) };
-    let names = |p: *const u8, n: usize| -> Vec<String> {
-        text_of(p, n)
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(str::to_string)
-            .collect()
-    };
-    let out = match kind {
-        0 => attrs::run_edit(
-            &list,
-            &Edit::Tags {
-                add: names(add, add_len),
-                remove: names(remove, remove_len),
-                clear,
-            },
-            cancel,
-        ),
-        1 if value <= 10 => attrs::run_edit(&list, &Edit::Rating(value as u8), cancel),
-        2 => attrs::run_edit(
-            &list,
-            &Edit::Mode {
-                set: set_bits & perms::RWX,
-                clear: clear_bits & perms::RWX,
-            },
-            cancel,
-        ),
-        3 => {
-            let mut all = attrs::Outcome::default();
-            for root in &list {
-                let o = attrs::run_mode_tree(
-                    root,
-                    set_bits & perms::RWX,
-                    clear_bits & perms::RWX,
-                    cancel,
-                );
-                all.items += o.items;
-                all.failed += o.failed;
-                all.problem = all.problem.or(o.problem);
-                all.overflow |= o.overflow;
-                all.cancelled |= o.cancelled;
-                if !all.overflow {
-                    all.changes.extend(o.changes);
-                    if all.changes.len() > attrs::MAX_RECORDED {
-                        all.overflow = true;
-                        all.changes.clear();
+    crate::ffi::guarded(std::ptr::null_mut(), || {
+        // SAFETY: forwarded.
+        let raw = unsafe { bytes(paths, paths_len) };
+        let list: Vec<PathBuf> = raw
+            .split(|b| *b == 0)
+            .filter(|p| p.first() == Some(&b'/'))
+            .map(|p| PathBuf::from(OsStr::from_bytes(p)))
+            .collect();
+        if list.is_empty() {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: forwarded.
+        let cancel = unsafe { flag(cancel) };
+        let names = |p: *const u8, n: usize| -> Vec<String> {
+            text_of(p, n)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        let out = match kind {
+            0 => attrs::run_edit(
+                &list,
+                &Edit::Tags {
+                    add: names(add, add_len),
+                    remove: names(remove, remove_len),
+                    clear,
+                },
+                cancel,
+            ),
+            1 if value <= 10 => attrs::run_edit(&list, &Edit::Rating(value as u8), cancel),
+            2 => attrs::run_edit(
+                &list,
+                &Edit::Mode {
+                    set: set_bits & perms::RWX,
+                    clear: clear_bits & perms::RWX,
+                },
+                cancel,
+            ),
+            3 => {
+                let mut all = attrs::Outcome::default();
+                for root in &list {
+                    let o = attrs::run_mode_tree(
+                        root,
+                        set_bits & perms::RWX,
+                        clear_bits & perms::RWX,
+                        cancel,
+                    );
+                    all.items += o.items;
+                    all.failed += o.failed;
+                    all.problem = all.problem.or(o.problem);
+                    all.overflow |= o.overflow;
+                    all.cancelled |= o.cancelled;
+                    if !all.overflow {
+                        all.changes.extend(o.changes);
+                        if all.changes.len() > attrs::MAX_RECORDED {
+                            all.overflow = true;
+                            all.changes.clear();
+                        }
                     }
                 }
+                all
             }
-            all
-        }
-        _ => return std::ptr::null_mut(),
-    };
-    Box::into_raw(Box::new(TelamonOutcome(out)))
+            _ => return std::ptr::null_mut(),
+        };
+        Box::into_raw(Box::new(TelamonOutcome(out)))
+    })
 }
 
 /// Sets values back (`rev`) or makes them again, for the changes of an
@@ -403,16 +417,18 @@ pub unsafe extern "C" fn telamon_attrs_revert(
     rev: bool,
     cancel: *const u8,
 ) -> *mut TelamonOutcome {
-    // SAFETY: forwarded.
-    let Some(list) = parse_changes(unsafe { bytes(changes, len) }) else {
-        return std::ptr::null_mut();
-    };
-    if list.is_empty() {
-        return std::ptr::null_mut();
-    }
-    // SAFETY: forwarded.
-    let out = attrs::run_revert(&list, rev, unsafe { flag(cancel) });
-    Box::into_raw(Box::new(TelamonOutcome(out)))
+    crate::ffi::guarded(std::ptr::null_mut(), || {
+        // SAFETY: forwarded.
+        let Some(list) = parse_changes(unsafe { bytes(changes, len) }) else {
+            return std::ptr::null_mut();
+        };
+        if list.is_empty() {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: forwarded.
+        let out = attrs::run_revert(&list, rev, unsafe { flag(cancel) });
+        Box::into_raw(Box::new(TelamonOutcome(out)))
+    })
 }
 
 /// Counts of a run: items looked at and items that failed; the return value
@@ -455,12 +471,14 @@ pub unsafe extern "C" fn telamon_attrs_problem(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: an outcome from this module, or null.
-    let text = unsafe { h.as_ref() }
-        .and_then(|o| o.0.problem.as_ref().map(|p| p.text()))
-        .unwrap_or_default();
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: an outcome from this module, or null.
+        let text = unsafe { h.as_ref() }
+            .and_then(|o| o.0.problem.as_ref().map(|p| p.text()))
+            .unwrap_or_default();
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The changes made: for each, path, key, value before and value after, every
@@ -474,12 +492,14 @@ pub unsafe extern "C" fn telamon_attrs_changes(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: an outcome from this module, or null.
-    let text = unsafe { h.as_ref() }
-        .map(|o| changes_text(&o.0.changes))
-        .unwrap_or_default();
-    // SAFETY: forwarded.
-    unsafe { put(&text, out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: an outcome from this module, or null.
+        let text = unsafe { h.as_ref() }
+            .map(|o| changes_text(&o.0.changes))
+            .unwrap_or_default();
+        // SAFETY: forwarded.
+        unsafe { put(&text, out, cap) }
+    })
 }
 
 /// # Safety
@@ -507,19 +527,21 @@ pub unsafe extern "C" fn telamon_attr_read(
     cap: usize,
     ok: *mut bool,
 ) -> usize {
-    let key = match key {
-        0 => Key::Tags,
-        1 => Key::Rating,
-        _ => Key::Mode,
-    };
-    let r = abs_path(path, len).map(|p| attrs::read(&p, key));
-    if !ok.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *ok = matches!(r, Some(Ok(_))) };
-    }
-    let text = r.and_then(Result::ok).unwrap_or_default();
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let key = match key {
+            0 => Key::Tags,
+            1 => Key::Rating,
+            _ => Key::Mode,
+        };
+        let r = abs_path(path, len).map(|p| attrs::read(&p, key));
+        if !ok.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *ok = matches!(r, Some(Ok(_))) };
+        }
+        let text = r.and_then(Result::ok).unwrap_or_default();
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Permissions ----
@@ -590,16 +612,18 @@ pub unsafe extern "C" fn telamon_perm_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let text = match which {
-        0 => Who::from_index(who)
-            .map(|w| perms::words(perms::access(mode, w), is_dir))
-            .unwrap_or_default(),
-        1 => perms::sentence(mode, is_dir, who == 1),
-        2 => perms::octal(mode),
-        _ => perms::symbolic(mode),
-    };
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let text = match which {
+            0 => Who::from_index(who)
+                .map(|w| perms::words(perms::access(mode, w), is_dir))
+                .unwrap_or_default(),
+            1 => perms::sentence(mode, is_dir, who == 1),
+            2 => perms::octal(mode),
+            _ => perms::symbolic(mode),
+        };
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The user id of this process.
@@ -634,27 +658,29 @@ pub unsafe extern "C" fn telamon_sum_file(
     cap: usize,
     len: *mut usize,
 ) -> i32 {
-    let (rc, text) = match (abs_path(path, path_len), Alg::from_index(alg)) {
-        (Some(p), Some(a)) => {
-            let mut cb = |n: u64| {
-                if let Some(f) = progress {
-                    f(user, n);
+    crate::ffi::guarded(2, || {
+        let (rc, text) = match (abs_path(path, path_len), Alg::from_index(alg)) {
+            (Some(p), Some(a)) => {
+                let mut cb = |n: u64| {
+                    if let Some(f) = progress {
+                        f(user, n);
+                    }
+                };
+                // SAFETY: forwarded.
+                match checksum::hash_file(&p, a, unsafe { flag(cancel) }, &mut cb) {
+                    Ok(hex) => (0, hex),
+                    Err(checksum::FileError::Cancelled) => (1, String::new()),
+                    Err(e) => (2, e.text()),
                 }
-            };
-            // SAFETY: forwarded.
-            match checksum::hash_file(&p, a, unsafe { flag(cancel) }, &mut cb) {
-                Ok(hex) => (0, hex),
-                Err(checksum::FileError::Cancelled) => (1, String::new()),
-                Err(e) => (2, e.text()),
             }
+            _ => (2, "The file couldn't be read.".to_string()),
+        };
+        if !len.is_null() {
+            // SAFETY: writable per the contract; forwarded `put`.
+            unsafe { *len = put(text.as_bytes(), out, cap) };
         }
-        _ => (2, "The file couldn't be read.".to_string()),
-    };
-    if !len.is_null() {
-        // SAFETY: writable per the contract; forwarded `put`.
-        unsafe { *len = put(text.as_bytes(), out, cap) };
-    }
-    rc
+        rc
+    })
 }
 
 /// What a person pasted, read as a checksum: the kind (as `alg` numbers) in
@@ -671,15 +697,17 @@ pub unsafe extern "C" fn telamon_sum_expected(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let Some((a, hex)) = checksum::parse_expected(&text_of(text, len)) else {
-        return 0;
-    };
-    if !alg.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *alg = a.index() };
-    }
-    // SAFETY: forwarded.
-    unsafe { put(hex.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let Some((a, hex)) = checksum::parse_expected(&text_of(text, len)) else {
+            return 0;
+        };
+        if !alg.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *alg = a.index() };
+        }
+        // SAFETY: forwarded.
+        unsafe { put(hex.as_bytes(), out, cap) }
+    })
 }
 
 /// The name of a kind of checksum ("SHA-256").
@@ -688,9 +716,11 @@ pub unsafe extern "C" fn telamon_sum_expected(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_sum_name(alg: u32, out: *mut u8, cap: usize) -> usize {
-    let n = Alg::from_index(alg).map(Alg::name).unwrap_or("");
-    // SAFETY: forwarded.
-    unsafe { put(n.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let n = Alg::from_index(alg).map(Alg::name).unwrap_or("");
+        // SAFETY: forwarded.
+        unsafe { put(n.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Folder size ----
@@ -738,26 +768,28 @@ pub unsafe extern "C" fn telamon_foldersize(
     user: *mut c_void,
     totals: *mut TelamonTotals,
 ) -> i32 {
-    let Some(p) = abs_path(path, len) else {
-        return 2;
-    };
-    let mut cb = |t: &Totals| {
-        if let Some(f) = progress {
-            let c = TelamonTotals::from(t);
-            f(user, &c);
+    crate::ffi::guarded(2, || {
+        let Some(p) = abs_path(path, len) else {
+            return 2;
+        };
+        let mut cb = |t: &Totals| {
+            if let Some(f) = progress {
+                let c = TelamonTotals::from(t);
+                f(user, &c);
+            }
+        };
+        // SAFETY: forwarded.
+        let r = foldersize::measure(Path::new(&p), unsafe { flag(cancel) }, &mut cb);
+        let (rc, t) = match r {
+            Ok(t) => (0, t),
+            Err(t) => (1, t),
+        };
+        if !totals.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *totals = TelamonTotals::from(&t) };
         }
-    };
-    // SAFETY: forwarded.
-    let r = foldersize::measure(Path::new(&p), unsafe { flag(cancel) }, &mut cb);
-    let (rc, t) = match r {
-        Ok(t) => (0, t),
-        Err(t) => (1, t),
-    };
-    if !totals.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *totals = TelamonTotals::from(&t) };
-    }
-    rc
+        rc
+    })
 }
 
 #[cfg(test)]

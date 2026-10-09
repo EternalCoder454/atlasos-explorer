@@ -759,4 +759,58 @@ mod tests {
         assert!(all[2].describe().contains("option"));
         assert!(!all[2].blocks());
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn check_plan(names: &[String], op: &Op) -> Result<(), TestCaseError> {
+            let items: Vec<Item> = names
+                .iter()
+                .map(|n| Item {
+                    name: n,
+                    is_dir: false,
+                })
+                .collect();
+            let p = plan(&items, op, |_| false);
+            prop_assert_eq!(p.rows.len(), items.len());
+            for (row, item) in p.rows.iter().zip(&items) {
+                if row.check == Check::Unchanged || row.check.blocks() {
+                    continue;
+                }
+                let n = row.new.as_str();
+                prop_assert!(
+                    !n.contains('/') && !n.contains('\0'),
+                    "{:?} from {:?}",
+                    n,
+                    item.name
+                );
+                prop_assert!(!n.is_empty() && n != "." && n != "..", "{:?}", n);
+                prop_assert!(n.len() <= 255, "{}", n.len());
+            }
+            Ok(())
+        }
+
+        proptest! {
+            #[test]
+            fn plans_never_panic_and_new_names_are_names(
+                names in prop::collection::vec(".{0,40}", 1..6),
+                text in ".{0,20}",
+                find in ".{0,6}",
+                start in 0u64..2000,
+                step in 0u64..10,
+                padding in 0usize..14,
+                mode in 0u32..4,
+                end in any::<bool>(),
+                match_case in any::<bool>(),
+                regex in any::<bool>(),
+            ) {
+                let at = if end { Edge::End } else { Edge::Start };
+                check_plan(&names, &Op::Number { start, step, padding, at, separator: &text })?;
+                check_plan(&names, &Op::Case(CaseMode::from_code(mode).unwrap()))?;
+                check_plan(&names, &Op::AddText { text: &text, at })?;
+                check_plan(&names, &Op::Replace { find: &find, with: &text, match_case, regex })?;
+            }
+        }
+    }
 }

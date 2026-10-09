@@ -267,6 +267,10 @@ fn check_user(text: &str) -> Result<String, Refused> {
     if text.contains('/') {
         return Err("A user name can't hold a slash.");
     }
+    // A program a worker starts could read it as one of its own options.
+    if text.starts_with('-') {
+        return Err("A user name can't start with a dash.");
+    }
     Ok(text.to_string())
 }
 
@@ -274,7 +278,9 @@ fn check_user(text: &str) -> Result<String, Refused> {
 /// up but never above the top.
 fn check_folder(text: &str) -> Result<Vec<String>, Refused> {
     let text = text.trim();
-    if text.len() > MAX_FOLDER {
+    // (one more than MAX_FOLDER: reading an address back gives the folder a
+    // leading slash, and what was built must be what is read)
+    if text.len() > MAX_FOLDER + 1 {
         return Err("That folder is too long.");
     }
     if !plain_text(text) {
@@ -330,6 +336,11 @@ pub fn build(
             url.push_str(p);
         }
     }
+    // An address longer than the list keeps (`parse_url` reads no more) is
+    // not built: it would not come back as the same address.
+    if url.len() > MAX_URL {
+        return Err("That address is too long.");
+    }
     Ok(url)
 }
 
@@ -378,6 +389,12 @@ pub fn parse_url(url: &str) -> Option<Parts> {
     }
     // A lone slash is the server's top, which for SFTP differs from no folder.
     if folder.is_empty() && path.starts_with('/') {
+        folder.push('/');
+    }
+    // `build` trims the folder it is given, as it trims what is typed: a last
+    // name that ends in a space would come back as another folder. A slash
+    // after it keeps the space (`/dir /`), and builds the same address.
+    if folder.trim() != folder {
         folder.push('/');
     }
     let server = match host.port {
@@ -480,6 +497,48 @@ pub fn recent_label(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_user_name_cannot_read_as_an_option() {
+        assert!(build(Protocol::Sftp, "h", "", "-oProxyCommand=x").is_err());
+        assert!(build(Protocol::Sftp, "h", "", "-x").is_err());
+        // an address with one is not one Connect to Server could have built
+        assert_eq!(parse_url("sftp://-oProxyCommand%3Dx@h/"), None);
+        assert_eq!(parse_url("sftp://%2Dx@h/"), None);
+        assert!(build(Protocol::Sftp, "h", "", "a-b").is_ok());
+    }
+
+    #[test]
+    fn an_address_too_long_to_read_back_is_not_built() {
+        // found by fuzzing: 900 bytes of odd text encode to more than MAX_URL
+        let folder = "\u{FFFD}".repeat(300);
+        assert_eq!(
+            build(Protocol::Sftp, "z", &folder, ""),
+            Err("That address is too long.")
+        );
+        let ok = build(Protocol::Sftp, "z", &"a".repeat(MAX_FOLDER - 10), "").unwrap();
+        assert!(parse_url(&ok).is_some());
+    }
+
+    #[test]
+    fn a_folder_ending_in_a_space_is_read_back_as_the_same_folder() {
+        // found by fuzzing: `build` trims, so the address read back and built
+        // again named another folder
+        let url = "sftp://z/dir%20";
+        let p = parse_url(url).unwrap();
+        assert_eq!(
+            build(p.protocol, &p.server, &p.folder, &p.user).unwrap(),
+            url
+        );
+        assert_eq!(clean_recent(url).as_deref(), Some(url));
+        // a space inside is a name like any other, and survives the round trip
+        let ok = build(Protocol::Sftp, "z", "/a b/c d", "").unwrap();
+        let p = parse_url(&ok).unwrap();
+        assert_eq!(
+            build(p.protocol, &p.server, &p.folder, &p.user).unwrap(),
+            ok
+        );
+    }
 
     fn b(p: Protocol, server: &str, folder: &str, user: &str) -> Result<String, Refused> {
         build(p, server, folder, user)

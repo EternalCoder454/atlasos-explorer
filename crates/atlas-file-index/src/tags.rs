@@ -46,7 +46,9 @@ pub fn clean(raw: &[u8]) -> String {
     for part in text.split(',') {
         let name = part.trim();
         if name.is_empty()
-            || name.chars().any(char::is_control)
+            // controls and the characters that reorder text: a tag is shown
+            // to the person, and the names of other people's files carry them
+            || name.chars().any(atlas_explorer_core::launch::is_hidden_char)
             || name.chars().count() > MAX_NAME_CHARS
         {
             continue;
@@ -91,6 +93,14 @@ pub fn contains(clean: &str, wanted: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tags_with_direction_or_control_characters_are_dropped() {
+        assert_eq!(
+            clean("a\u{202E}b,ok,x\u{2066}y,\u{200F}z,li\nne".as_bytes()),
+            "ok"
+        );
+    }
 
     #[test]
     fn splits_and_trims() {

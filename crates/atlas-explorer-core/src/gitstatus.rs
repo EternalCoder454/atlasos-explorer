@@ -481,6 +481,9 @@ fn run_git(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // Limited, and in a group of its own: ending the group ends what git
+    // started too, which would otherwise keep the pipe (and the reader below) open.
+    crate::childlimits::apply(&mut cmd, crate::childlimits::GIT);
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Skip::NoGit
@@ -520,6 +523,7 @@ fn run_git(
             Ok(Some(s)) => break Some(s),
             Ok(None) => {
                 if big.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                    crate::childlimits::kill_group(child.id());
                     let _ = child.kill();
                     let _ = child.wait();
                     break None;
@@ -527,6 +531,7 @@ fn run_git(
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(e) => {
+                crate::childlimits::kill_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();

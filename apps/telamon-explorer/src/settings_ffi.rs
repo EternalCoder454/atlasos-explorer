@@ -80,9 +80,11 @@ pub unsafe extern "C" fn telamon_actions_clean(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let l = ActionList::parse(&text_of(list, list_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let l = ActionList::parse(&text_of(list, list_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Why `record` (`name program args types ask`, tab-separated, each field
@@ -100,13 +102,15 @@ pub unsafe extern "C" fn telamon_actions_problem(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let path = text_of(path, path_len);
-    let text = match actions::parse_record(&text_of(record, record_len)) {
-        None => actions::Problem::BadTypes.text(),
-        Some(a) => actions::problem(&a, &path).map_or_else(String::new, |p| p.text()),
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let path = text_of(path, path_len);
+        let text = match actions::parse_record(&text_of(record, record_len)) {
+            None => actions::Problem::BadTypes.text(),
+            Some(a) => actions::problem(&a, &path).map_or_else(String::new, |p| p.text()),
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 fn outcome_code(o: Outcome) -> u32 {
@@ -137,21 +141,23 @@ pub unsafe extern "C" fn telamon_actions_add(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let mut l = ActionList::parse(&text_of(list, list_len));
-    let path = text_of(path, path_len);
-    let st = match actions::parse_record(&text_of(record, record_len)) {
-        None => Outcome::Invalid,
-        Some(a) => match l.add(a, &path) {
-            Ok(_) => Outcome::Done,
-            Err(o) => o,
-        },
-    };
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(outcome_code(st)) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut l = ActionList::parse(&text_of(list, list_len));
+        let path = text_of(path, path_len);
+        let st = match actions::parse_record(&text_of(record, record_len)) {
+            None => Outcome::Invalid,
+            Some(a) => match l.add(a, &path) {
+                Ok(_) => Outcome::Done,
+                Err(o) => o,
+            },
+        };
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(outcome_code(st)) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Replaces the action with `id`. `*status`: 0 done, 1 refused, 3 no such action.
@@ -171,18 +177,20 @@ pub unsafe extern "C" fn telamon_actions_update(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let mut l = ActionList::parse(&text_of(list, list_len));
-    let path = text_of(path, path_len);
-    let st = match actions::parse_record(&text_of(record, record_len)) {
-        None => Outcome::Invalid,
-        Some(a) => l.update(id, a, &path),
-    };
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(outcome_code(st)) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut l = ActionList::parse(&text_of(list, list_len));
+        let path = text_of(path, path_len);
+        let st = match actions::parse_record(&text_of(record, record_len)) {
+            None => Outcome::Invalid,
+            Some(a) => l.update(id, a, &path),
+        };
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(outcome_code(st)) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Removes the action with `id`.
@@ -197,10 +205,12 @@ pub unsafe extern "C" fn telamon_actions_remove(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut l = ActionList::parse(&text_of(list, list_len));
-    l.remove(id);
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut l = ActionList::parse(&text_of(list, list_len));
+        l.remove(id);
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The file the program names (`PATH` is `path`). `*status` 0: the text is the
@@ -219,17 +229,19 @@ pub unsafe extern "C" fn telamon_actions_resolve(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let r = actions::resolve_program(&text_of(program, program_len), &text_of(path, path_len));
-    let (st, text) = match r {
-        Ok(p) => (0, p.to_string_lossy().into_owned()),
-        Err(p) => (1, p.text()),
-    };
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(st) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let r = actions::resolve_program(&text_of(program, program_len), &text_of(path, path_len));
+        let (st, text) = match r {
+            Ok(p) => (0, p.to_string_lossy().into_owned()),
+            Err(p) => (1, p.text()),
+        };
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(st) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The argument lists to run. `items`: one line for each item, `path` and
@@ -252,40 +264,42 @@ pub unsafe extern "C" fn telamon_actions_expand(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut list: Vec<Item> = Vec::new();
-    for line in text_of(items, items_len).lines() {
-        let Some((p, u)) = line.split_once('\t') else {
-            continue;
-        };
-        let (Some(p), Some(u)) = (unpct(p), unpct(u)) else {
-            continue;
-        };
-        list.push(Item {
-            path: if p.is_empty() {
-                None
-            } else {
-                Some(String::from_utf8_lossy(&p).into_owned())
-            },
-            url: String::from_utf8_lossy(&u).into_owned(),
-        });
-    }
-    let text = match actions::expand(&text_of(args, args_len), &list) {
-        Err(r) => format!("1\n{}", r.text()),
-        Ok(runs) => {
-            let mut s = String::from("0\n");
-            for run in runs {
-                s.push('r');
-                for a in &run {
-                    s.push('\t');
-                    s.push_str(&pct(a.as_bytes()));
-                }
-                s.push('\n');
-            }
-            s
+    crate::ffi::guarded(0, || {
+        let mut list: Vec<Item> = Vec::new();
+        for line in text_of(items, items_len).lines() {
+            let Some((p, u)) = line.split_once('\t') else {
+                continue;
+            };
+            let (Some(p), Some(u)) = (unpct(p), unpct(u)) else {
+                continue;
+            };
+            list.push(Item {
+                path: if p.is_empty() {
+                    None
+                } else {
+                    Some(String::from_utf8_lossy(&p).into_owned())
+                },
+                url: String::from_utf8_lossy(&u).into_owned(),
+            });
         }
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+        let text = match actions::expand(&text_of(args, args_len), &list) {
+            Err(r) => format!("1\n{}", r.text()),
+            Ok(runs) => {
+                let mut s = String::from("0\n");
+                for run in runs {
+                    s.push('r');
+                    for a in &run {
+                        s.push('\t');
+                        s.push_str(&pct(a.as_bytes()));
+                    }
+                    s.push('\n');
+                }
+                s
+            }
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Whether an item with these MIME type names (one a line: its type, then the
@@ -301,10 +315,12 @@ pub unsafe extern "C" fn telamon_actions_type_matches(
     mimes: *const u8,
     mimes_len: usize,
 ) -> bool {
-    let types = actions::parse_types(&text_of(types, types_len)).unwrap_or_default();
-    let m = text_of(mimes, mimes_len);
-    let names: Vec<&str> = m.lines().collect();
-    actions::type_matches(&types, &names)
+    crate::ffi::guarded(false, || {
+        let types = actions::parse_types(&text_of(types, types_len)).unwrap_or_default();
+        let m = text_of(mimes, mimes_len);
+        let names: Vec<&str> = m.lines().collect();
+        actions::type_matches(&types, &names)
+    })
 }
 
 /// The command as it is shown: the program and the arguments, safe to read.
@@ -321,13 +337,15 @@ pub unsafe extern "C" fn telamon_actions_command_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let a = actions::Action {
-        program: text_of(program, program_len),
-        args: text_of(args, args_len),
-        ..actions::Action::default()
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(actions::command_text(&a).as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let a = actions::Action {
+            program: text_of(program, program_len),
+            args: text_of(args, args_len),
+            ..actions::Action::default()
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(actions::command_text(&a).as_bytes(), out, cap) }
+    })
 }
 
 // ---- Hidden menu entries ----
@@ -344,9 +362,11 @@ pub unsafe extern "C" fn telamon_menuprefs_clean(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let h = Hidden::parse(&text_of(list, list_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(h.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let h = Hidden::parse(&text_of(list, list_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(h.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Hides (`hidden`) or shows `key`; gives the new list, unchanged when the key
@@ -365,10 +385,12 @@ pub unsafe extern "C" fn telamon_menuprefs_set(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut h = Hidden::parse(&text_of(list, list_len));
-    h.set(&text_of(key, key_len), hidden);
-    // SAFETY: `out` as promised.
-    unsafe { put(h.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut h = Hidden::parse(&text_of(list, list_len));
+        h.set(&text_of(key, key_len), hidden);
+        // SAFETY: `out` as promised.
+        unsafe { put(h.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The keys of the built-in entries, one a line, in the order Settings lists them.
@@ -377,8 +399,10 @@ pub unsafe extern "C" fn telamon_menuprefs_set(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_menuprefs_builtin(out: *mut u8, cap: usize) -> usize {
-    // SAFETY: `out` as promised.
-    unsafe { put(menuprefs::builtin_keys().join("\n").as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: `out` as promised.
+        unsafe { put(menuprefs::builtin_keys().join("\n").as_bytes(), out, cap) }
+    })
 }
 
 /// The names of the hidden service-menu actions and plugins, one a line (for
@@ -393,9 +417,11 @@ pub unsafe extern "C" fn telamon_menuprefs_excluded(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let h = Hidden::parse(&text_of(list, list_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(h.excluded_services().join("\n").as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let h = Hidden::parse(&text_of(list, list_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(h.excluded_services().join("\n").as_bytes(), out, cap) }
+    })
 }
 
 /// What a context menu offers (as `telamon_menu_state`) without the entries
@@ -415,15 +441,17 @@ pub unsafe extern "C" fn telamon_menu_state_hiding(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let entries = if kind == 0 {
-        menu::item_menu(count, folders, flags)
-    } else {
-        menu::background_menu(flags)
-    };
-    let h = Hidden::parse(&text_of(hidden, hidden_len));
-    let text = menu::state_text(&h.filter(entries));
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let entries = if kind == 0 {
+            menu::item_menu(count, folders, flags)
+        } else {
+            menu::background_menu(flags)
+        };
+        let h = Hidden::parse(&text_of(hidden, hidden_len));
+        let text = menu::state_text(&h.filter(entries));
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Git status badges ----
@@ -450,39 +478,41 @@ pub unsafe extern "C" fn telamon_git_status(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let folder = text_of(folder, folder_len);
-    let path = text_of(path, path_len);
-    let uid = gitstatus::effective_uid();
-    let timeout = Duration::from_millis(u64::from(timeout_ms.clamp(100, 60_000)));
-    let (st, text) = match gitstatus::status(Path::new(&folder), uid, &path, timeout) {
-        Ok(b) => {
-            // all=3: everything not listed is ignored; all=2: new; all=0: nothing is.
-            let all = if b.all_ignored {
-                3
-            } else if b.all_new {
-                2
-            } else {
-                0
-            };
-            let mut s = format!("all={all}\n");
-            for (name, badge) in &b.items {
-                let _ = writeln!(s, "{}\t{}", badge.code(), pct(name));
+    crate::ffi::guarded(0, || {
+        let folder = text_of(folder, folder_len);
+        let path = text_of(path, path_len);
+        let uid = gitstatus::effective_uid();
+        let timeout = Duration::from_millis(u64::from(timeout_ms.clamp(100, 60_000)));
+        let (st, text) = match gitstatus::status(Path::new(&folder), uid, &path, timeout) {
+            Ok(b) => {
+                // all=3: everything not listed is ignored; all=2: new; all=0: nothing is.
+                let all = if b.all_ignored {
+                    3
+                } else if b.all_new {
+                    2
+                } else {
+                    0
+                };
+                let mut s = format!("all={all}\n");
+                for (name, badge) in &b.items {
+                    let _ = writeln!(s, "{}\t{}", badge.code(), pct(name));
+                }
+                (0, s)
             }
-            (0, s)
+            Err(Skip::NotARepo) => (1, String::new()),
+            Err(Skip::OtherOwner) => (2, String::new()),
+            Err(Skip::UnsafeConfig) => (3, String::new()),
+            Err(Skip::NoGit) => (4, String::new()),
+            Err(Skip::Timeout) => (5, String::new()),
+            Err(Skip::Failed(e)) => (6, e),
+        };
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(st) };
         }
-        Err(Skip::NotARepo) => (1, String::new()),
-        Err(Skip::OtherOwner) => (2, String::new()),
-        Err(Skip::UnsafeConfig) => (3, String::new()),
-        Err(Skip::NoGit) => (4, String::new()),
-        Err(Skip::Timeout) => (5, String::new()),
-        Err(Skip::Failed(e)) => (6, e),
-    };
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(st) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 // ---- The index's folders ----
@@ -502,17 +532,19 @@ pub unsafe extern "C" fn telamon_indexrc_roots(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let cfg = atlas_file_index::config::Config::parse(
-        &text_of(text, text_len),
-        Path::new(&text_of(home, home_len)),
-    );
-    let lines: Vec<String> = cfg
-        .roots
-        .iter()
-        .map(|r| r.to_string_lossy().into_owned())
-        .collect();
-    // SAFETY: `out` as promised.
-    unsafe { put(lines.join("\n").as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let cfg = atlas_file_index::config::Config::parse(
+            &text_of(text, text_len),
+            Path::new(&text_of(home, home_len)),
+        );
+        let lines: Vec<String> = cfg
+            .roots
+            .iter()
+            .map(|r| r.to_string_lossy().into_owned())
+            .collect();
+        // SAFETY: `out` as promised.
+        unsafe { put(lines.join("\n").as_bytes(), out, cap) }
+    })
 }
 
 /// `indexrc` with its folders replaced by `roots` (one a line). `*status` 0:
@@ -531,21 +563,23 @@ pub unsafe extern "C" fn telamon_indexrc_set_roots(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let list: Vec<String> = text_of(roots, roots_len)
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(str::to_string)
-        .collect();
-    let (st, t) = match atlas_file_index::config::with_roots(&text_of(text, text_len), &list) {
-        Ok(t) => (0, t),
-        Err(e) => (1, e),
-    };
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(st) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(t.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let list: Vec<String> = text_of(roots, roots_len)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        let (st, t) = match atlas_file_index::config::with_roots(&text_of(text, text_len), &list) {
+            Ok(t) => (0, t),
+            Err(e) => (1, e),
+        };
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(st) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(t.as_bytes(), out, cap) }
+    })
 }
 
 #[cfg(test)]

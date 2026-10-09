@@ -39,16 +39,18 @@ pub unsafe extern "C" fn telamon_home_key(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let t = text(input, len);
-    let mut parts = t.split('\0');
-    let (Some(url), Some(home_dir), None) = (parts.next(), parts.next(), parts.next()) else {
-        return 0;
-    };
-    match home::key_of(url, home_dir) {
-        // SAFETY: `out` as promised.
-        Some(k) => unsafe { put(k.as_bytes(), out, cap) },
-        None => 0,
-    }
+    crate::ffi::guarded(0, || {
+        let t = text(input, len);
+        let mut parts = t.split('\0');
+        let (Some(url), Some(home_dir), None) = (parts.next(), parts.next(), parts.next()) else {
+            return 0;
+        };
+        match home::key_of(url, home_dir) {
+            // SAFETY: `out` as promised.
+            Some(k) => unsafe { put(k.as_bytes(), out, cap) },
+            None => 0,
+        }
+    })
 }
 
 /// The saved counts after a visit to `key` at time `now`, as the text to save.
@@ -66,10 +68,12 @@ pub unsafe extern "C" fn telamon_home_visit(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut f = Frequent::parse(&text(saved, saved_len));
-    f.visit(&text(key, key_len), now);
-    // SAFETY: `out` as promised.
-    unsafe { put(f.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut f = Frequent::parse(&text(saved, saved_len));
+        f.visit(&text(key, key_len), now);
+        // SAFETY: `out` as promised.
+        unsafe { put(f.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The saved counts without `key`.
@@ -85,10 +89,12 @@ pub unsafe extern "C" fn telamon_home_forget(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut f = Frequent::parse(&text(saved, saved_len));
-    f.forget(&text(key, key_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(f.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut f = Frequent::parse(&text(saved, saved_len));
+        f.forget(&text(key, key_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(f.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The most visited folders, most visited first, one per line as the count,
@@ -105,13 +111,15 @@ pub unsafe extern "C" fn telamon_home_top(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let f = Frequent::parse(&text(saved, saved_len));
-    let mut s = String::new();
-    for e in f.top(n) {
-        s.push_str(&format!("{}\t{}\n", e.count, e.key));
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(s.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let f = Frequent::parse(&text(saved, saved_len));
+        let mut s = String::new();
+        for e in f.top(n) {
+            s.push_str(&format!("{}\t{}\n", e.count, e.key));
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(s.as_bytes(), out, cap) }
+    })
 }
 
 /// A number of the Home page: 0 the most folders counted, 1 the most folders
@@ -148,10 +156,12 @@ pub unsafe extern "C" fn telamon_home_recent_files(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let p = text(path, path_len);
-    let s = recent_files(std::path::Path::new(&*p), n);
-    // SAFETY: `out` as promised.
-    unsafe { put(s.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let p = text(path, path_len);
+        let s = recent_files(std::path::Path::new(&*p), n);
+        // SAFETY: `out` as promised.
+        unsafe { put(s.as_bytes(), out, cap) }
+    })
 }
 
 fn recent_files(xbel: &std::path::Path, n: usize) -> String {
@@ -162,7 +172,9 @@ fn recent_files(xbel: &std::path::Path, n: usize) -> String {
     let mut seen = std::collections::HashSet::new();
     let mut out = String::new();
     let mut kept = 0;
-    for (path, time) in list {
+    // A list full of paths that are gone (or on a dead mount) would stat each
+    // one: look at a bounded number.
+    for (path, time) in list.into_iter().take(n.saturating_mul(8).max(64)) {
         if kept >= n {
             break;
         }
@@ -245,25 +257,27 @@ pub unsafe extern "C" fn telamon_servers_build(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let t = text(input, len);
-    let parts: Vec<&str> = t.split('\0').collect();
-    let answer = match parts.as_slice() {
-        [code, server, folder, user] => {
-            match code
-                .parse::<u32>()
-                .ok()
-                .and_then(Protocol::from_code)
-                .ok_or("Choose a protocol.")
-                .and_then(|p| servers::build(p, server, folder, user))
-            {
-                Ok(url) => format!("U{url}"),
-                Err(why) => format!("E{why}"),
+    crate::ffi::guarded(0, || {
+        let t = text(input, len);
+        let parts: Vec<&str> = t.split('\0').collect();
+        let answer = match parts.as_slice() {
+            [code, server, folder, user] => {
+                match code
+                    .parse::<u32>()
+                    .ok()
+                    .and_then(Protocol::from_code)
+                    .ok_or("Choose a protocol.")
+                    .and_then(|p| servers::build(p, server, folder, user))
+                {
+                    Ok(url) => format!("U{url}"),
+                    Err(why) => format!("E{why}"),
+                }
             }
-        }
-        _ => "EThat isn't something Files can connect to.".to_string(),
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(answer.as_bytes(), out, cap) }
+            _ => "EThat isn't something Files can connect to.".to_string(),
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(answer.as_bytes(), out, cap) }
+    })
 }
 
 /// "Not encrypted" for a location on a server that does not protect what it
@@ -279,11 +293,13 @@ pub unsafe extern "C" fn telamon_servers_note(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    match servers::security_note(&text(url, len)) {
-        // SAFETY: `out` as promised.
-        Some(s) => unsafe { put(s.as_bytes(), out, cap) },
-        None => 0,
-    }
+    crate::ffi::guarded(0, || {
+        match servers::security_note(&text(url, len)) {
+            // SAFETY: `out` as promised.
+            Some(s) => unsafe { put(s.as_bytes(), out, cap) },
+            None => 0,
+        }
+    })
 }
 
 /// An address taken apart for Connect to Server's fields: the protocol's code
@@ -299,17 +315,19 @@ pub unsafe extern "C" fn telamon_servers_parse(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    match servers::parse_url(&text(url, len)) {
-        Some(p) => {
-            let s = format!(
-                "{}\0{}\0{}\0{}",
-                p.protocol as u32, p.server, p.folder, p.user
-            );
-            // SAFETY: `out` as promised.
-            unsafe { put(s.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        match servers::parse_url(&text(url, len)) {
+            Some(p) => {
+                let s = format!(
+                    "{}\0{}\0{}\0{}",
+                    p.protocol as u32, p.server, p.folder, p.user
+                );
+                // SAFETY: `out` as promised.
+                unsafe { put(s.as_bytes(), out, cap) }
+            }
+            None => 0,
         }
-        None => 0,
-    }
+    })
 }
 
 /// An address as the recent list keeps it, 0 bytes when it is not one of ours.
@@ -323,11 +341,13 @@ pub unsafe extern "C" fn telamon_servers_clean(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    match servers::clean_recent(&text(url, len)) {
-        // SAFETY: `out` as promised.
-        Some(s) => unsafe { put(s.as_bytes(), out, cap) },
-        None => 0,
-    }
+    crate::ffi::guarded(0, || {
+        match servers::clean_recent(&text(url, len)) {
+            // SAFETY: `out` as promised.
+            Some(s) => unsafe { put(s.as_bytes(), out, cap) },
+            None => 0,
+        }
+    })
 }
 
 /// How a recent server is listed (decoded; the caller makes it safe to show).
@@ -341,9 +361,11 @@ pub unsafe extern "C" fn telamon_servers_label(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let s = servers::recent_label(&text(url, len));
-    // SAFETY: `out` as promised.
-    unsafe { put(s.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let s = servers::recent_label(&text(url, len));
+        // SAFETY: `out` as promised.
+        unsafe { put(s.as_bytes(), out, cap) }
+    })
 }
 
 /// The saved list of recent servers (one address per line) cleaned, that is
@@ -359,9 +381,11 @@ pub unsafe extern "C" fn telamon_servers_recent_clean(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let r = Recents::parse(&text(saved, saved_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(r.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let r = Recents::parse(&text(saved, saved_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(r.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The saved list with `url` as the newest (an address that is not one of
@@ -378,10 +402,12 @@ pub unsafe extern "C" fn telamon_servers_recent_push(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut r = Recents::parse(&text(saved, saved_len));
-    r.push(&text(url, url_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(r.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut r = Recents::parse(&text(saved, saved_len));
+        r.push(&text(url, url_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(r.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The saved list without `url`.
@@ -397,10 +423,12 @@ pub unsafe extern "C" fn telamon_servers_recent_remove(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut r = Recents::parse(&text(saved, saved_len));
-    r.remove(&text(url, url_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(r.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut r = Recents::parse(&text(saved, saved_len));
+        r.remove(&text(url, url_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(r.to_text().as_bytes(), out, cap) }
+    })
 }
 
 #[cfg(test)]

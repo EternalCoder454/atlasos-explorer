@@ -128,7 +128,13 @@ void FileActions::clipboardChanged()
     QSet<QString> keys;
     const QMimeData *md = QApplication::clipboard()->mimeData();
     if (md && md->hasUrls() && KIO::isClipboardDataCut(md)) {
+        // Another program owns the clipboard: only so many are dimmed (an
+        // operation takes no more than that either).
+        int n = 0;
         for (const QUrl &u : KUrlMimeData::urlsFromMimeData(md)) {
+            if (++n > OperationQueue::MaxItemsPerOperation) {
+                break;
+            }
             keys.insert(u.adjusted(QUrl::StripTrailingSlash).toString(QUrl::FullyEncoded));
         }
     }
@@ -281,6 +287,7 @@ void FileActions::restore(const QList<QUrl> &urls)
     }
     QList<OperationQueue::RestoreItem> items;
     int unknown = 0;
+    int unsafePlaces = 0;
     QSet<QString> seen;
     // Where the Trash says each item was (one pass over the rows); nothing else is believed.
     const QHash<QUrl, QString> origins = m_folder->originalPathsOf(urls);
@@ -294,7 +301,43 @@ void FileActions::restore(const QList<QUrl> &urls)
             ++unknown;
             continue;
         }
-        items.append({u, QUrl::fromLocalFile(QDir::cleanPath(original)), false});
+        // The Trash of the home folder is KIO's own; a drive's is whatever the drive holds.
+        // Its items are `trash:/<id>-name`, id 0 being the home Trash.
+        const QString target = QDir::cleanPath(original);
+        const bool fromHome = u.path().startsWith(QLatin1String("/0-"));
+        // The rule is about places, and a place has more than one spelling:
+        // `/home/u` is `/var/home/u` here, and a link on the drive can lead
+        // to the home folder. The target is checked as written and with the
+        // links in its existing part resolved, against the home folder as
+        // both spellings.
+        bool allowed = true;
+        if (!fromHome) {
+            QString resolved = target;
+            QString tail;
+            QString probe = target;
+            while (!probe.isEmpty() && !QFileInfo::exists(probe) && probe != QLatin1String("/")) {
+                tail = QLatin1Char('/') + QFileInfo(probe).fileName() + tail;
+                probe = QFileInfo(probe).path();
+            }
+            const QString real = QFileInfo(probe).canonicalFilePath();
+            if (!real.isEmpty()) {
+                resolved = QDir::cleanPath(real + tail);
+            }
+            for (const QString &home : {QDir::homePath(), QFileInfo(QDir::homePath()).canonicalFilePath()}) {
+                for (const QString &place : {target, resolved}) {
+                    const QByteArray t = QFile::encodeName(place), h = QFile::encodeName(home);
+                    allowed = allowed && telamon_trash_restore_allowed(false, reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), reinterpret_cast<const uint8_t *>(h.constData()), size_t(h.size()));
+                }
+            }
+        }
+        if (!allowed) {
+            ++unsafePlaces;
+            continue;
+        }
+        items.append({u, QUrl::fromLocalFile(target), false});
+    }
+    if (unsafePlaces > 0) {
+        Q_EMIT failed(tr("A drive's Trash asks for this to go into a hidden place in your home folder, so it stays in the Trash. Drag it out to put it where you want it."));
     }
     if (unknown > 0) {
         Q_EMIT failed(unknown == 1 ? tr("The Trash doesn't say where this item was, so it stays in the Trash.")
@@ -1400,7 +1443,7 @@ void FileActions::copyPath(const QList<QUrl> &urls)
     QStringList lines;
     for (const QUrl &u : urls.mid(0, 1000)) {
         // A file on this computer is its path; any other is its address.
-        lines << (u.isLocalFile() ? u.adjusted(QUrl::StripTrailingSlash).toLocalFile() : u.toString(QUrl::PrettyDecoded));
+        lines << (u.isLocalFile() ? u.adjusted(QUrl::StripTrailingSlash).toLocalFile() : u.toString(QUrl::PrettyDecoded | QUrl::RemovePassword));
     }
     if (!lines.isEmpty()) {
         QApplication::clipboard()->setText(lines.join(QLatin1Char('\n')));

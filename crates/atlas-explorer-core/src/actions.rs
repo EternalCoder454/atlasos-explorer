@@ -55,9 +55,70 @@ const MAX_ID: u32 = 1_000_000;
 /// Programs that run a command line they are given, so a file name in the
 /// arguments could become a command. They are refused as the program of an
 /// action (the same goes for tools whose job is to run another program).
-const REFUSED_PROGRAMS: [&str; 22] = [
-    "sh", "bash", "dash", "zsh", "fish", "ksh", "csh", "tcsh", "ash", "busybox", "env", "xargs",
-    "sudo", "su", "doas", "pkexec", "nohup", "setsid", "timeout", "nice", "ionice", "script",
+const REFUSED_PROGRAMS: &[&str] = &[
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "fish",
+    "ksh",
+    "csh",
+    "tcsh",
+    "ash",
+    "busybox",
+    "env",
+    "xargs",
+    "sudo",
+    "su",
+    "doas",
+    "pkexec",
+    "nohup",
+    "setsid",
+    "timeout",
+    "nice",
+    "ionice",
+    "script",
+    "flatpak-spawn",
+    "systemd-run",
+    "runuser",
+    "chroot",
+    "unshare",
+    "nsenter",
+    "flock",
+    "watch",
+    "strace",
+    "ltrace",
+    "gdb",
+    "exec",
+    "eval",
+    "command",
+    "time",
+    "stdbuf",
+    "setpriv",
+    "capsh",
+    "taskset",
+    "chrt",
+    "parallel",
+];
+
+/// Interpreters that run the code they are given on the command line, and the
+/// options that take it. A placeholder inside that code would make a file
+/// name into a program, so it is refused there (a placeholder as a later
+/// argument, which the code reads as data, is fine).
+const INTERPRETERS: &[&str] = &[
+    "python", "python2", "python3", "perl", "ruby", "node", "nodejs", "deno", "php", "lua",
+    "luajit", "awk", "gawk", "mawk", "tclsh", "wish", "pwsh", "bun",
+];
+const CODE_OPTIONS: &[&str] = &[
+    "-c",
+    "-e",
+    "-E",
+    "-r",
+    "-p",
+    "--eval",
+    "--command",
+    "--exec",
+    "--run",
 ];
 
 /// One custom action.
@@ -96,6 +157,8 @@ pub enum Problem {
     ProgramTooLong,
     /// A program that runs command lines (`sh`, `env`, `sudo`...).
     ProgramRefused(String),
+    /// A placeholder inside the code an interpreter is told to run (`python -c '...%f...'`).
+    PlaceholderInCode,
     /// A program name with a slash that is not a full path.
     ProgramNotAbsolute,
     ProgramMissing(String),
@@ -125,6 +188,7 @@ impl Problem {
             Problem::ProgramRefused(p) => format!(
                 "\u{201c}{p}\u{201d} runs command lines, and a file name could become a command. Choose the program that does the job itself."
             ),
+            Problem::PlaceholderInCode => "A file name can't go inside the code a program is told to run, because the name would become part of that code. Pass the file as a separate argument after the code.".into(),
             Problem::ProgramNotAbsolute => {
                 "Type the full path of the program (it starts with /), or just its name.".into()
             }
@@ -332,7 +396,14 @@ pub fn clean_name(name: &str) -> Option<String> {
         .chars()
         .map(|c| if c.is_whitespace() { ' ' } else { c })
         .collect();
-    let shown = display_name(shown.trim());
+    // Runs of space are one space before the name is made safe to show (a
+    // long run would be marked there).
+    let collapsed: String = shown
+        .split(' ')
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let shown = display_name(collapsed.as_str());
     let mut out = String::new();
     let mut space = false;
     for c in shown.chars() {
@@ -482,7 +553,76 @@ pub fn problem(a: &Action, path_env: &str) -> Option<Problem> {
     if let Err(p) = parse_args(&a.args) {
         return Some(p);
     }
+    if let Some(p) = placeholder_in_code(&a.program, &a.args) {
+        return Some(p);
+    }
     resolve_program(&a.program, path_env).err()
+}
+
+fn has_placeholder(word: &str) -> bool {
+    let mut chars = word.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            match chars.next() {
+                Some('%') => {}
+                Some('f' | 'F' | 'u' | 'U' | 'd') => return true,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// A check that catches the usual ways (it is not a parser for every
+/// interpreter): `Some` when `program` is an interpreter and a placeholder
+/// sits in the word it is told to run as code (`-c`, `-e`... then the next word, or the same
+/// word for `--eval=...` and `-ecode`).
+fn placeholder_in_code(program: &str, args: &str) -> Option<Problem> {
+    let base = Path::new(program.trim())
+        .file_name()
+        .and_then(|n| n.to_str())?
+        .to_ascii_lowercase();
+    let stem = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    if !INTERPRETERS.contains(&stem) && !INTERPRETERS.contains(&base.as_str()) {
+        return None;
+    }
+    let words = split_words(args).ok()?;
+    // awk's program is its first word that is not an option.
+    if matches!(stem, "awk" | "gawk" | "mawk")
+        && words
+            .iter()
+            .find(|w| !w.starts_with('-'))
+            .is_some_and(|w| has_placeholder(w))
+    {
+        return Some(Problem::PlaceholderInCode);
+    }
+    let mut code_next = false;
+    for w in &words {
+        // `-lane`, `-Sc`: a cluster of short options ending in the one that
+        // takes the code makes the next word code
+        let cluster_code = w.len() > 2
+            && w.starts_with('-')
+            && !w.starts_with("--")
+            && w[1..].bytes().all(|b| b.is_ascii_alphabetic())
+            && matches!(w.as_bytes()[w.len() - 1], b'c' | b'e' | b'E' | b'r');
+        if cluster_code {
+            code_next = true;
+            continue;
+        }
+        if code_next && has_placeholder(w) {
+            return Some(Problem::PlaceholderInCode);
+        }
+        code_next = false;
+        if CODE_OPTIONS.contains(&w.as_str()) {
+            code_next = true;
+        } else if w.starts_with('-')
+            && has_placeholder(w)
+            && (CODE_OPTIONS.iter().any(|o| w.starts_with(o)))
+        {
+            return Some(Problem::PlaceholderInCode);
+        }
+    }
+    None
 }
 
 // ---- Using an action ----
@@ -683,8 +823,13 @@ impl ActionList {
         if !fit(&mut a, path_env) {
             return Err(Outcome::Invalid);
         }
-        a.id = self.items.iter().map(|x| x.id).max().map_or(1, |m| m + 1);
-        let id = a.id;
+        let id = self.items.iter().map(|x| x.id).max().map_or(1, |m| m + 1);
+        // A number past what the text accepts again would be dropped on the
+        // next read, with everything added after it.
+        if id > MAX_ID {
+            return Err(Outcome::Full);
+        }
+        a.id = id;
         self.items.push(a);
         Ok(id)
     }
@@ -829,10 +974,17 @@ pub fn parse_record(record: &str) -> Option<Action> {
 /// The command as a person reads it, for "ask first" and the list: the
 /// program, then the arguments as typed.
 pub fn command_text(a: &Action) -> String {
-    let mut s = display_name(a.program.as_str());
+    // All of it: this is what a person reads before saying yes, and a
+    // length cap would hide the end of the arguments.
+    let mut s = String::new();
+    for c in a.program.chars() {
+        crate::display::push_visible(&mut s, c);
+    }
     if !a.args.is_empty() {
         s.push(' ');
-        s.push_str(&display_name(a.args.as_str()));
+        for c in a.args.chars() {
+            crate::display::push_visible(&mut s, c);
+        }
     }
     s
 }
@@ -862,6 +1014,109 @@ mod tests {
         fs::write(&p, "#!/bin/true\n").unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         p
+    }
+
+    #[test]
+    fn more_programs_that_run_other_programs_are_refused() {
+        for p in [
+            "flatpak-spawn",
+            "systemd-run",
+            "runuser",
+            "chroot",
+            "unshare",
+            "nsenter",
+            "flock",
+            "strace",
+            "gdb",
+            "setpriv",
+            "taskset",
+            "parallel",
+            "stdbuf",
+            "time",
+        ] {
+            assert!(is_refused(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_file_name_can_not_become_the_code_an_interpreter_runs() {
+        for (prog, args) in [
+            ("python3", "-c 'import os; os.remove(\"%f\")'"),
+            ("/usr/bin/perl", "-e 'print \"%f\"'"),
+            ("ruby", "-e %f"),
+            ("node", "--eval=%f"),
+            ("php", "-r%u"),
+            ("python3.12", "-c %d"),
+            ("pwsh", "--command %F"),
+        ] {
+            assert_eq!(
+                placeholder_in_code(prog, args),
+                Some(Problem::PlaceholderInCode),
+                "{prog} {args}"
+            );
+        }
+        // the file as data, after the code, is the way
+        assert_eq!(
+            placeholder_in_code("python3", "-c 'import sys; print(sys.argv)' %f"),
+            None
+        );
+        assert_eq!(placeholder_in_code("python3", "script.py %F"), None);
+        for (prog, args) in [
+            ("perl", "-lane 'system(\"%f\")'"),
+            ("python3", "-Sc 'x=\"%f\"'"),
+            ("gawk", "'{ system(\"%f\") }'"),
+            ("awk", "-F: '{print \"%f\"}'"),
+        ] {
+            assert_eq!(
+                placeholder_in_code(prog, args),
+                Some(Problem::PlaceholderInCode),
+                "{prog} {args}"
+            );
+        }
+        assert_eq!(placeholder_in_code("awk", "'{print $1}' %f"), None);
+        assert_eq!(placeholder_in_code("python3", "-c '100%%'"), None);
+        assert_eq!(placeholder_in_code("convert", "-c %f"), None);
+    }
+
+    #[test]
+    fn the_prompt_shows_the_whole_command() {
+        let a = Action {
+            program: "/usr/bin/tool".into(),
+            args: format!("{} --evil", "x ".repeat(400)),
+            ..Action::default()
+        };
+        let t = command_text(&a);
+        assert!(
+            t.ends_with("--evil"),
+            "{}",
+            &t[t.len().saturating_sub(40)..]
+        );
+        assert!(t.len() > 800);
+        // and still not raw control characters
+        let a = Action {
+            program: "/p".into(),
+            args: "a\u{202E}b".into(),
+            ..Action::default()
+        };
+        assert!(!command_text(&a).contains('\u{202E}'));
+    }
+
+    #[test]
+    fn an_id_the_text_would_refuse_is_not_handed_out() {
+        let d = tmp("ids");
+        let prog = make_exec(&d, "tool");
+        let mk = |id: u32| Action {
+            id,
+            name: "Tool".into(),
+            program: prog.to_string_lossy().into_owned(),
+            args: "%f".into(),
+            types: vec![],
+            ask: true,
+        };
+        let mut l = ActionList::default();
+        l.items.push(mk(MAX_ID));
+        assert_eq!(l.add(mk(0), ""), Err(Outcome::Full));
+        assert_eq!(ActionList::parse(&l.to_text()).items().len(), 1);
     }
 
     #[test]

@@ -146,7 +146,13 @@ impl Frequent {
     /// limits and only [`MAX_FOLDERS`] are kept (the most visited first).
     pub fn parse(text: &str) -> Frequent {
         let mut entries: Vec<Entry> = Vec::new();
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for line in text.lines() {
+            // A list written by Files never holds more than MAX_FOLDERS; a
+            // longer one was not, and is not read to its end.
+            if entries.len() >= MAX_FOLDERS * 2 {
+                break;
+            }
             let mut it = line.splitn(3, '\t');
             let (Some(count), Some(last), Some(key)) = (it.next(), it.next(), it.next()) else {
                 continue;
@@ -161,7 +167,7 @@ impl Frequent {
             {
                 continue;
             }
-            if entries.iter().any(|e| e.key == key) {
+            if !seen.insert(key) {
                 continue;
             }
             entries.push(Entry {
@@ -443,5 +449,19 @@ mod tests {
             .map(|i| format!("{}\t5\tfile:///m{i}\n", 1 + i % 7))
             .collect();
         assert_eq!(Frequent::parse(&many).len(), MAX_FOLDERS);
+    }
+
+    #[test]
+    fn a_huge_list_is_not_read_to_its_end() {
+        let huge: String = (0..300_000)
+            .map(|i| format!("{}\t5\tfile:///m{i}\n", 1 + i % 7))
+            .collect();
+        let t = std::time::Instant::now();
+        assert_eq!(Frequent::parse(&huge).len(), MAX_FOLDERS);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            t.elapsed()
+        );
     }
 }

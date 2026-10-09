@@ -123,8 +123,29 @@ fn read_mode(path: &Path) -> Result<u32, Problem> {
     Ok(md.mode() & perms::ALL_BITS)
 }
 
+/// Changes the mode of the file or folder at `path`, never of what a link
+/// there points to. The entry is opened as itself (`O_PATH | O_NOFOLLOW`, so a
+/// link is the link), looked at through the descriptor, and changed through
+/// it (`/proc/self/fd/<n>` names that very inode): a name that was swapped
+/// for a link between the walk that found it and this call is refused, not
+/// followed to a file of the person's that nobody meant to change.
 fn write_mode(path: &Path, mode: u32) -> Result<(), Problem> {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode & perms::ALL_BITS))
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) => Problem::Link,
+            _ => errno_problem(&e),
+        })?;
+    let md = handle.metadata().map_err(|e| errno_problem(&e))?;
+    if md.file_type().is_symlink() {
+        return Err(Problem::Link);
+    }
+    let via = std::path::PathBuf::from(format!("/proc/self/fd/{}", handle.as_raw_fd()));
+    fs::set_permissions(&via, fs::Permissions::from_mode(mode & perms::ALL_BITS))
         .map_err(|e| errno_problem(&e))
 }
 
@@ -573,6 +594,38 @@ mod tests {
         run_revert(&clear.changes, true, &no());
         assert_eq!(read(&a, Key::Rating).unwrap(), "8");
         let _ = out;
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_mode_is_never_written_through_a_link() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch("modelink");
+        let secret = dir.join("secret");
+        fs::write(&secret, b"s").unwrap();
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+        // The name was a file when the walk saw it; now it is a link.
+        let swapped = dir.join("swapped");
+        symlink(&secret, &swapped).unwrap();
+        assert_eq!(write_mode(&swapped, 0o777), Err(Problem::Link));
+        assert_eq!(fs::metadata(&secret).unwrap().mode() & 0o777, 0o600);
+        // a link to a folder, and a dangling one
+        let tree = dir.join("tree");
+        fs::create_dir_all(&tree).unwrap();
+        symlink(&secret, tree.join("l")).unwrap();
+        symlink(dir.join("nope"), tree.join("dangling")).unwrap();
+        fs::write(tree.join("f"), b"x").unwrap();
+        fs::set_permissions(tree.join("f"), fs::Permissions::from_mode(0o600)).unwrap();
+        let out = run_mode_tree(&tree, 0o004, 0, &AtomicBool::new(false));
+        assert_eq!(
+            fs::metadata(&secret).unwrap().mode() & 0o777,
+            0o600,
+            "{out:?}"
+        );
+        assert_eq!(fs::metadata(tree.join("f")).unwrap().mode() & 0o777, 0o604);
+        // a real file still works
+        write_mode(&tree.join("f"), 0o640).unwrap();
+        assert_eq!(fs::metadata(tree.join("f")).unwrap().mode() & 0o777, 0o640);
         fs::remove_dir_all(&dir).unwrap();
     }
 

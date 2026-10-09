@@ -55,7 +55,10 @@ impl Config {
             Ok(None) => return Config::defaults(home),
             Err(e) => {
                 log::warn!("index settings not used: {e}");
-                log::debug!("index settings file: {}", path.display());
+                log::debug!(
+                    "index settings file: {}",
+                    atlas_explorer_core::display::display_name(&path)
+                );
                 return Config::defaults(home);
             }
         };
@@ -232,9 +235,27 @@ fn expand(item: &str, home: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
+/// Opens a file that must be a regular one, without blocking on a named pipe
+/// (a FIFO where a settings file should be would stall the start otherwise).
+/// A link is followed unless `follow` is false: the user's own settings may be
+/// links into a dotfiles folder, a `CACHEDIR.TAG` in a tree from elsewhere may
+/// not.
+pub(crate) fn open_regular(path: &Path, follow: bool) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let flags = libc::O_NONBLOCK | libc::O_CLOEXEC | if follow { 0 } else { libc::O_NOFOLLOW };
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    Ok(f)
+}
+
 fn read_capped(path: &Path) -> std::io::Result<Option<String>> {
     use std::io::Read;
-    let f = match std::fs::File::open(path) {
+    let f = match open_regular(path, true) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
@@ -469,6 +490,41 @@ mod tests {
     fn garbage_is_survived() {
         let c = Config::parse("[Index\nRoots\n=\n[Index]\nRoots=\u{0}\n", Path::new(HOME));
         assert!(c.roots.is_empty());
+    }
+
+    fn mkfifo(p: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    }
+
+    #[test]
+    fn a_named_pipe_in_place_of_the_settings_file_does_not_stall_the_start() {
+        let base = crate::testdir::new("config-fifo");
+        let d = base.join("telamon-explorer");
+        std::fs::create_dir_all(&d).unwrap();
+        mkfifo(&d.join("indexrc"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let b = base.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Config::load(&b, Path::new(HOME)).roots);
+        });
+        let roots = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("Config::load blocked on a named pipe");
+        assert_eq!(roots, vec![PathBuf::from(HOME)]);
+    }
+
+    #[test]
+    fn open_regular_refuses_pipes_and_optionally_links() {
+        let base = crate::testdir::new("config-open");
+        mkfifo(&base.join("p"));
+        assert!(open_regular(&base.join("p"), true).is_err());
+        std::fs::write(base.join("f"), b"x").unwrap();
+        std::os::unix::fs::symlink(base.join("f"), base.join("l")).unwrap();
+        assert!(open_regular(&base.join("l"), true).is_ok());
+        assert!(open_regular(&base.join("l"), false).is_err());
     }
 
     #[test]

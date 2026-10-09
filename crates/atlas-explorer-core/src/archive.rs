@@ -24,6 +24,11 @@ pub const SCHEMES: &[&str] = &["zip", "tar", "sevenz", "ar"];
 pub const MAX_COMPONENTS: usize = 256;
 /// Bytes an entry's path may have.
 pub const MAX_PATH_BYTES: usize = 4096;
+/// Entries one extraction may hold; more is refused whole (the listing the
+/// window sends is held in memory, and no archive a person opens has more).
+pub const MAX_ENTRIES: usize = 1_000_000;
+/// Bytes a link's target may have.
+pub const MAX_LINK_BYTES: usize = 4096;
 
 /// Whether `scheme` is one of the archive worker's.
 pub fn is_scheme(scheme: &str) -> bool {
@@ -49,6 +54,10 @@ pub enum Problem {
     LinkParentDir,
     /// A link whose target holds a NUL.
     LinkNul,
+    /// A link whose target is longer than [`MAX_LINK_BYTES`].
+    LinkTooLong,
+    /// More than [`MAX_ENTRIES`] entries.
+    TooMany,
 }
 
 impl Problem {
@@ -100,6 +109,9 @@ pub fn check_path(path: &[u8]) -> Result<(), Problem> {
 
 /// Whether a link with this target can be made in the extracted folder.
 pub fn check_link(target: &[u8]) -> Result<(), Problem> {
+    if target.len() > MAX_LINK_BYTES {
+        return Err(Problem::LinkTooLong);
+    }
     if target.contains(&0) {
         return Err(Problem::LinkNul);
     }
@@ -143,9 +155,13 @@ pub fn check_entries<'a>(entries: impl IntoIterator<Item = Entry<'a>>) -> Report
     let mut report = Report::default();
     for e in entries {
         report.checked += 1;
-        let bad = check_path(e.path)
-            .err()
-            .or_else(|| e.link.and_then(|l| check_link(l).err()));
+        let bad = if report.checked > MAX_ENTRIES {
+            Some(Problem::TooMany)
+        } else {
+            check_path(e.path)
+                .err()
+                .or_else(|| e.link.and_then(|l| check_link(l).err()))
+        };
         if let Some(p) = bad {
             report.problems += 1;
             if report.first.is_none() {
@@ -163,7 +179,11 @@ pub fn refusal_text(report: &Report, archive_installed: bool) -> String {
         return String::new();
     };
     let name = short_name(&display_name(path.as_slice()));
-    let what = if problem.is_link() {
+    let what = if *problem == Problem::TooMany {
+        "This archive has more items than Files can check".to_string()
+    } else if *problem == Problem::LinkTooLong {
+        format!("\"{name}\" is a link with a target that is too long to check")
+    } else if problem.is_link() {
         format!("\"{name}\" is a link that points outside the folder you chose")
     } else {
         format!("\"{name}\" would be extracted outside the folder you chose")
@@ -647,6 +667,21 @@ mod tests {
         assert_eq!(bad.problems, 2);
         assert_eq!(bad.first, Some((b"../x".to_vec(), Problem::ParentDir)));
         assert!(check_entries([]).ok());
+    }
+
+    #[test]
+    fn too_many_entries_and_too_long_links_are_refused() {
+        let long = "a".repeat(MAX_LINK_BYTES + 1);
+        assert_eq!(check_link(long.as_bytes()), Err(Problem::LinkTooLong));
+        assert_eq!(check_link("a".repeat(MAX_LINK_BYTES).as_bytes()), Ok(()));
+        let r = check_entries([e("x", Some(long.as_str()))]);
+        assert!(!r.ok());
+        assert!(refusal_text(&r, false).contains("too long to check"));
+        let many = std::iter::repeat_with(|| e("f", None)).take(MAX_ENTRIES + 1);
+        let r = check_entries(many);
+        assert_eq!(r.problems, 1);
+        assert_eq!(r.first.as_ref().map(|f| f.1), Some(Problem::TooMany));
+        assert!(refusal_text(&r, false).contains("more items than Files can check"));
     }
 
     #[test]

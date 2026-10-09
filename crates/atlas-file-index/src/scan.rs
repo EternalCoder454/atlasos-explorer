@@ -19,10 +19,11 @@ use crate::config::{
     CACHEDIR_SIGNATURE, DirDecision, Excludes, is_cachedir_tag, marker_excludes, parse_hidden_file,
 };
 use crate::index::{
-    FLAG_DIR, FLAG_EXEC, FLAG_HIDDEN, FLAG_RECENT, Index, IndexBuilder, MAX_DEPTH, NONE,
-    RECENT_SECS,
+    FLAG_DIR, FLAG_EXEC, FLAG_HIDDEN, FLAG_RECENT, Index, IndexBuilder, MAX_DEPTH, MAX_RECORDS,
+    NONE, RECENT_SECS,
 };
 use crate::tags;
+use atlas_explorer_core::display::display_name;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
@@ -73,6 +74,8 @@ struct Scanner<'a> {
     errors: Vec<String>,
     stopped: bool,
     full: bool,
+    /// Most entries of one folder held at once (`MAX_RECORDS`; tests lower it).
+    entry_cap: usize,
 }
 
 /// Index every root from scratch. `used` is the last-use table (see `recent`).
@@ -132,6 +135,7 @@ impl<'a> Scanner<'a> {
             errors: Vec::new(),
             stopped: false,
             full: false,
+            entry_cap: MAX_RECORDS,
         }
     }
 
@@ -165,11 +169,11 @@ impl<'a> Scanner<'a> {
         let md = match fs::metadata(root) {
             Ok(m) if m.is_dir() => m,
             Ok(_) => {
-                self.error(format!("{} is not a folder", root.display()));
+                self.error(format!("{} is not a folder", display_name(root)));
                 return false;
             }
             Err(e) => {
-                self.error(format!("{} cannot be read: {e}", root.display()));
+                self.error(format!("{} cannot be read: {e}", display_name(root)));
                 return false;
             }
         };
@@ -186,7 +190,7 @@ impl<'a> Scanner<'a> {
         };
         let mut path = root.to_path_buf();
         if let Listing::Failed(e) = self.list_dir(id, &mut path, md.dev(), None, true, 0) {
-            self.error(format!("{} cannot be read: {e}", root.display()));
+            self.error(format!("{} cannot be read: {e}", display_name(root)));
             return false;
         }
         true
@@ -246,7 +250,7 @@ impl<'a> Scanner<'a> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return, // gone
             Err(e) => {
                 // cannot look at it now: keep what was known
-                self.error(format!("{} cannot be read: {e}", path.display()));
+                self.error(format!("{} cannot be read: {e}", display_name(path)));
                 self.copy_block(old_id, end, new_parent, None);
                 return;
             }
@@ -269,14 +273,17 @@ impl<'a> Scanner<'a> {
             recent_flag(md.mtime()) != 0,
         );
         self.map[old_id as usize] = id;
-        match self.list_dir(id, path, md.dev(), Some(old_id), is_root, 0) {
+        // The folder's real depth, so folders added below it cannot take the
+        // index past MAX_DEPTH (a deeper index is refused when it is loaded).
+        let depth = usize::from(old.depth(old_id));
+        match self.list_dir(id, path, md.dev(), Some(old_id), is_root, depth) {
             Listing::Done => {}
             Listing::Excluded => {
                 self.b.rollback(mark);
                 self.map[old_id as usize..end as usize].fill(NONE);
             }
             Listing::Failed(e) => {
-                self.error(format!("{} cannot be read: {e}", path.display()));
+                self.error(format!("{} cannot be read: {e}", display_name(path)));
             }
         }
     }
@@ -322,7 +329,17 @@ impl<'a> Scanner<'a> {
         };
         let mut entries: Vec<fs::DirEntry> = Vec::new();
         let (mut has_tag, mut has_pyvenv, mut has_hidden) = (false, false, false);
+        // No more entries are held than the index could take: a folder with
+        // millions of names must not use more memory than the whole index may.
+        let room = MAX_RECORDS.saturating_sub(self.b.len());
         for e in rd {
+            if entries.len() >= room.min(self.entry_cap) {
+                self.full = true;
+                break;
+            }
+            if entries.len() % 1024 == 1023 && self.check_stop() {
+                break;
+            }
             match e {
                 Ok(e) => {
                     match e.file_name().as_bytes() {
@@ -334,7 +351,10 @@ impl<'a> Scanner<'a> {
                     entries.push(e);
                 }
                 Err(e) => {
-                    self.error(format!("{} cannot be read completely: {e}", path.display()));
+                    self.error(format!(
+                        "{} cannot be read completely: {e}",
+                        display_name(path)
+                    ));
                     break;
                 }
             }
@@ -412,7 +432,7 @@ impl<'a> Scanner<'a> {
         if depth >= MAX_DEPTH {
             self.error(format!(
                 "{} is nested too deeply, not entered",
-                path.display()
+                display_name(path)
             ));
             return;
         }
@@ -430,7 +450,7 @@ impl<'a> Scanner<'a> {
             Ok(m) if m.is_dir() => m,
             Ok(_) => return,
             Err(e) => {
-                self.error(format!("{} cannot be read: {e}", path.display()));
+                self.error(format!("{} cannot be read: {e}", display_name(path)));
                 return;
             }
         };
@@ -454,7 +474,7 @@ impl<'a> Scanner<'a> {
         match self.list_dir(id, path, md.dev(), None, false, depth + 1) {
             Listing::Done => {}
             Listing::Excluded => self.b.rollback(mark),
-            Listing::Failed(e) => self.error(format!("{} cannot be read: {e}", path.display())),
+            Listing::Failed(e) => self.error(format!("{} cannot be read: {e}", display_name(path))),
         }
     }
 
@@ -590,6 +610,24 @@ mod tests {
             &AtomicBool::new(false),
             &HashMap::new(),
         )
+    }
+
+    #[test]
+    fn a_folder_with_more_entries_than_the_cap_is_cut_and_marked_full() {
+        let t = Scratch::new("entrycap");
+        let r = fs::canonicalize(&t.0).unwrap();
+        for i in 0..20 {
+            touch(&r.join(format!("many/f{i}")));
+        }
+        let excl = Excludes::new(&[]);
+        let stop = AtomicBool::new(false);
+        let mut s = Scanner::new(&excl, &stop, None, &[]);
+        s.entry_cap = 5;
+        assert!(s.scan_root(&r));
+        assert!(s.full, "a folder past the cap marks the scan full");
+        let res = s.finish(&HashMap::new(), 0);
+        // the root, `many`, and at most 5 of its 20 files
+        assert!(res.index.len() <= 7, "{} records", res.index.len());
     }
 
     #[test]

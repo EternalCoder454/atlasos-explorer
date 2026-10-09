@@ -8,6 +8,7 @@ pub mod archive;
 pub mod attrs;
 pub mod batch;
 pub mod checksum;
+pub mod childlimits;
 pub mod conflict;
 pub mod content;
 pub mod display;

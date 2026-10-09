@@ -115,6 +115,11 @@ impl SavedList {
             return Err(Outcome::Invalid);
         };
         let id = self.items.iter().map(|s| s.id).max().map_or(1, |m| m + 1);
+        // A number past what the text accepts again would be dropped on the
+        // next read, with everything saved after it.
+        if id > MAX_ID {
+            return Err(Outcome::Full);
+        }
         item.id = id;
         self.items.push(item);
         Ok(id)
@@ -151,7 +156,14 @@ pub fn clean_name(name: &str) -> Option<String> {
         .chars()
         .map(|c| if c.is_whitespace() { ' ' } else { c })
         .collect();
-    let shown = display_name(shown.trim());
+    // Runs of space are one space before the name is made safe to show (a
+    // long run would be marked there).
+    let collapsed: String = shown
+        .split(' ')
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let shown = display_name(collapsed.as_str());
     let mut out = String::new();
     let mut space = false;
     for c in shown.chars() {
@@ -195,6 +207,16 @@ fn clean(mut s: Saved) -> Option<Saved> {
     // This Folder needs its folder.
     if s.scope == 0 && s.folder.is_empty() {
         return None;
+    }
+    // The folder is a location, read under the launch rules (the settings
+    // file is untrusted): a scheme Files opens, no password, no control or
+    // direction characters, even percent-encoded.
+    if !s.folder.is_empty() {
+        let l = crate::launch::parse(std::slice::from_ref(&s.folder), std::path::Path::new("/"));
+        match (l.locations.as_slice(), l.refused.is_empty(), l.dropped) {
+            ([one], true, 0) => s.folder = one.clone(),
+            _ => return None,
+        }
     }
     let asks =
         !s.query.is_empty() || s.kind != 0 || s.modified != 0 || s.size != 0 || !s.tag.is_empty();
@@ -413,6 +435,47 @@ mod tests {
         let c = l.add(s("Again", "again")).unwrap();
         assert!(c > b);
         assert_eq!(l.items().len(), 2);
+    }
+
+    #[test]
+    fn the_folder_of_a_saved_search_is_a_location_files_opens() {
+        let mk = |folder: &str| {
+            let mut x = s("In a folder", "word");
+            x.scope = 0;
+            x.folder = folder.into();
+            x
+        };
+        let mut l = SavedList::default();
+        assert!(l.add(mk("file:///home/u/Docs")).is_ok());
+        assert_eq!(l.items()[0].folder, "file:///home/u/Docs");
+        assert!(l.add(mk("smb://nas/share")).is_ok());
+        for bad in [
+            "admin:///",
+            "smb://u:p@h/",
+            "file:///a%0Ab",
+            "file:///a\u{202E}b",
+            "sftp://-oProxyCommand=x@h/",
+            "http://example.com/",
+        ] {
+            let r = l.add(mk(bad));
+            // a password is taken out, the rest is refused (a relative name has no folder to read it from)
+            if bad == "smb://u:p@h/" {
+                assert!(r.is_ok());
+                assert_eq!(l.items().last().unwrap().folder, "smb://u@h/");
+            } else {
+                assert_eq!(r, Err(Outcome::Invalid), "{bad}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_id_the_text_would_refuse_is_not_handed_out() {
+        let mut l = SavedList::default();
+        let mut x = s("Last", "one");
+        x.id = MAX_ID;
+        l.items.push(x);
+        assert_eq!(l.add(s("Next", "two")), Err(Outcome::Full));
+        assert_eq!(SavedList::parse(&l.to_text()).items().len(), 1);
     }
 
     #[test]

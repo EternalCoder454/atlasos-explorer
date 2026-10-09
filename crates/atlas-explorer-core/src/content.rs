@@ -263,6 +263,8 @@ pub fn scan_pdf(path: &Path, q: &ContentQuery, stop: &AtomicBool) -> Pdf {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // A hostile PDF can ask for any amount of memory or time.
+    crate::childlimits::apply(&mut cmd, crate::childlimits::PDFTOTEXT);
     let Ok(mut child) = cmd.spawn() else {
         return Pdf::Failed;
     };
@@ -283,6 +285,7 @@ pub fn scan_pdf(path: &Path, q: &ContentQuery, stop: &AtomicBool) -> Pdf {
                 if stopped || started.elapsed() >= PDF_TIMEOUT {
                     timed_out.store(!stopped, Ordering::Relaxed);
                     if let Ok(mut c) = child.lock() {
+                        crate::childlimits::kill_group(c.id());
                         let _ = c.kill();
                     }
                     break;
@@ -295,6 +298,7 @@ pub fn scan_pdf(path: &Path, q: &ContentQuery, stop: &AtomicBool) -> Pdf {
         // A match, a cap or a stop: the rest of the text is not wanted.
         let status = match child.lock() {
             Ok(mut c) => {
+                crate::childlimits::kill_group(c.id());
                 let _ = c.kill();
                 c.wait().ok()
             }

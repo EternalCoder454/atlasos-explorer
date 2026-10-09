@@ -449,7 +449,10 @@ pub fn normalize_roots(configured: &[PathBuf]) -> Vec<PathBuf> {
             let inner = all.iter().any(|o| o != *r && r.starts_with(o));
             if inner {
                 log::info!("a folder to index is inside another one and is left out");
-                log::debug!("left out: {}", r.display());
+                log::debug!(
+                    "left out: {}",
+                    atlas_explorer_core::display::display_name(*r)
+                );
             }
             !inner
         })
@@ -474,13 +477,39 @@ fn wait_finished(h: &JoinHandle<()>, max: Duration) -> bool {
 fn write_snapshot(index: &Index, cache_home: &Path, excl_hash: u32) {
     let t0 = Instant::now();
     let bytes = snapshot::encode_with(index, now_secs(), excl_hash);
-    match CacheDir::open(cache_home, true) {
+    // A request to rescan or a hint about a folder that did not change (any
+    // process on the bus may send them) would otherwise rewrite and sync the
+    // whole file over and over: an index that is what was saved is not saved
+    // again. The body checksum is at bytes 40..44 and does not cover the time.
+    /// The cache folder, the body checksum and the file's size and time as written.
+    type Saved = (PathBuf, u32, (u64, i128));
+    static LAST: Mutex<Option<Saved>> = Mutex::new(None);
+    let body = bytes
+        .get(40..44)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let dir = CacheDir::open(cache_home, true);
+    if let (Some(body), Ok(Some(cd))) = (body, &dir)
+        && lock(&LAST).as_ref().is_some_and(|(p, c, stamp)| {
+            // and the file is still the one that was written (a damaged,
+            // replaced or removed file is written again)
+            p == cache_home && *c == body && cd.stamp() == Some(*stamp)
+        })
+    {
+        log::debug!("snapshot unchanged, not saved again");
+        return;
+    }
+    match dir {
         Ok(Some(cd)) => match cd.write(&bytes) {
-            Ok(()) => log::debug!(
-                "snapshot saved: {} bytes in {} ms",
-                bytes.len(),
-                t0.elapsed().as_millis()
-            ),
+            Ok(()) => {
+                if let (Some(body), Some(stamp)) = (body, cd.stamp()) {
+                    *lock(&LAST) = Some((cache_home.to_path_buf(), body, stamp));
+                }
+                log::debug!(
+                    "snapshot saved: {} bytes in {} ms",
+                    bytes.len(),
+                    t0.elapsed().as_millis()
+                )
+            }
             Err(e) => log::error!("snapshot not saved: {e}"),
         },
         Ok(None) => {}
@@ -848,7 +877,10 @@ impl Worker {
                         self.budget = self.id_to_wd.len();
                         break;
                     }
-                    Err(e) => log::debug!("no watch for {}: {e}", path.display()),
+                    Err(e) => log::debug!(
+                        "no watch for {}: {e}",
+                        atlas_explorer_core::display::display_name(&path)
+                    ),
                 }
             }
         }
@@ -1163,6 +1195,26 @@ mod tests {
             x
         );
         assert_eq!(cache_home_from(Some("/var/c/other".into()), x.clone()), x);
+    }
+
+    #[test]
+    fn an_index_that_was_saved_is_not_saved_again_until_the_file_changes() {
+        let t = crate::testdir::Scratch::new("resave");
+        let cache = t.0.clone();
+        let ix = crate::index::testutil::sample();
+        write_snapshot(&ix, &cache, 7);
+        let cd = CacheDir::open(&cache, false).unwrap().unwrap();
+        let first = cd.stamp().expect("saved");
+        std::thread::sleep(Duration::from_millis(20));
+        write_snapshot(&ix, &cache, 7);
+        assert_eq!(cd.stamp(), Some(first), "not written again");
+        // A file that was damaged (or removed) is written again.
+        std::fs::write(cache.join("telamon-explorer/index/v2.idx"), b"junk").unwrap();
+        write_snapshot(&ix, &cache, 7);
+        assert!(
+            cd.stamp().is_some_and(|s| s.0 > 4),
+            "written again over the damage"
+        );
     }
 
     #[test]

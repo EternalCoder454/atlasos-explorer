@@ -166,15 +166,17 @@ pub unsafe extern "C" fn telamon_search_chip(
     cap: usize,
     level: *mut u32,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let err = String::from_utf8_lossy(unsafe { bytes(error, error_len) }).into_owned();
-    let (lv, text) = state_of(state).chip(&err);
-    if !level.is_null() {
-        // SAFETY: `level` is writable (contract).
-        unsafe { level.write(lv) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let err = String::from_utf8_lossy(unsafe { bytes(error, error_len) }).into_owned();
+        let (lv, text) = state_of(state).chip(&err);
+        if !level.is_null() {
+            // SAFETY: `level` is writable (contract).
+            unsafe { level.write(lv) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Texts of the search: `which` 0 the count line (`n` results; `flags` 1 when
@@ -192,17 +194,19 @@ pub unsafe extern "C" fn telamon_search_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let n = usize::try_from(n).unwrap_or(usize::MAX);
-    let text = match which {
-        0 => search::count_text(n, flags & 1 != 0),
-        1 => search::live_text(n, flags & 1 != 0, flags & 2 != 0, flags & 4 != 0),
-        2 => search::UNAVAILABLE_TITLE.to_string(),
-        3 => search::UNAVAILABLE_TEXT.to_string(),
-        4 => search::UNAVAILABLE_LINE.to_string(),
-        _ => String::new(),
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let n = usize::try_from(n).unwrap_or(usize::MAX);
+        let text = match which {
+            0 => search::count_text(n, flags & 1 != 0),
+            1 => search::live_text(n, flags & 1 != 0, flags & 2 != 0, flags & 4 != 0),
+            2 => search::UNAVAILABLE_TITLE.to_string(),
+            3 => search::UNAVAILABLE_TEXT.to_string(),
+            4 => search::UNAVAILABLE_LINE.to_string(),
+            _ => String::new(),
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The limits: 0 hits one index search returns, 1 hits a walk stops at, 2 the
@@ -236,16 +240,18 @@ pub unsafe extern "C" fn telamon_search_path_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let (p, h) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(parent, parent_len)).into_owned(),
-            String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
-        )
-    };
-    let t = search::path_text(&p, &h);
-    // SAFETY: `out` as promised.
-    unsafe { put(t.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let (p, h) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(parent, parent_len)).into_owned(),
+                String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
+            )
+        };
+        let t = search::path_text(&p, &h);
+        // SAFETY: `out` as promised.
+        unsafe { put(t.as_bytes(), out, cap) }
+    })
 }
 
 /// Does the index hold this folder? `roots` is the indexed folders' paths,
@@ -260,14 +266,16 @@ pub unsafe extern "C" fn telamon_search_covers(
     roots: *const u8,
     roots_len: usize,
 ) -> bool {
-    // SAFETY: forwarded from this function's contract.
-    let (folder, roots) = unsafe { (bytes(folder, folder_len), bytes(roots, roots_len)) };
-    let roots: Vec<PathBuf> = roots
-        .split(|&b| b == b'\n')
-        .filter(|r| !r.is_empty())
-        .map(|r| PathBuf::from(std::ffi::OsStr::from_bytes(r)))
-        .collect();
-    covers(Path::new(std::ffi::OsStr::from_bytes(folder)), &roots)
+    crate::ffi::guarded(false, || {
+        // SAFETY: forwarded from this function's contract.
+        let (folder, roots) = unsafe { (bytes(folder, folder_len), bytes(roots, roots_len)) };
+        let roots: Vec<PathBuf> = roots
+            .split(|&b| b == b'\n')
+            .filter(|r| !r.is_empty())
+            .map(|r| PathBuf::from(std::ffi::OsStr::from_bytes(r)))
+            .collect();
+        covers(Path::new(std::ffi::OsStr::from_bytes(folder)), &roots)
+    })
 }
 
 fn options_of(f: &TelamonSearchFilter, include_hidden: bool, tag: Option<String>) -> Options {
@@ -327,8 +335,10 @@ pub unsafe extern "C" fn telamon_matcher_new(
     include_hidden: bool,
     use_pattern: bool,
 ) -> *mut c_void {
-    matcher_of(query, query_len, filter, include_hidden, None, use_pattern)
-        .map_or(std::ptr::null_mut(), |m| Box::into_raw(Box::new(m)).cast())
+    crate::ffi::guarded(std::ptr::null_mut(), || {
+        matcher_of(query, query_len, filter, include_hidden, None, use_pattern)
+            .map_or(std::ptr::null_mut(), |m| Box::into_raw(Box::new(m)).cast())
+    })
 }
 
 /// How well an entry matches, 1 to 5, or 0 for not at all. `name` is the
@@ -421,59 +431,61 @@ pub unsafe extern "C" fn telamon_walk_start(
     callback: WalkCallback,
     user: *mut c_void,
 ) -> *mut c_void {
-    // SAFETY: `tag` covers `tag_len` (contract).
-    let tag = String::from_utf8_lossy(unsafe { bytes(tag, tag_len) }).into_owned();
-    let tag = (!tag.is_empty()).then_some(tag);
-    let Some(matcher) = matcher_of(query, query_len, filter, include_hidden, tag, use_pattern)
-    else {
-        return std::ptr::null_mut();
-    };
-    // SAFETY: `root` covers `root_len` (contract).
-    let root = PathBuf::from(std::ffi::OsStr::from_bytes(unsafe {
-        bytes(root, root_len)
-    }));
-    let stop = Arc::new(AtomicBool::new(false));
-    let flag = stop.clone();
-    let user = UserPtr(user);
-    let max = max_hits.clamp(1, MAX_LIVE_HITS);
-    // For the smoke tests: a pause after every batch, so a walk lasts long
-    // enough to look at and to stop. Test builds only (debug); a release
-    // build does not read the variable.
-    #[cfg(debug_assertions)]
-    let pause = std::env::var("TELAMON_EXPLORER_TEST_WALK_BATCH_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|ms| std::time::Duration::from_millis(ms.min(10_000)));
-    let spawned = std::thread::Builder::new()
-        .name("search-walk".into())
-        .spawn(move || {
-            let user = user;
-            let mut buf: Vec<u8> = Vec::new();
-            let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                walk(&root, &matcher, &flag, max, &mut |hits| {
-                    buf.clear();
-                    encode(&hits, &mut buf);
-                    callback(user.0, buf.as_ptr(), buf.len(), 0);
-                    #[cfg(debug_assertions)]
-                    if let Some(p) = pause {
-                        std::thread::sleep(p);
-                    }
-                })
-            }))
-            .unwrap_or(WalkEnd::Unreadable);
-            let code = match end {
-                WalkEnd::Done => 1,
-                WalkEnd::Stopped => 2,
-                WalkEnd::Capped => 3,
-                WalkEnd::Unreadable => 4,
-                WalkEnd::Limit => 5,
-            };
-            callback(user.0, std::ptr::null(), 0, code);
-        });
-    if spawned.is_err() {
-        return std::ptr::null_mut();
-    }
-    Box::into_raw(Box::new(Walking { stop })).cast()
+    crate::ffi::guarded(std::ptr::null_mut(), || {
+        // SAFETY: `tag` covers `tag_len` (contract).
+        let tag = String::from_utf8_lossy(unsafe { bytes(tag, tag_len) }).into_owned();
+        let tag = (!tag.is_empty()).then_some(tag);
+        let Some(matcher) = matcher_of(query, query_len, filter, include_hidden, tag, use_pattern)
+        else {
+            return std::ptr::null_mut();
+        };
+        // SAFETY: `root` covers `root_len` (contract).
+        let root = PathBuf::from(std::ffi::OsStr::from_bytes(unsafe {
+            bytes(root, root_len)
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let user = UserPtr(user);
+        let max = max_hits.clamp(1, MAX_LIVE_HITS);
+        // For the smoke tests: a pause after every batch, so a walk lasts long
+        // enough to look at and to stop. Test builds only (debug); a release
+        // build does not read the variable.
+        #[cfg(debug_assertions)]
+        let pause = std::env::var("TELAMON_EXPLORER_TEST_WALK_BATCH_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|ms| std::time::Duration::from_millis(ms.min(10_000)));
+        let spawned = std::thread::Builder::new()
+            .name("search-walk".into())
+            .spawn(move || {
+                let user = user;
+                let mut buf: Vec<u8> = Vec::new();
+                let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    walk(&root, &matcher, &flag, max, &mut |hits| {
+                        buf.clear();
+                        encode(&hits, &mut buf);
+                        callback(user.0, buf.as_ptr(), buf.len(), 0);
+                        #[cfg(debug_assertions)]
+                        if let Some(p) = pause {
+                            std::thread::sleep(p);
+                        }
+                    })
+                }))
+                .unwrap_or(WalkEnd::Unreadable);
+                let code = match end {
+                    WalkEnd::Done => 1,
+                    WalkEnd::Stopped => 2,
+                    WalkEnd::Capped => 3,
+                    WalkEnd::Unreadable => 4,
+                    WalkEnd::Limit => 5,
+                };
+                callback(user.0, std::ptr::null(), 0, code);
+            });
+        if spawned.is_err() {
+            return std::ptr::null_mut();
+        }
+        Box::into_raw(Box::new(Walking { stop })).cast()
+    })
 }
 
 /// Asks a walk to end; its callback then gets `end` 2 soon after. Safe to
@@ -522,20 +534,22 @@ pub unsafe extern "C" fn telamon_pattern_check(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let t = String::from_utf8_lossy(unsafe { bytes(text, len) }).into_owned();
-    let t = t.trim();
-    let err = if t.is_empty() {
-        None
-    } else if use_pattern {
-        pattern::check(t)
-    } else if contents {
-        Pattern::literal(t).err()
-    } else {
-        None
-    };
-    // SAFETY: `out` as promised.
-    err.map_or(0, |e| unsafe { put(e.0.as_bytes(), out, cap) })
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let t = String::from_utf8_lossy(unsafe { bytes(text, len) }).into_owned();
+        let t = t.trim();
+        let err = if t.is_empty() {
+            None
+        } else if use_pattern {
+            pattern::check(t)
+        } else if contents {
+            Pattern::literal(t).err()
+        } else {
+            None
+        };
+        // SAFETY: `out` as promised.
+        err.map_or(0, |e| unsafe { put(e.0.as_bytes(), out, cap) })
+    })
 }
 
 /// The matcher of the folder filter, for the text typed. Null when the text
@@ -554,26 +568,28 @@ pub unsafe extern "C" fn telamon_namefilter_new(
     err_cap: usize,
     err_len: *mut usize,
 ) -> *mut c_void {
-    // SAFETY: forwarded from this function's contract.
-    let t = String::from_utf8_lossy(unsafe { bytes(text, len) }).into_owned();
-    match NameFilter::new(&t, use_pattern) {
-        Ok(f) => {
-            if !err_len.is_null() {
-                // SAFETY: `err_len` is writable (contract).
-                unsafe { err_len.write(0) };
+    crate::ffi::guarded(std::ptr::null_mut(), || {
+        // SAFETY: forwarded from this function's contract.
+        let t = String::from_utf8_lossy(unsafe { bytes(text, len) }).into_owned();
+        match NameFilter::new(&t, use_pattern) {
+            Ok(f) => {
+                if !err_len.is_null() {
+                    // SAFETY: `err_len` is writable (contract).
+                    unsafe { err_len.write(0) };
+                }
+                Box::into_raw(Box::new(f)).cast()
             }
-            Box::into_raw(Box::new(f)).cast()
-        }
-        Err(e) => {
-            // SAFETY: `err` as promised.
-            let n = unsafe { put(e.0.as_bytes(), err, err_cap) };
-            if !err_len.is_null() {
-                // SAFETY: `err_len` is writable (contract).
-                unsafe { err_len.write(n) };
+            Err(e) => {
+                // SAFETY: `err` as promised.
+                let n = unsafe { put(e.0.as_bytes(), err, err_cap) };
+                if !err_len.is_null() {
+                    // SAFETY: `err_len` is writable (contract).
+                    unsafe { err_len.write(n) };
+                }
+                std::ptr::null_mut()
             }
-            std::ptr::null_mut()
         }
-    }
+    })
 }
 
 /// Does everything stay (nothing is typed)?
@@ -597,11 +613,13 @@ pub unsafe extern "C" fn telamon_namefilter_test(
     name: *const u8,
     len: usize,
 ) -> bool {
-    if filter.is_null() {
-        return true;
-    }
-    // SAFETY: a live NameFilter and readable name bytes (contract).
-    unsafe { &*filter.cast::<NameFilter>() }.matches(unsafe { bytes(name, len) })
+    crate::ffi::guarded(false, || {
+        if filter.is_null() {
+            return true;
+        }
+        // SAFETY: a live NameFilter and readable name bytes (contract).
+        unsafe { &*filter.cast::<NameFilter>() }.matches(unsafe { bytes(name, len) })
+    })
 }
 
 /// # Safety
@@ -686,74 +704,76 @@ pub unsafe extern "C" fn telamon_content_start(
     callback: ContentCallback,
     user: *mut c_void,
 ) -> *mut c_void {
-    if filter.is_null() {
-        return std::ptr::null_mut();
-    }
-    // SAFETY: the contract: lengths as given, `filter` valid.
-    let (q, tag, f, root) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(query, query_len)).into_owned(),
-            String::from_utf8_lossy(bytes(tag, tag_len)).into_owned(),
-            &*filter,
-            PathBuf::from(std::ffi::OsStr::from_bytes(bytes(root, root_len))),
-        )
-    };
-    let Ok(query) = ContentQuery::new(&q, use_pattern) else {
-        return std::ptr::null_mut();
-    };
-    let matcher = LiveMatcher::new(
-        "",
-        options_of(f, include_hidden, (!tag.is_empty()).then_some(tag)),
-    );
-    let stop = Arc::new(AtomicBool::new(false));
-    let flag = stop.clone();
-    let user = UserPtr(user);
-    let max = max_hits.clamp(1, content::MAX_CONTENT_HITS);
-    // For the smoke tests (debug builds only): a pause after every batch.
-    #[cfg(debug_assertions)]
-    let pause = std::env::var("TELAMON_EXPLORER_TEST_WALK_BATCH_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|ms| std::time::Duration::from_millis(ms.min(10_000)));
-    let spawned = std::thread::Builder::new()
-        .name("content-walk".into())
-        .spawn(move || {
-            let user = user;
-            let mut buf: Vec<u8> = Vec::new();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                walk_content(&root, &matcher, &query, &flag, max, &mut |hits| {
-                    buf.clear();
-                    encode_content(&hits, &mut buf);
-                    callback(user.0, buf.as_ptr(), buf.len(), 0, std::ptr::null());
-                    #[cfg(debug_assertions)]
-                    if let Some(p) = pause {
-                        std::thread::sleep(p);
-                    }
-                })
-            }))
-            .unwrap_or((WalkEnd::Unreadable, Stats::default()));
-            let (end, stats) = result;
-            let code = match end {
-                WalkEnd::Done => 1,
-                WalkEnd::Stopped => 2,
-                WalkEnd::Capped => 3,
-                WalkEnd::Unreadable => 4,
-                WalkEnd::Limit => 5,
-            };
-            let out = TelamonContentStats {
-                searched: stats.searched,
-                binary: stats.binary,
-                too_large: stats.too_large,
-                pdf_no_tool: stats.pdf_no_tool,
-                pdf_timeout: stats.pdf_timeout,
-                unreadable: stats.unreadable,
-            };
-            callback(user.0, std::ptr::null(), 0, code, &out);
-        });
-    if spawned.is_err() {
-        return std::ptr::null_mut();
-    }
-    Box::into_raw(Box::new(Walking { stop })).cast()
+    crate::ffi::guarded(std::ptr::null_mut(), || {
+        if filter.is_null() {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: the contract: lengths as given, `filter` valid.
+        let (q, tag, f, root) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(query, query_len)).into_owned(),
+                String::from_utf8_lossy(bytes(tag, tag_len)).into_owned(),
+                &*filter,
+                PathBuf::from(std::ffi::OsStr::from_bytes(bytes(root, root_len))),
+            )
+        };
+        let Ok(query) = ContentQuery::new(&q, use_pattern) else {
+            return std::ptr::null_mut();
+        };
+        let matcher = LiveMatcher::new(
+            "",
+            options_of(f, include_hidden, (!tag.is_empty()).then_some(tag)),
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let user = UserPtr(user);
+        let max = max_hits.clamp(1, content::MAX_CONTENT_HITS);
+        // For the smoke tests (debug builds only): a pause after every batch.
+        #[cfg(debug_assertions)]
+        let pause = std::env::var("TELAMON_EXPLORER_TEST_WALK_BATCH_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|ms| std::time::Duration::from_millis(ms.min(10_000)));
+        let spawned = std::thread::Builder::new()
+            .name("content-walk".into())
+            .spawn(move || {
+                let user = user;
+                let mut buf: Vec<u8> = Vec::new();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    walk_content(&root, &matcher, &query, &flag, max, &mut |hits| {
+                        buf.clear();
+                        encode_content(&hits, &mut buf);
+                        callback(user.0, buf.as_ptr(), buf.len(), 0, std::ptr::null());
+                        #[cfg(debug_assertions)]
+                        if let Some(p) = pause {
+                            std::thread::sleep(p);
+                        }
+                    })
+                }))
+                .unwrap_or((WalkEnd::Unreadable, Stats::default()));
+                let (end, stats) = result;
+                let code = match end {
+                    WalkEnd::Done => 1,
+                    WalkEnd::Stopped => 2,
+                    WalkEnd::Capped => 3,
+                    WalkEnd::Unreadable => 4,
+                    WalkEnd::Limit => 5,
+                };
+                let out = TelamonContentStats {
+                    searched: stats.searched,
+                    binary: stats.binary,
+                    too_large: stats.too_large,
+                    pdf_no_tool: stats.pdf_no_tool,
+                    pdf_timeout: stats.pdf_timeout,
+                    unreadable: stats.unreadable,
+                };
+                callback(user.0, std::ptr::null(), 0, code, &out);
+            });
+        if spawned.is_err() {
+            return std::ptr::null_mut();
+        }
+        Box::into_raw(Box::new(Walking { stop })).cast()
+    })
 }
 
 /// The line under a search inside files. `end` is 0 while it runs, else the
@@ -769,32 +789,34 @@ pub unsafe extern "C" fn telamon_content_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let ending = match end {
-        0 => Ending::Running,
-        2 => Ending::Stopped,
-        3 => Ending::TooMany,
-        4 => Ending::Unreadable,
-        5 => Ending::Limit,
-        _ => Ending::Done,
-    };
-    let st = if stats.is_null() {
-        Stats::default()
-    } else {
-        // SAFETY: valid (contract); plain numbers.
-        let s = unsafe { &*stats };
-        Stats {
-            searched: s.searched,
-            binary: s.binary,
-            too_large: s.too_large,
-            pdf_no_tool: s.pdf_no_tool,
-            pdf_timeout: s.pdf_timeout,
-            unreadable: s.unreadable,
-        }
-    };
-    let n = usize::try_from(found).unwrap_or(usize::MAX);
-    let t = content::summary(n, ending, &st);
-    // SAFETY: `out` as promised.
-    unsafe { put(t.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let ending = match end {
+            0 => Ending::Running,
+            2 => Ending::Stopped,
+            3 => Ending::TooMany,
+            4 => Ending::Unreadable,
+            5 => Ending::Limit,
+            _ => Ending::Done,
+        };
+        let st = if stats.is_null() {
+            Stats::default()
+        } else {
+            // SAFETY: valid (contract); plain numbers.
+            let s = unsafe { &*stats };
+            Stats {
+                searched: s.searched,
+                binary: s.binary,
+                too_large: s.too_large,
+                pdf_no_tool: s.pdf_no_tool,
+                pdf_timeout: s.pdf_timeout,
+                unreadable: s.unreadable,
+            }
+        };
+        let n = usize::try_from(found).unwrap_or(usize::MAX);
+        let t = content::summary(n, ending, &st);
+        // SAFETY: `out` as promised.
+        unsafe { put(t.as_bytes(), out, cap) }
+    })
 }
 
 /// The one line that says what Inside Files does.
@@ -803,8 +825,10 @@ pub unsafe extern "C" fn telamon_content_text(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_content_note(out: *mut u8, cap: usize) -> usize {
-    // SAFETY: `out` as promised.
-    unsafe { put(content::NOTE.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: `out` as promised.
+        unsafe { put(content::NOTE.as_bytes(), out, cap) }
+    })
 }
 
 /// Is there a `pdftotext` to read PDFs with?

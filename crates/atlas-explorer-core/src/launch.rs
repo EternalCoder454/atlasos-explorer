@@ -22,6 +22,9 @@ pub struct Launch {
     pub select: bool,
     /// Open the first two locations side by side in one tab.
     pub split: bool,
+    /// The caller is another program (D-Bus), not the person: servers and
+    /// devices are not opened for it.
+    pub bus: bool,
     /// Locations, in order: `file://` URLs for local paths, other URLs as
     /// given.
     pub locations: Vec<String>,
@@ -46,6 +49,12 @@ pub fn parse(args: &[String], cwd: &Path) -> Launch {
         ..Launch::default()
     };
     let mut options_done = false;
+    // `--bus` may come after other options but before the first location.
+    let from_bus = args
+        .iter()
+        .take(MAX_ARGS)
+        .take_while(|a| a.starts_with('-') && a.as_str() != "--")
+        .any(|a| a == "--bus");
     for arg in args.iter().take(MAX_ARGS) {
         if !options_done && arg.starts_with('-') {
             match arg.as_str() {
@@ -53,6 +62,8 @@ pub fn parse(args: &[String], cwd: &Path) -> Launch {
                 "--new-window" => launch.new_window = true,
                 "--select" => launch.select = true,
                 "--split" => launch.split = true,
+                // Put first by the code that takes a D-Bus call.
+                "--bus" => launch.bus = true,
                 // Sent by D-Bus activation; nothing to do.
                 "--daemon-activation" => {}
                 _ => launch.refused.push(Refusal {
@@ -63,7 +74,7 @@ pub fn parse(args: &[String], cwd: &Path) -> Launch {
             }
             continue;
         }
-        match location(arg, cwd) {
+        match location(arg, cwd, from_bus) {
             Ok(url) => launch.locations.push(url),
             Err(reason) => launch.refused.push(Refusal {
                 arg: shown(arg),
@@ -74,14 +85,14 @@ pub fn parse(args: &[String], cwd: &Path) -> Launch {
     launch
 }
 
-fn location(arg: &str, cwd: &Path) -> Result<String, &'static str> {
+fn location(arg: &str, cwd: &Path, from_bus: bool) -> Result<String, &'static str> {
     if arg.is_empty() {
         return Err("empty location");
     }
     if arg.len() > MAX_ARG_LEN {
         return Err("too long");
     }
-    if arg.chars().any(is_hidden_char) {
+    if arg.chars().any(is_hidden_char) || decoded_has_hidden(arg) {
         return Err("holds control or direction characters");
     }
     if let Some(scheme) = scheme_of(arg) {
@@ -93,6 +104,17 @@ fn location(arg: &str, cwd: &Path) -> Result<String, &'static str> {
             .any(|k| scheme.eq_ignore_ascii_case(k))
         {
             return Err("not a kind of location Files opens");
+        }
+        if from_bus
+            && (is_server_scheme(scheme)
+                || DEVICE_SCHEMES
+                    .iter()
+                    .any(|k| scheme.eq_ignore_ascii_case(k)))
+        {
+            return Err("not opened from another program");
+        }
+        if is_server_scheme(scheme) {
+            return clean_server_url(arg);
         }
         return Ok(arg.to_string());
     }
@@ -132,6 +154,173 @@ pub const LAUNCH_SCHEMES: &[&str] = &[
     "ar",
     "iso",
 ];
+
+/// Schemes that name a server on the network.
+pub const SERVER_SCHEMES: &[&str] = &[
+    "smb", "sftp", "fish", "ftp", "ftps", "webdav", "webdavs", "nfs",
+];
+/// Schemes that name a device.
+pub const DEVICE_SCHEMES: &[&str] = &["mtp", "afc"];
+
+pub(crate) fn is_server_scheme(scheme: &str) -> bool {
+    SERVER_SCHEMES
+        .iter()
+        .any(|k| scheme.eq_ignore_ascii_case(k))
+}
+
+/// Whether the percent-decoded form of `text` holds a NUL, a control or a
+/// direction character (`%00`, `%0A`, `%E2%80%AE`).
+pub(crate) fn decoded_has_hidden(text: &str) -> bool {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let Some(hex) = b.get(i + 1..i + 3)
+            && let Ok(hex) = std::str::from_utf8(hex)
+            && let Ok(v) = u8::from_str_radix(hex, 16)
+        {
+            out.push(v);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    out.contains(&0) || String::from_utf8_lossy(&out).chars().any(is_hidden_char)
+}
+
+/// The authority of a server URL with its password taken out (`u:p@h` is
+/// `u@h`); the same text when there is none.
+pub(crate) fn authority_without_password(authority: &str) -> String {
+    match authority.rsplit_once('@') {
+        Some((user, host)) => {
+            let user = user.split(':').next().unwrap_or("");
+            format!("{user}@{host}")
+        }
+        None => authority.to_string(),
+    }
+}
+
+/// `text` with the user information of a `scheme://user:password@host` URL
+/// taken out, for showing a refused argument or writing a log line.
+pub(crate) fn without_userinfo(text: &str) -> String {
+    let Some(i) = text.find("://") else {
+        return text.to_string();
+    };
+    let (head, rest) = text.split_at(i + 3);
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..end].rfind('@') {
+        Some(at) => format!("{head}{}", &rest[at + 1..]),
+        None => text.to_string(),
+    }
+}
+
+fn plain_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with('-')
+        // letters of any language, as Connect to Server takes them
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+/// A server URL as Files opens it: the user information and the host are
+/// checked (neither may start with `-`, so nothing reads as an option of a
+/// program a worker starts; the host is plain), a password is taken out
+/// (KIO asks for it, and the kiod password server keeps it, so it never goes
+/// on in a URL that is shown, copied or saved). `smb://` alone (the network)
+/// passes.
+pub(crate) fn clean_server_url(url: &str) -> Result<String, &'static str> {
+    let colon = url.find(':').ok_or("not a server address")?;
+    let (scheme, rest) = (&url[..colon], &url[colon + 1..]);
+    let Some(rest) = rest.strip_prefix("//") else {
+        // `smb:/` and `sftp:/path`: no authority, so nothing to check
+        return Ok(url.to_string());
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    if authority.is_empty() {
+        return if tail.is_empty() || tail == "/" {
+            Ok(format!("{scheme}://{tail}"))
+        } else {
+            Err("a server address needs a server")
+        };
+    }
+    let (user, hostport) = match authority.rsplit_once('@') {
+        Some((u, h)) => (Some(u.split(':').next().unwrap_or("")), h),
+        None => (None, authority),
+    };
+    if let Some(u) = user {
+        let decoded = decode_lossy(u);
+        if u.starts_with('-') || decoded.starts_with('-') {
+            return Err("user name starts with a dash");
+        }
+    }
+    let (host, port) = if let Some(v6) = hostport.strip_prefix('[') {
+        let (addr, after) = v6.split_once(']').ok_or("not a valid server address")?;
+        if addr.is_empty()
+            || !addr.contains(':')
+            || !addr
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() || c == b':' || c == b'.')
+        {
+            return Err("not a valid server address");
+        }
+        // only a port may follow the bracket
+        if !after.is_empty() && !after.starts_with(':') {
+            return Err("not a valid server address");
+        }
+        (format!("[{addr}]"), after.strip_prefix(':'))
+    } else {
+        match hostport.split_once(':') {
+            Some((h, p)) => (h.to_string(), Some(p)),
+            None => (hostport.to_string(), None),
+        }
+    };
+    if hostport.contains('[') && !host.starts_with('[') {
+        return Err("not a valid server address");
+    }
+    if !host.starts_with('[') && !plain_host(&host) {
+        return Err("not a valid server name");
+    }
+    if let Some(p) = port.filter(|p| !p.is_empty())
+        && !(p.len() <= 5
+            && p.bytes().all(|c| c.is_ascii_digit())
+            && matches!(p.parse::<u32>(), Ok(1..=65535)))
+    {
+        return Err("not a valid port");
+    }
+    let mut out = format!("{scheme}://");
+    if let Some(u) = user {
+        out.push_str(u);
+        out.push('@');
+    }
+    out.push_str(hostport);
+    out.push_str(tail);
+    Ok(out)
+}
+
+fn decode_lossy(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let Some(hex) = b.get(i + 1..i + 3)
+            && let Ok(hex) = std::str::from_utf8(hex)
+            && let Ok(v) = u8::from_str_radix(hex, 16)
+        {
+            out.push(v);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// The scheme of `arg` when it starts like a URL (`scheme:`), per RFC 3986:
 /// a letter, then letters, digits, `+`, `-` or `.`.
@@ -208,6 +397,7 @@ pub fn is_hidden_char(c: char) -> bool {
 /// An argument as it may be shown in a refusal: hidden characters made
 /// visible, at most 120 characters.
 fn shown(arg: &str) -> String {
+    let arg = without_userinfo(arg);
     let mut out = String::new();
     for (i, c) in arg.chars().enumerate() {
         if i == 120 {
@@ -313,6 +503,95 @@ mod tests {
         );
         assert_eq!(l.locations, ["file:///etc", "file:///etc", "file:///etc"]);
         assert_eq!(l.refused[0].reason, "file URL with a host");
+    }
+
+    #[test]
+    fn server_addresses_lose_their_password_and_hostile_ones_are_refused() {
+        let l = p(
+            &[
+                "sftp://u:p%40ss@host.example:2222/dir",
+                "smb://",
+                "ftp://[::1]/x",
+            ],
+            "/",
+        );
+        assert_eq!(
+            l.locations,
+            ["sftp://u@host.example:2222/dir", "smb://", "ftp://[::1]/x"]
+        );
+        // a program a worker starts could read these as options
+        let l = p(
+            &[
+                "fish://-oProxyCommand%3Dx@h/",
+                "fish://-oProxyCommand=x/",
+                "sftp://%2Dx@h/",
+                "sftp://u@-h/",
+                "sftp://u@h:99999/",
+                "sftp://u@h%2Fx/",
+                "sftp://u@h h/",
+                "sftp:///etc",
+            ],
+            "/",
+        );
+        assert!(l.locations.is_empty(), "{:?}", l.locations);
+        assert_eq!(l.refused.len(), 8);
+    }
+
+    #[test]
+    fn a_refused_argument_never_shows_a_password() {
+        let l = p(
+            &[
+                "ssh://u:hunter2@h/",
+                "--daemon-activation=x",
+                "http://a:hunter2@b/",
+            ],
+            "/",
+        );
+        assert!(
+            l.refused.iter().all(|r| !r.arg.contains("hunter2")),
+            "{:?}",
+            l.refused
+        );
+        assert!(l.refused[0].arg.contains("ssh://h/"));
+    }
+
+    #[test]
+    fn another_program_may_not_open_servers_or_devices() {
+        let l = p(
+            &[
+                "--bus",
+                "--",
+                "sftp://h/",
+                "smb://h/s",
+                "mtp://x/",
+                "file:///x",
+                "trash:/",
+            ],
+            "",
+        );
+        assert!(l.bus);
+        assert_eq!(l.locations, ["file:///x", "trash:/"]);
+        assert_eq!(l.refused.len(), 3);
+        assert_eq!(l.refused[0].reason, "not opened from another program");
+        // the person's own launch still can
+        let l = p(&["sftp://h/"], "/");
+        assert_eq!(l.locations, ["sftp://h/"]);
+    }
+
+    #[test]
+    fn encoded_controls_and_direction_characters_are_refused() {
+        let l = p(
+            &[
+                "file:///x%00y",
+                "file:///a%0Ab",
+                "file:///a%E2%80%AEb",
+                "smb://h/a%0Ab",
+                "file:///ok%20x",
+            ],
+            "/",
+        );
+        assert_eq!(l.locations, ["file:///ok%20x"]);
+        assert_eq!(l.refused.len(), 4);
     }
 
     #[test]

@@ -23,6 +23,8 @@ BuildRequires:  rust
 BuildRequires:  rust-srpm-macros
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
+# readelf and nm, for the hardening check in %%check
+BuildRequires:  binutils
 BuildRequires:  cmake
 BuildRequires:  ninja-build
 BuildRequires:  corrosion
@@ -147,6 +149,17 @@ if [ "$rc" != 1 ]; then
     echo "telamon-explorer holds the build path %{_builddir} (grep status $rc)" >&2
     exit 1
 fi
+# Hardened as the distribution builds programs: PIE, full RELRO, a
+# non-executable stack; the stack protector and fortified calls in the C++ one.
+bash packaging/check-hardening.sh --stack-protector %{buildroot}%{_bindir}/telamon-explorer
+bash packaging/check-hardening.sh %{buildroot}%{_bindir}/telamon-explorer-indexd \
+    %{buildroot}%{_bindir}/telamon-explorer-search
+# The index service's unit keeps its sandbox.
+for d in NoNewPrivileges=yes PrivateNetwork=yes ProtectSystem=strict RestrictAddressFamilies=AF_UNIX \
+    MemoryDenyWriteExecute=yes CapabilityBoundingSet= KeyringMode=private LimitCORE=0; do
+    grep -qxF "$d" %{buildroot}%{_userunitdir}/telamon-explorer-indexd.service ||
+        { echo "telamon-explorer-indexd.service lost $d" >&2; exit 1; }
+done
 desktop-file-validate %{buildroot}%{_datadir}/applications/net.eterneon.telamon.explorer.desktop
 desktop-file-validate %{buildroot}%{_datadir}/applications/net.eterneon.atlas.explorer.desktop
 # The old commands are links to the new ones.

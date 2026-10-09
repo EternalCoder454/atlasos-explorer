@@ -5,11 +5,13 @@ import QtMultimedia
 import org.kde.kirigami as Kirigami
 import Telamon.Ui
 
-// Play controls for an audio or video file of this computer. Nothing plays
-// until the play button is pressed: the file is only opened, so its length
-// and picture size are known. The sound stops when this item goes away (the
-// preview moves to another file, or closes). `output` is the VideoOutput the
-// picture goes to (none for audio).
+// Play controls for an audio or video file of this computer. The file is not
+// opened, let alone played, until the play button is pressed: opening it
+// means the media library parses it (a hostile file would be parsed by
+// selecting it), so its length and picture size are known only from then on.
+// The sound stops when this item goes away (the preview moves to another
+// file, or closes). `output` is the VideoOutput the picture goes to (none for
+// audio).
 Item {
     id: root
 
@@ -27,9 +29,16 @@ Item {
 
     implicitHeight: bar.implicitHeight + Kirigami.Units.smallSpacing * 2
 
+    // Set by the first press of Play; a different file starts unarmed.
+    property bool armed: false
+    onSourceChanged: {
+        player.stop();
+        armed = false;
+    }
+
     MediaPlayer {
         id: player
-        source: root.source
+        source: root.armed ? root.source : ""
         videoOutput: root.output
         audioOutput: AudioOutput {}
     }
@@ -51,6 +60,7 @@ Item {
                 if (player.playbackState === MediaPlayer.PlayingState) {
                     player.pause();
                 } else {
+                    root.armed = true;
                     player.play();
                 }
             }

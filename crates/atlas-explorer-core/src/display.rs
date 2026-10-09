@@ -87,13 +87,29 @@ fn is_marked(c: char) -> bool {
         | '\u{E0000}'..='\u{E007F}'
         | '\u{FE00}'..='\u{FE0F}'
         | '\u{E0100}'..='\u{E01EF}'
-        | '\u{3164}' | '\u{115F}' | '\u{1160}' | '\u{FFA0}' | '\u{2800}')
+        | '\u{3164}' | '\u{115F}' | '\u{1160}' | '\u{FFA0}' | '\u{2800}'
+        // more format and filler characters that show nothing
+        | '\u{0600}'..='\u{0605}' | '\u{06DD}' | '\u{070F}' | '\u{08E2}'
+        | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180D}' | '\u{180F}'
+        | '\u{1D173}'..='\u{1D17A}' | '\u{2065}' | '\u{FFF0}'..='\u{FFF8}' | '\u{FFFC}'
+        | '\u{13430}'..='\u{1343F}' | '\u{110BD}' | '\u{110CD}')
 }
 
 /// No-break and width spaces (U+00A0, U+2000 to U+200A): shown as they are,
 /// but only one in a row, so a run of them cannot push the extension out of sight.
 fn is_wide_space(c: char) -> bool {
-    matches!(c, '\u{00A0}' | '\u{2000}'..='\u{200A}')
+    matches!(
+        c,
+        '\u{00A0}' | '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{1680}'
+    )
+}
+
+/// Whether `c`, after `run` spaces of any kind in a row, is shown as a marker
+/// for being one space too many: the second wide space of a run, and the
+/// third plain space (two plain spaces are ordinary text, a long run is a
+/// way to push an extension out of the line).
+fn spaced_out(c: char, run: usize) -> bool {
+    (is_wide_space(c) && run >= 1) || (c == ' ' && run >= 2)
 }
 
 fn push_marker(out: &mut String, c: char) {
@@ -103,22 +119,22 @@ fn push_marker(out: &mut String, c: char) {
 }
 
 /// Characters `push_char` adds for `c`.
-fn shown_len(c: char, in_space_run: bool) -> usize {
+fn shown_len(c: char, run: usize) -> usize {
     match c {
         '\u{80}'..='\u{9F}' => 8,
-        c if is_marked(c) || (in_space_run && is_wide_space(c)) => 8,
+        c if is_marked(c) || spaced_out(c, run) => 8,
         _ => 1,
     }
 }
 
-fn push_char(out: &mut String, c: char, in_space_run: bool) {
+fn push_char(out: &mut String, c: char, run: usize) {
     match c {
         // C0 controls become their control pictures: U+2400 + code (newline is U+240A)
         '\u{0}'..='\u{1F}' => out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{FFFD}')),
         '\u{7F}' => out.push('\u{2421}'),
         // C1 controls have no control pictures
         '\u{80}'..='\u{9F}' => push_marker(out, c),
-        c if is_marked(c) || (in_space_run && is_wide_space(c)) => push_marker(out, c),
+        c if is_marked(c) || spaced_out(c, run) => push_marker(out, c),
         c => out.push(c),
     }
 }
@@ -127,20 +143,39 @@ fn push_char(out: &mut String, c: char, in_space_run: bool) {
 /// character comes out as a visible marker (for text that is not a name, such
 /// as a file's content in Quick Look; a line break is the caller's to keep).
 pub(crate) fn push_visible(out: &mut String, c: char) {
-    push_char(out, c, false);
+    push_char(out, c, 0);
 }
+
+/// Characters kept from the end of a name that had to be cut, so that its
+/// extension is still in view (`…` then these).
+const TAIL_CHARS: usize = 24;
 
 /// The text to show for a file name. Never longer than
 /// [`MAX_DISPLAY_CHARS`] characters plus a `…`, and holds no control or bidi
-/// character. Invalid UTF-8 bytes appear as `\xNN`.
+/// character. Invalid UTF-8 bytes appear as `\xNN`. A name that is cut keeps
+/// the end of it after the `…`, because the end is where the extension is.
 pub fn display_name<N: NameBytes + ?Sized>(name: &N) -> String {
+    let bytes = name.name_bytes();
+    let (out, truncated) = render(bytes, MAX_DISPLAY_CHARS);
+    if !truncated {
+        return out;
+    }
+    let (mut head, _) = render(bytes, MAX_DISPLAY_CHARS - TAIL_CHARS - 1);
+    head.push('\u{2026}');
+    head.push_str(&tail(bytes));
+    head
+}
+
+/// The first `cap` characters' worth of `bytes`, made safe; whether more was
+/// left out.
+fn render(bytes: &[u8], cap: usize) -> (String, bool) {
     let mut out = String::new();
     let mut shown = 0usize;
-    let mut rest = name.name_bytes();
+    let mut rest = bytes;
     // Bytes beyond what can ever be shown are not looked at.
     let limit_bytes = MAX_DISPLAY_CHARS * 4 * 4 + 64;
     let mut truncated = false;
-    let mut prev_space = false;
+    let mut run = 0usize;
     if rest.len() > limit_bytes {
         rest = &rest[..limit_bytes];
         truncated = true;
@@ -157,30 +192,80 @@ pub fn display_name<N: NameBytes + ?Sized>(name: &N) -> String {
             }
         };
         for c in valid.chars() {
-            let n = shown_len(c, prev_space);
-            if shown + n > MAX_DISPLAY_CHARS {
+            let n = shown_len(c, run);
+            if shown + n > cap {
                 truncated = true;
                 break 'outer;
             }
-            push_char(&mut out, c, prev_space);
-            prev_space = is_wide_space(c);
+            push_char(&mut out, c, run);
+            run = if is_wide_space(c) || c == ' ' {
+                run + 1
+            } else {
+                0
+            };
             shown += n;
         }
         rest = &rest[valid.len()..];
         for b in &rest[..bad] {
-            if shown + 4 > MAX_DISPLAY_CHARS {
+            if shown + 4 > cap {
                 truncated = true;
                 break 'outer;
             }
             out.push_str(&format!("\\x{b:02X}"));
             shown += 4;
+            run = 0;
         }
         rest = &rest[bad..];
     }
-    if truncated {
-        out.push('\u{2026}');
+    (out, truncated)
+}
+
+/// The end of `bytes` as it is shown: whole characters (or invalid bytes)
+/// from the end while at most [`TAIL_CHARS`] characters of output fit.
+fn tail(bytes: &[u8]) -> String {
+    // Far enough back for TAIL_CHARS characters; start on a character boundary.
+    let mut start = bytes.len().saturating_sub(TAIL_CHARS * 4);
+    while start < bytes.len() && bytes.len() - start > 3 && (bytes[start] & 0xC0) == 0x80 {
+        start += 1;
     }
-    out
+    let mut pieces: Vec<String> = Vec::new();
+    let mut rest = &bytes[start..];
+    let mut run = 0usize;
+    while !rest.is_empty() {
+        let (valid, bad) = match std::str::from_utf8(rest) {
+            Ok(s) => (s, 0),
+            Err(e) => {
+                let n = e.valid_up_to();
+                (
+                    std::str::from_utf8(&rest[..n]).unwrap_or(""),
+                    e.error_len().unwrap_or(rest.len() - n),
+                )
+            }
+        };
+        for c in valid.chars() {
+            let mut p = String::new();
+            push_char(&mut p, c, run);
+            run = if is_wide_space(c) || c == ' ' {
+                run + 1
+            } else {
+                0
+            };
+            pieces.push(p);
+        }
+        rest = &rest[valid.len()..];
+        for b in &rest[..bad] {
+            pieces.push(format!("\\x{b:02X}"));
+            run = 0;
+        }
+        rest = &rest[bad..];
+    }
+    let mut used = 0usize;
+    let mut take = pieces.len();
+    while take > 0 && used + pieces[take - 1].chars().count() <= TAIL_CHARS {
+        take -= 1;
+        used += pieces[take].chars().count();
+    }
+    pieces[take..].concat()
 }
 
 #[cfg(test)]
@@ -285,14 +370,73 @@ mod tests {
     fn length_is_capped() {
         let long = "x".repeat(10_000);
         let s = display_name(long.as_str());
-        assert_eq!(s.chars().count(), MAX_DISPLAY_CHARS + 1);
-        assert!(s.ends_with('\u{2026}'));
+        // the head, the `…`, and the end of the name (see `a_cut_name_keeps_its_end`)
+        assert!(
+            s.chars().count() <= MAX_DISPLAY_CHARS + 1,
+            "{}",
+            s.chars().count()
+        );
+        assert!(s.contains('\u{2026}'));
         let exact = "y".repeat(MAX_DISPLAY_CHARS);
         assert_eq!(display_name(exact.as_str()), exact);
         let junk = vec![0xFFu8; 100_000];
         assert!(display_name(&junk[..]).chars().count() <= MAX_DISPLAY_CHARS + 1);
         let marks = "\u{202E}".repeat(5000);
         assert!(display_name(marks.as_str()).chars().count() <= MAX_DISPLAY_CHARS + 1);
+    }
+
+    #[test]
+    fn a_cut_name_keeps_its_end() {
+        let spoof = format!("invoice.pdf{}.sh", " ".repeat(300));
+        let s = display_name(spoof.as_str());
+        assert!(s.ends_with(".sh"), "{s}");
+        assert!(s.contains('\u{2026}'));
+        assert!(s.chars().count() <= MAX_DISPLAY_CHARS + 1 + TAIL_CHARS);
+        let long = format!("{}.tar.gz", "x".repeat(1000));
+        assert!(display_name(long.as_str()).ends_with(".tar.gz"));
+        // multi-byte and invalid bytes at the cut
+        let wide = format!("{}日本語.xz", "é".repeat(1000));
+        assert!(display_name(wide.as_str()).ends_with("日本語.xz"));
+        let mut bad = vec![b'a'; 1000];
+        bad.extend_from_slice(b".exe\xFF");
+        assert!(display_name(&bad[..]).ends_with(".exe\\xFF"));
+    }
+
+    #[test]
+    fn long_runs_of_plain_spaces_are_marked() {
+        assert_eq!(display_name("a  b"), "a  b");
+        let s = display_name("a   b");
+        assert!(s.starts_with("a  \u{27E8}U+0020"), "{s}");
+        // a run of mixed spaces
+        let s = display_name("a \u{3000}\u{202F}b");
+        assert!(s.contains("U+3000") && s.contains("U+202F"), "{s}");
+    }
+
+    #[test]
+    fn more_invisible_characters_are_marked() {
+        for c in [
+            '\u{0600}',
+            '\u{0605}',
+            '\u{06DD}',
+            '\u{070F}',
+            '\u{08E2}',
+            '\u{17B4}',
+            '\u{17B5}',
+            '\u{180B}',
+            '\u{180F}',
+            '\u{1D173}',
+            '\u{1D17A}',
+            '\u{2065}',
+            '\u{FFF0}',
+            '\u{FFF8}',
+            '\u{FFFC}',
+            '\u{13430}',
+            '\u{110BD}',
+            '\u{110CD}',
+        ] {
+            let s = display_name(&format!("a{c}b"));
+            assert!(!s.contains(c), "{:04X} survived", c as u32);
+        }
     }
 
     #[test]

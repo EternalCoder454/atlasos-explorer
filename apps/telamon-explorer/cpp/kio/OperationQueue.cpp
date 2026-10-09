@@ -33,7 +33,6 @@
 #include <QMimeDatabase>
 #include <QMutex>
 #include <QRegularExpression>
-#include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -44,8 +43,11 @@
 #include <atomic>
 #include <memory>
 
+#include <cerrno>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace
 {
@@ -267,18 +269,31 @@ private:
         static QMutex lock;
         const QMutexLocker locker(&lock);
         const QString path = dir + QStringLiteral("/.hidden");
-        const QFileInfo info(path);
-        // A link could lead anywhere; a file managed by hand is left alone.
-        if (info.isSymLink()) {
-            return tr("The .hidden file in this folder is a link, so it was not changed.");
-        }
+        const QByteArray native = QFile::encodeName(path);
+        // Read through one descriptor opened without following a link: the
+        // folder may be one anybody can write to, and a link put in place of
+        // the file between a look and the open would send the read (and the
+        // write) elsewhere.
         QByteArray content;
-        if (info.exists()) {
-            if (!info.isFile()) {
+        mode_t mode = 0644;
+        const int rfd = ::open(native.constData(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+        if (rfd < 0) {
+            if (errno == ELOOP) {
+                return tr("The .hidden file in this folder is a link, so it was not changed.");
+            }
+            if (errno != ENOENT) {
+                return tr("The .hidden file in this folder can't be read.");
+            }
+        } else {
+            struct stat st;
+            if (::fstat(rfd, &st) != 0 || !S_ISREG(st.st_mode)) {
+                ::close(rfd);
                 return tr("The .hidden file in this folder is not a plain file.");
             }
-            QFile f(path);
-            if (!f.open(QIODevice::ReadOnly)) {
+            mode = st.st_mode & 0777;
+            QFile f;
+            if (!f.open(rfd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) {
+                ::close(rfd);
                 return tr("The .hidden file in this folder can't be read.");
             }
             content = f.read(qint64(1 << 20) + 2);
@@ -294,8 +309,27 @@ private:
         if (r.rc != 0) {
             return QString::fromUtf8(r.text);
         }
-        QSaveFile out(path);
-        if (!out.open(QIODevice::WriteOnly) || out.write(r.text) != r.text.size() || !out.commit()) {
+        // A new file beside it, then renamed over it: the rename replaces
+        // whatever is at the name (a link included) and never writes through it.
+        QByteArray tmpName = QFile::encodeName(dir + QStringLiteral("/.hidden.XXXXXX"));
+        const int wfd = ::mkostemp(tmpName.data(), O_CLOEXEC);
+        if (wfd < 0) {
+            return tr("The .hidden file in this folder can't be written.");
+        }
+        bool ok = ::fchmod(wfd, mode) == 0;
+        qint64 done = 0;
+        while (ok && done < r.text.size()) {
+            const ssize_t n = ::write(wfd, r.text.constData() + done, size_t(r.text.size() - done));
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            ok = n > 0;
+            done += n > 0 ? n : 0;
+        }
+        ok = ok && ::fsync(wfd) == 0;
+        ::close(wfd);
+        if (!ok || ::rename(tmpName.constData(), native.constData()) != 0) {
+            ::unlink(tmpName.constData());
             return tr("The .hidden file in this folder can't be written.");
         }
         return {};
@@ -1543,6 +1577,16 @@ void OperationQueue::askDelete(OperationAsker *asker, quint64 opId, const QList<
 
 void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUrl &destination, std::function<void(bool)> done)
 {
+    // Anything can fill the clipboard or a drop with URLs (another program, a
+    // hostile page): a list no person selected is refused, not worked through
+    // on the window's thread.
+    if (sourcesIn.size() > MaxItemsPerOperation) {
+        Q_EMIT refused(tr("Too Many Items"), tr("Files can move, copy or link up to %1 items at once. Do it in smaller parts.").arg(MaxItemsPerOperation));
+        if (done) {
+            done(false);
+        }
+        return;
+    }
     QList<QUrl> sources;
     QSet<QString> seen;
     for (const QUrl &u : sourcesIn) {
@@ -1647,6 +1691,10 @@ void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUr
 void OperationQueue::trash(const QList<QUrl> &urls)
 {
     if (urls.isEmpty()) {
+        return;
+    }
+    if (urls.size() > MaxItemsPerOperation) {
+        Q_EMIT refused(tr("Too Many Items"), tr("Files can move up to %1 items to the Trash at once. Do it in smaller parts.").arg(MaxItemsPerOperation));
         return;
     }
     Work w;

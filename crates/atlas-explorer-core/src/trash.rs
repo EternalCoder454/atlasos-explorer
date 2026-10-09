@@ -250,6 +250,37 @@ pub fn expired(deleted: i64, now: i64, days: u32) -> bool {
     days >= MIN_DAYS && now.saturating_sub(deleted) > i64::from(days) * 86_400
 }
 
+// ---- Putting an item back ----
+
+/// Whether an item may be put back at `target` by one click. The place an
+/// item was is written in its `.trashinfo`, and that file is whatever the
+/// trash folder holds: on a drive someone else made, a `.Trash-<uid>` with a
+/// `Path=` into the settings, the autostart folder or a shell's start-up file
+/// would put a file where it runs. The Trash in the home folder is Files' and
+/// KIO's own (`from_home_trash`) and is believed; for any other, a target in
+/// a hidden folder or file of the home folder is not restored (the item can
+/// still be dragged out, which is a choice of the person's).
+pub fn restore_allowed(from_home_trash: bool, target: &[u8], home: &[u8]) -> bool {
+    if from_home_trash {
+        return true;
+    }
+    let home = home.strip_suffix(b"/").unwrap_or(home);
+    if home.is_empty() {
+        return true;
+    }
+    let Some(rest) = target.strip_prefix(home) else {
+        return true;
+    };
+    let Some(rest) = rest.strip_prefix(b"/") else {
+        return true;
+    };
+    // `..` is not trusted to mean what it says: such a path is not restored.
+    if rest.split(|&b| b == b'/').any(|c| c == b"..") {
+        return false;
+    }
+    !rest.starts_with(b".")
+}
+
 // ---- Which trash folders exist ----
 
 /// One line of `/proc/self/mountinfo`: the mount point and the file system.
@@ -490,9 +521,24 @@ fn forget_directory_size(trash: &Path, stem: &[u8]) {
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    if fs::write(&tmp, kept).is_ok()
-        && (fs::set_permissions(&tmp, meta.permissions()).is_err()
-            || fs::rename(&tmp, &path).is_err())
+    // New, not through a link, private, and on the disk before it takes the
+    // old file's place.
+    let wrote = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&tmp)?;
+        f.write_all(kept.as_bytes())?;
+        f.sync_all()
+    })()
+    .is_ok();
+    if !wrote
+        || fs::set_permissions(&tmp, meta.permissions()).is_err()
+        || fs::rename(&tmp, &path).is_err()
     {
         let _ = fs::remove_file(&tmp);
     }
@@ -711,6 +757,44 @@ mod tests {
     fn put(t: &Path, name: &str, content: &str, info: &str) {
         fs::write(t.join("files").join(name), content).unwrap();
         fs::write(t.join("info").join(format!("{name}.trashinfo")), info).unwrap();
+    }
+
+    #[test]
+    fn a_hostile_drives_trash_cannot_put_a_file_where_it_runs() {
+        let home = b"/home/u";
+        // KIO's own Trash: believed.
+        assert!(restore_allowed(
+            true,
+            b"/home/u/.config/autostart/x.desktop",
+            home
+        ));
+        // another drive's: not into hidden places of the home folder
+        for bad in [
+            &b"/home/u/.config/autostart/x.desktop"[..],
+            b"/home/u/.bashrc",
+            b"/home/u/.local/bin/x",
+            b"/home/u/.ssh/authorized_keys",
+            b"/home/u/Documents/../.bashrc",
+        ] {
+            assert!(
+                !restore_allowed(false, bad, home),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+        for ok in [
+            &b"/home/u/Documents/a.txt"[..],
+            b"/run/media/u/stick/a.txt",
+            b"/home/u/Pictures/.hidden-name-deeper/x",
+            b"/home/user2/.bashrc",
+        ] {
+            assert!(
+                restore_allowed(false, ok, home),
+                "{}",
+                String::from_utf8_lossy(ok)
+            );
+        }
+        assert!(restore_allowed(false, b"/home/u/.x", b""));
     }
 
     #[test]

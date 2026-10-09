@@ -42,9 +42,11 @@ pub unsafe extern "C" fn telamon_saved_clean(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let l = SavedList::parse(&text_of(list, list_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let l = SavedList::parse(&text_of(list, list_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Adds a search (`record`: the line without its id) at the end. The new list
@@ -64,20 +66,22 @@ pub unsafe extern "C" fn telamon_saved_add(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let mut l = SavedList::parse(&text_of(list, list_len));
-    let st = match saved::parse_record(&text_of(record, record_len)) {
-        None => Outcome::Invalid,
-        Some(s) => match l.add(s) {
-            Ok(_) => Outcome::Done,
-            Err(o) => o,
-        },
-    };
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(status_of(st)) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut l = SavedList::parse(&text_of(list, list_len));
+        let st = match saved::parse_record(&text_of(record, record_len)) {
+            None => Outcome::Invalid,
+            Some(s) => match l.add(s) {
+                Ok(_) => Outcome::Done,
+                Err(o) => o,
+            },
+        };
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(status_of(st)) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Renames the search with `id`. `*status`: 0 done, 1 no usable name, 3 no such search.
@@ -95,14 +99,16 @@ pub unsafe extern "C" fn telamon_saved_rename(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let mut l = SavedList::parse(&text_of(list, list_len));
-    let st = l.rename(id, &text_of(name, name_len));
-    if !status.is_null() {
-        // SAFETY: writable (contract).
-        unsafe { status.write(status_of(st)) };
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut l = SavedList::parse(&text_of(list, list_len));
+        let st = l.rename(id, &text_of(name, name_len));
+        if !status.is_null() {
+            // SAFETY: writable (contract).
+            unsafe { status.write(status_of(st)) };
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Removes the search with `id`.
@@ -117,10 +123,12 @@ pub unsafe extern "C" fn telamon_saved_remove(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut l = SavedList::parse(&text_of(list, list_len));
-    l.remove(id);
-    // SAFETY: `out` as promised.
-    unsafe { put(l.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut l = SavedList::parse(&text_of(list, list_len));
+        l.remove(id);
+        // SAFETY: `out` as promised.
+        unsafe { put(l.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// A name to offer for the search `record` describes (the line without its id).
@@ -135,10 +143,12 @@ pub unsafe extern "C" fn telamon_saved_default_name(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let name = saved::parse_record(&text_of(record, len))
-        .map_or_else(|| "Saved Search".to_string(), |s| saved::default_name(&s));
-    // SAFETY: `out` as promised.
-    unsafe { put(name.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let name = saved::parse_record(&text_of(record, len))
+            .map_or_else(|| "Saved Search".to_string(), |s| saved::default_name(&s));
+        // SAFETY: `out` as promised.
+        unsafe { put(name.as_bytes(), out, cap) }
+    })
 }
 
 /// What the search with `id` does, in a line (`folder_label`: its folder as places are written).
@@ -156,12 +166,14 @@ pub unsafe extern "C" fn telamon_saved_describe(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let l = SavedList::parse(&text_of(list, list_len));
-    let t = l.get(id).map_or_else(String::new, |s| {
-        saved::describe(s, &text_of(folder_label, label_len))
-    });
-    // SAFETY: `out` as promised.
-    unsafe { put(t.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let l = SavedList::parse(&text_of(list, list_len));
+        let t = l.get(id).map_or_else(String::new, |s| {
+            saved::describe(s, &text_of(folder_label, label_len))
+        });
+        // SAFETY: `out` as promised.
+        unsafe { put(t.as_bytes(), out, cap) }
+    })
 }
 
 #[cfg(test)]

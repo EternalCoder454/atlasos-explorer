@@ -536,7 +536,8 @@ pub fn covers(folder: &Path, roots: &[PathBuf]) -> bool {
 }
 
 fn read_tag(path: &Path) -> Option<bool> {
-    let mut f = fs::File::open(path).ok()?;
+    // Not through a link, and not blocking on a named pipe (as the scanner reads it).
+    let mut f = crate::config::open_regular(path, false).ok()?;
     let mut head = vec![0u8; CACHEDIR_SIGNATURE.len()];
     let n = f.read(&mut head).ok()?;
     head.truncate(n);
@@ -867,6 +868,44 @@ mod tests {
         // with no tag asked for, any path is accepted
         assert!(LiveMatcher::new("a", Options::default()).tag_accepts(Path::new("/nonexistent")));
         assert!(!m.tag_accepts(Path::new("/nonexistent")));
+    }
+
+    #[test]
+    fn a_named_pipe_called_cachedir_tag_does_not_hang_covers() {
+        let s = Scratch::new("covers-fifo");
+        let r = s.0.clone();
+        fs::create_dir_all(r.join("sub")).unwrap();
+        let c = std::ffi::CString::new(r.join("sub/CACHEDIR.TAG").as_os_str().as_bytes()).unwrap();
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        // A link to a real signature file is not a marker either (the scanner
+        // does not follow links).
+        fs::create_dir_all(r.join("linked")).unwrap();
+        fs::write(
+            r.join("real.tag"),
+            format!("{}\n", String::from_utf8_lossy(CACHEDIR_SIGNATURE)),
+        )
+        .unwrap();
+        symlink(r.join("real.tag"), r.join("linked/CACHEDIR.TAG")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let roots = vec![r.clone()];
+        std::thread::spawn(move || {
+            let _ = tx.send((
+                covers(&r.join("sub"), &roots),
+                covers(&r.join("linked"), &roots),
+            ));
+        });
+        let (sub, linked) = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("covers blocked on a named pipe");
+        assert!(
+            sub,
+            "a pipe is not a signature file: the folder is searched"
+        );
+        assert!(
+            linked,
+            "a link is not a signature file: the folder is searched"
+        );
     }
 
     #[test]

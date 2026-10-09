@@ -41,3 +41,7 @@ regex = "1"
 lto = "thin"
 codegen-units = 4
 strip = true
+# Sizes, counts and offsets come from files, archives and servers: arithmetic
+# on them traps on overflow instead of wrapping. (panic stays "unwind": a trap
+# in a worker thread is contained and reported, an abort would end the program.)
+overflow-checks = true
