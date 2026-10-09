@@ -105,8 +105,11 @@ pub(crate) fn split_ext(name: &str) -> (&str, &str) {
         .any(|c| ext[1..].eq_ignore_ascii_case(c));
     if compressed {
         let stem = &name[..dot];
-        if stem.len() > 4 && stem[stem.len() - 4..].eq_ignore_ascii_case(".tar") {
-            let cut = stem.len() - 4;
+        // Bytes, not a str slice: four bytes back may fall inside a character.
+        // ".tar" is ASCII, so a match starts on a character boundary.
+        let bytes = stem.as_bytes();
+        if bytes.len() > 4 && bytes[bytes.len() - 4..].eq_ignore_ascii_case(b".tar") {
+            let cut = bytes.len() - 4;
             return (&name[..cut], &name[cut..]);
         }
     }
@@ -233,6 +236,21 @@ mod tests {
     }
 
     #[test]
+    fn split_ext_survives_multibyte_names() {
+        // Four bytes back from the dot used to land inside a character.
+        for name in ["日本.gz", "façade.gz", "日本語.xz", "a日.tar.gz", "é.gz", "日.gz"] {
+            let (stem, ext) = split_ext(name);
+            assert_eq!(format!("{stem}{ext}"), name);
+            assert!(name.is_char_boundary(stem.len()), "{name}");
+        }
+        assert_eq!(split_ext("日本.gz"), ("日本", ".gz"));
+        assert_eq!(split_ext("a日.tar.gz"), ("a日", ".tar.gz"));
+        assert_eq!(split_ext("日本.TAR.GZ"), ("日本", ".TAR.GZ"));
+        assert_eq!(stem_len("façade.gz", false), "façade".len());
+        let _ = keep_both_name("日本語.xz", |_| false);
+    }
+
+    #[test]
     fn keep_both_is_bounded() {
         let calls = std::cell::Cell::new(0u32);
         let out = keep_both_name("a", |_| {
@@ -241,5 +259,38 @@ mod tests {
         });
         assert_eq!(calls.get(), MAX_TRIES);
         assert_eq!(out, "a (1001)");
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn split_ext_never_panics_and_is_lossless(name in ".{0,64}") {
+                let (stem, ext) = split_ext(&name);
+                prop_assert_eq!(format!("{stem}{ext}"), name.clone());
+                prop_assert!(name.is_char_boundary(stem.len()));
+                let _ = stem_len(&name, false);
+                let _ = stem_len(&name, true);
+            }
+
+            #[test]
+            fn split_ext_survives_suffix_names(base in ".{0,12}", sfx in prop::sample::select(vec![".gz", ".tar.gz", ".xz", ".TAR.BZ2", ".zst", ".txt"])) {
+                let name = format!("{base}{sfx}");
+                let (stem, ext) = split_ext(&name);
+                prop_assert_eq!(format!("{stem}{ext}"), name.clone());
+                prop_assert!(name.is_char_boundary(stem.len()));
+            }
+
+            #[test]
+            fn keep_both_never_panics_and_makes_a_name(name in ".{0,300}") {
+                let out = keep_both_name(&name, |_| false);
+                if validate(&name).is_ok() {
+                    prop_assert!(out.len() <= MAX_NAME_BYTES);
+                    prop_assert!(validate(&out).is_ok(), "{:?}", out);
+                }
+            }
+        }
     }
 }

@@ -13,3 +13,6 @@ libc.workspace = true
 regex.workspace = true
 log.workspace = true
 lopdf = { version = "0.45", default-features = false }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
