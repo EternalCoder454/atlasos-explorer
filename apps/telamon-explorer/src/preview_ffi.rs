@@ -44,26 +44,28 @@ pub unsafe extern "C" fn telamon_preview_read_text(
     status: *mut u32,
     truncated: *mut bool,
 ) -> usize {
-    if status.is_null() || truncated.is_null() {
-        return 0;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let p = unsafe { bytes(path, path_len) };
-    if p.is_empty() || p.contains(&0) {
-        // SAFETY: both are writable (checked non-null above).
-        unsafe {
-            *status = preview::TextOutcome::Unreadable as u32;
-            *truncated = false;
+    crate::ffi::guarded(0, || {
+        if status.is_null() || truncated.is_null() {
+            return 0;
         }
-        return 0;
-    }
-    let t = preview::read_text(Path::new(OsStr::from_bytes(p)), TEXT_CAP, cap);
-    // SAFETY: as above; `out` has `cap` writable bytes and the text is at most `cap` long.
-    unsafe {
-        *status = t.outcome as u32;
-        *truncated = t.truncated;
-        put(t.text.as_bytes(), out, cap)
-    }
+        // SAFETY: forwarded from this function's contract.
+        let p = unsafe { bytes(path, path_len) };
+        if p.is_empty() || p.contains(&0) {
+            // SAFETY: both are writable (checked non-null above).
+            unsafe {
+                *status = preview::TextOutcome::Unreadable as u32;
+                *truncated = false;
+            }
+            return 0;
+        }
+        let t = preview::read_text(Path::new(OsStr::from_bytes(p)), TEXT_CAP, cap);
+        // SAFETY: as above; `out` has `cap` writable bytes and the text is at most `cap` long.
+        unsafe {
+            *status = t.outcome as u32;
+            *truncated = t.truncated;
+            put(t.text.as_bytes(), out, cap)
+        }
+    })
 }
 
 /// Text for the details: 0 a duration in milliseconds (`n`), 1 dimensions
@@ -78,13 +80,15 @@ pub unsafe extern "C" fn telamon_preview_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let s = match which {
-        0 => preview::format_duration(n),
-        1 => preview::format_dimensions((n >> 32) as u32, n as u32),
-        _ => String::new(),
-    };
-    // SAFETY: forwarded from this function's contract.
-    unsafe { put(s.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let s = match which {
+            0 => preview::format_duration(n),
+            1 => preview::format_dimensions((n >> 32) as u32, n as u32),
+            _ => String::new(),
+        };
+        // SAFETY: forwarded from this function's contract.
+        unsafe { put(s.as_bytes(), out, cap) }
+    })
 }
 
 /// A saved size brought into the limits. `kind`: 0 icons, 1 rows. Another

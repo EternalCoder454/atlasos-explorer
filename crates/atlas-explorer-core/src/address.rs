@@ -3,7 +3,10 @@
 //! read from the environment or the disk. Typed text is untrusted input and
 //! follows the launch rules (no control or bidi characters, length capped).
 
-use crate::launch::{MAX_ARG_LEN, file_url, is_hidden_char, normalize, path_to_url, scheme_of};
+use crate::launch::{
+    LAUNCH_SCHEMES, MAX_ARG_LEN, clean_server_url, decoded_has_hidden, file_url, is_hidden_char,
+    is_server_scheme, normalize, path_to_url, scheme_of,
+};
 use crate::sort::name_key;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -22,7 +25,7 @@ fn check_text(text: &str) -> Result<(), Refused> {
     if text.len() > MAX_ARG_LEN {
         return Err("The address is too long.");
     }
-    if text.chars().any(is_hidden_char) {
+    if text.chars().any(is_hidden_char) || decoded_has_hidden(text) {
         return Err("The address has control or text-direction characters.");
     }
     Ok(())
@@ -75,6 +78,21 @@ pub fn parse(text: &str, current: &str, home: &Path) -> Result<String, Refused> 
     if let Some(scheme) = url_scheme(text) {
         if scheme.eq_ignore_ascii_case("file") {
             return file_url(text).map_err(|_| "A file address can't name another computer.");
+        }
+        // Only the places Files browses: `admin:/` (a root worker), `man:`,
+        // `applications:` and whatever else a KIO worker offers are not
+        // addresses to type here.
+        let known = BARE_SCHEMES.iter().any(|b| scheme.eq_ignore_ascii_case(b))
+            || LAUNCH_SCHEMES
+                .iter()
+                .any(|k| scheme.eq_ignore_ascii_case(k));
+        if !known {
+            return Err("That kind of address isn't supported.");
+        }
+        // A server address keeps no password (KIO asks for it) and has a
+        // plain host and user.
+        if is_server_scheme(scheme) {
+            return clean_server_url(text).map_err(|_| "That server address isn't valid.");
         }
         return Ok(text.to_string());
     }
@@ -217,6 +235,36 @@ mod tests {
 
     fn p(text: &str) -> Result<String, Refused> {
         parse(text, CUR, Path::new(HOME))
+    }
+
+    #[test]
+    fn only_places_files_browses_can_be_typed() {
+        for bad in [
+            "admin:///etc",
+            "applications:///",
+            "man://ls",
+            "javascript://x",
+            "exec://sh",
+        ] {
+            assert_eq!(
+                p(bad),
+                Err("That kind of address isn't supported."),
+                "{bad}"
+            );
+        }
+        assert_eq!(p("smb://nas/share").unwrap(), "smb://nas/share");
+        assert_eq!(p("sftp://u@host/").unwrap(), "sftp://u@host/");
+        assert_eq!(p("trash:/").unwrap(), "trash:/");
+        // one slash is a name, not an address: it can only name a local file
+        assert!(p("admin:/").unwrap().starts_with("file:///"));
+    }
+
+    #[test]
+    fn a_typed_password_is_not_kept_and_hostile_servers_are_refused() {
+        assert_eq!(p("sftp://u:pw@host/x").unwrap(), "sftp://u@host/x");
+        assert!(p("fish://-oProxyCommand=x@h/").is_err());
+        assert!(p("sftp://u@h/%0A").is_err());
+        assert!(p("file:///a%00b").is_err());
     }
 
     #[test]

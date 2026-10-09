@@ -202,6 +202,13 @@ impl TextPreview {
 /// refused, so a read can never wait for a writer or run endlessly). The
 /// result is at most `max_out` bytes of text.
 pub fn read_text(path: &Path, cap: usize, max_out: usize) -> TextPreview {
+    // Looked at before it is opened: opening a device (a link to one is
+    // followed) can have effects of its own. It is looked at again once open.
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => return TextPreview::none(TextOutcome::NotRegular),
+        Err(_) => return TextPreview::none(TextOutcome::Unreadable),
+    }
     let opened = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
@@ -423,6 +430,23 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_link_to_a_device_is_refused_before_it_is_opened() {
+        let d = std::env::temp_dir().join(format!("telamon-prev-dev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for target in ["/dev/null", "/dev/zero", "/dev/tty"] {
+            let l = d.join(target.trim_start_matches("/dev/"));
+            std::os::unix::fs::symlink(target, &l).unwrap();
+            let p = read_text(&l, 1024, 1024);
+            assert!(
+                matches!(p.outcome, TextOutcome::NotRegular | TextOutcome::Unreadable),
+                "{target}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

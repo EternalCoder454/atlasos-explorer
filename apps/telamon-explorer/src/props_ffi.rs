@@ -60,30 +60,32 @@ pub unsafe extern "C" fn telamon_tags_read(
     cap: usize,
     status: *mut u32,
 ) -> usize {
-    let (st, text) = match abs_path(path, len) {
-        None => (3, String::new()),
-        Some(p) => {
-            if xattr::is_link(&p) {
-                (2, String::new())
-            } else {
-                match xattr::get(&p, xattr::TAGS) {
-                    Ok(None) => (0, String::new()),
-                    Ok(Some(raw)) => (
-                        if tags::is_clean(&raw) { 0 } else { 4 },
-                        tags::parse_shown(&raw).join("\n"),
-                    ),
-                    Err(xattr::Error::Unsupported) => (1, String::new()),
-                    Err(_) => (3, String::new()),
+    crate::ffi::guarded(0, || {
+        let (st, text) = match abs_path(path, len) {
+            None => (3, String::new()),
+            Some(p) => {
+                if xattr::is_link(&p) {
+                    (2, String::new())
+                } else {
+                    match xattr::get(&p, xattr::TAGS) {
+                        Ok(None) => (0, String::new()),
+                        Ok(Some(raw)) => (
+                            if tags::is_clean(&raw) { 0 } else { 4 },
+                            tags::parse_shown(&raw).join("\n"),
+                        ),
+                        Err(xattr::Error::Unsupported) => (1, String::new()),
+                        Err(_) => (3, String::new()),
+                    }
                 }
             }
+        };
+        if !status.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *status = st };
         }
-    };
-    if !status.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *status = st };
-    }
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The star rating (0 to 10) of a file; -1 when it can't be read.
@@ -244,14 +246,16 @@ pub unsafe extern "C" fn telamon_tags_have(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_tags_status_text(status: u32, out: *mut u8, cap: usize) -> usize {
-    let t = match status {
-        1 => xattr::Error::Unsupported.text(),
-        2 => xattr::Error::Link.text(),
-        4 => "The tags of this item are in a form Files doesn't change.",
-        _ => xattr::Error::Denied.text(),
-    };
-    // SAFETY: forwarded.
-    unsafe { put(t.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let t = match status {
+            1 => xattr::Error::Unsupported.text(),
+            2 => xattr::Error::Link.text(),
+            4 => "The tags of this item are in a form Files doesn't change.",
+            _ => xattr::Error::Denied.text(),
+        };
+        // SAFETY: forwarded.
+        unsafe { put(t.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Changes ----
@@ -507,19 +511,21 @@ pub unsafe extern "C" fn telamon_attr_read(
     cap: usize,
     ok: *mut bool,
 ) -> usize {
-    let key = match key {
-        0 => Key::Tags,
-        1 => Key::Rating,
-        _ => Key::Mode,
-    };
-    let r = abs_path(path, len).map(|p| attrs::read(&p, key));
-    if !ok.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *ok = matches!(r, Some(Ok(_))) };
-    }
-    let text = r.and_then(Result::ok).unwrap_or_default();
-    // SAFETY: forwarded.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let key = match key {
+            0 => Key::Tags,
+            1 => Key::Rating,
+            _ => Key::Mode,
+        };
+        let r = abs_path(path, len).map(|p| attrs::read(&p, key));
+        if !ok.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *ok = matches!(r, Some(Ok(_))) };
+        }
+        let text = r.and_then(Result::ok).unwrap_or_default();
+        // SAFETY: forwarded.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Permissions ----
@@ -634,27 +640,29 @@ pub unsafe extern "C" fn telamon_sum_file(
     cap: usize,
     len: *mut usize,
 ) -> i32 {
-    let (rc, text) = match (abs_path(path, path_len), Alg::from_index(alg)) {
-        (Some(p), Some(a)) => {
-            let mut cb = |n: u64| {
-                if let Some(f) = progress {
-                    f(user, n);
+    crate::ffi::guarded(2, || {
+        let (rc, text) = match (abs_path(path, path_len), Alg::from_index(alg)) {
+            (Some(p), Some(a)) => {
+                let mut cb = |n: u64| {
+                    if let Some(f) = progress {
+                        f(user, n);
+                    }
+                };
+                // SAFETY: forwarded.
+                match checksum::hash_file(&p, a, unsafe { flag(cancel) }, &mut cb) {
+                    Ok(hex) => (0, hex),
+                    Err(checksum::FileError::Cancelled) => (1, String::new()),
+                    Err(e) => (2, e.text()),
                 }
-            };
-            // SAFETY: forwarded.
-            match checksum::hash_file(&p, a, unsafe { flag(cancel) }, &mut cb) {
-                Ok(hex) => (0, hex),
-                Err(checksum::FileError::Cancelled) => (1, String::new()),
-                Err(e) => (2, e.text()),
             }
+            _ => (2, "The file couldn't be read.".to_string()),
+        };
+        if !len.is_null() {
+            // SAFETY: writable per the contract; forwarded `put`.
+            unsafe { *len = put(text.as_bytes(), out, cap) };
         }
-        _ => (2, "The file couldn't be read.".to_string()),
-    };
-    if !len.is_null() {
-        // SAFETY: writable per the contract; forwarded `put`.
-        unsafe { *len = put(text.as_bytes(), out, cap) };
-    }
-    rc
+        rc
+    })
 }
 
 /// What a person pasted, read as a checksum: the kind (as `alg` numbers) in
@@ -671,15 +679,17 @@ pub unsafe extern "C" fn telamon_sum_expected(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let Some((a, hex)) = checksum::parse_expected(&text_of(text, len)) else {
-        return 0;
-    };
-    if !alg.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *alg = a.index() };
-    }
-    // SAFETY: forwarded.
-    unsafe { put(hex.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let Some((a, hex)) = checksum::parse_expected(&text_of(text, len)) else {
+            return 0;
+        };
+        if !alg.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *alg = a.index() };
+        }
+        // SAFETY: forwarded.
+        unsafe { put(hex.as_bytes(), out, cap) }
+    })
 }
 
 /// The name of a kind of checksum ("SHA-256").
@@ -738,26 +748,28 @@ pub unsafe extern "C" fn telamon_foldersize(
     user: *mut c_void,
     totals: *mut TelamonTotals,
 ) -> i32 {
-    let Some(p) = abs_path(path, len) else {
-        return 2;
-    };
-    let mut cb = |t: &Totals| {
-        if let Some(f) = progress {
-            let c = TelamonTotals::from(t);
-            f(user, &c);
+    crate::ffi::guarded(2, || {
+        let Some(p) = abs_path(path, len) else {
+            return 2;
+        };
+        let mut cb = |t: &Totals| {
+            if let Some(f) = progress {
+                let c = TelamonTotals::from(t);
+                f(user, &c);
+            }
+        };
+        // SAFETY: forwarded.
+        let r = foldersize::measure(Path::new(&p), unsafe { flag(cancel) }, &mut cb);
+        let (rc, t) = match r {
+            Ok(t) => (0, t),
+            Err(t) => (1, t),
+        };
+        if !totals.is_null() {
+            // SAFETY: writable per the contract.
+            unsafe { *totals = TelamonTotals::from(&t) };
         }
-    };
-    // SAFETY: forwarded.
-    let r = foldersize::measure(Path::new(&p), unsafe { flag(cancel) }, &mut cb);
-    let (rc, t) = match r {
-        Ok(t) => (0, t),
-        Err(t) => (1, t),
-    };
-    if !totals.is_null() {
-        // SAFETY: writable per the contract.
-        unsafe { *totals = TelamonTotals::from(&t) };
-    }
-    rc
+        rc
+    })
 }
 
 #[cfg(test)]

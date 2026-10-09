@@ -58,9 +58,13 @@ fn colour_rank(name: &str) -> usize {
 pub fn parse(raw: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(raw);
     let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for part in text.split(',') {
         let t = part.trim();
-        if t.is_empty() || out.iter().any(|o| same(o, t)) {
+        // Repeats are found by a set, not by comparing each name with every
+        // earlier one (a value of a thousand tags would cost a million
+        // comparisons, and each one allocates).
+        if t.is_empty() || !seen.insert(t.to_lowercase()) {
             continue;
         }
         out.push(t.to_string());
@@ -285,6 +289,20 @@ mod tests {
 
     fn v(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn a_value_of_a_thousand_tags_parses_fast_and_keeps_the_first_of_each() {
+        let value: Vec<String> = (0..1000).map(|i| format!("t{}", i % 600)).collect();
+        let t = std::time::Instant::now();
+        let tags = parse(value.join(",").as_bytes());
+        assert_eq!(tags.len(), 600);
+        assert_eq!(tags[0], "t0");
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(200),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     #[test]

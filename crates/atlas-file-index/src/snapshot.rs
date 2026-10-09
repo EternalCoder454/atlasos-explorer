@@ -324,6 +324,31 @@ impl CacheDir {
         Ok(Some(CacheDir { fd: cur }))
     }
 
+    /// Size and modification time (nanoseconds) of the snapshot file as it is
+    /// now, without following a link; `None` when there is none.
+    pub fn stamp(&self) -> Option<(u64, i128)> {
+        let c = cstr(FILE_NAME).ok()?;
+        let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: the folder fd is open; c is NUL-terminated; st is filled on success.
+        let r = unsafe {
+            libc::fstatat(
+                self.fd.as_raw_fd(),
+                c.as_ptr(),
+                st.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if r != 0 {
+            return None;
+        }
+        // SAFETY: filled by the successful call.
+        let st = unsafe { st.assume_init() };
+        Some((
+            st.st_size as u64,
+            i128::from(st.st_mtime) * 1_000_000_000 + i128::from(st.st_mtime_nsec),
+        ))
+    }
+
     /// The snapshot's bytes; `Ok(None)` when there is none.
     pub fn read(&self) -> io::Result<Option<Vec<u8>>> {
         let c = cstr(FILE_NAME)?;

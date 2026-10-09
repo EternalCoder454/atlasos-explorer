@@ -476,6 +476,13 @@ pub fn hash_file(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<String, FileError> {
+    // Looked at before it is opened (a link to a device is followed, and
+    // opening a device can have effects of its own), and again when open.
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => return Err(FileError::NotAFile),
+        Err(e) => return Err(FileError::Read(e.kind().to_string())),
+    }
     // Opened so that a pipe with no writer can't block: only regular files go on.
     let mut f = std::fs::OpenOptions::new()
         .read(true)

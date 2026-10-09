@@ -238,7 +238,14 @@ mod tests {
     #[test]
     fn split_ext_survives_multibyte_names() {
         // Four bytes back from the dot used to land inside a character.
-        for name in ["日本.gz", "façade.gz", "日本語.xz", "a日.tar.gz", "é.gz", "日.gz"] {
+        for name in [
+            "日本.gz",
+            "façade.gz",
+            "日本語.xz",
+            "a日.tar.gz",
+            "é.gz",
+            "日.gz",
+        ] {
             let (stem, ext) = split_ext(name);
             assert_eq!(format!("{stem}{ext}"), name);
             assert!(name.is_char_boundary(stem.len()), "{name}");

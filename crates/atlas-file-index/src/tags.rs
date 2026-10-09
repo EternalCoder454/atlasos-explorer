@@ -96,7 +96,10 @@ mod tests {
 
     #[test]
     fn tags_with_direction_or_control_characters_are_dropped() {
-        assert_eq!(clean("a\u{202E}b,ok,x\u{2066}y,\u{200F}z,li\nne".as_bytes()), "ok");
+        assert_eq!(
+            clean("a\u{202E}b,ok,x\u{2066}y,\u{200F}z,li\nne".as_bytes()),
+            "ok"
+        );
     }
 
     #[test]

@@ -481,23 +481,26 @@ fn write_snapshot(index: &Index, cache_home: &Path, excl_hash: u32) {
     // process on the bus may send them) would otherwise rewrite and sync the
     // whole file over and over: an index that is what was saved is not saved
     // again. The body checksum is at bytes 40..44 and does not cover the time.
-    static LAST: Mutex<Option<(PathBuf, u32)>> = Mutex::new(None);
+    static LAST: Mutex<Option<(PathBuf, u32, (u64, i128))>> = Mutex::new(None);
     let body = bytes
         .get(40..44)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-    if let Some(body) = body
-        && lock(&LAST)
-            .as_ref()
-            .is_some_and(|(p, c)| p == cache_home && *c == body)
+    let dir = CacheDir::open(cache_home, true);
+    if let (Some(body), Ok(Some(cd))) = (body, &dir)
+        && lock(&LAST).as_ref().is_some_and(|(p, c, stamp)| {
+            // and the file is still the one that was written (a damaged,
+            // replaced or removed file is written again)
+            p == cache_home && *c == body && cd.stamp() == Some(*stamp)
+        })
     {
         log::debug!("snapshot unchanged, not saved again");
         return;
     }
-    match CacheDir::open(cache_home, true) {
+    match dir {
         Ok(Some(cd)) => match cd.write(&bytes) {
             Ok(()) => {
-                if let Some(body) = body {
-                    *lock(&LAST) = Some((cache_home.to_path_buf(), body));
+                if let (Some(body), Some(stamp)) = (body, cd.stamp()) {
+                    *lock(&LAST) = Some((cache_home.to_path_buf(), body, stamp));
                 }
                 log::debug!(
                     "snapshot saved: {} bytes in {} ms",
@@ -1190,6 +1193,26 @@ mod tests {
             x
         );
         assert_eq!(cache_home_from(Some("/var/c/other".into()), x.clone()), x);
+    }
+
+    #[test]
+    fn an_index_that_was_saved_is_not_saved_again_until_the_file_changes() {
+        let t = crate::testdir::Scratch::new("resave");
+        let cache = t.0.clone();
+        let ix = crate::index::testutil::sample();
+        write_snapshot(&ix, &cache, 7);
+        let cd = CacheDir::open(&cache, false).unwrap().unwrap();
+        let first = cd.stamp().expect("saved");
+        std::thread::sleep(Duration::from_millis(20));
+        write_snapshot(&ix, &cache, 7);
+        assert_eq!(cd.stamp(), Some(first), "not written again");
+        // A file that was damaged (or removed) is written again.
+        std::fs::write(cache.join("telamon-explorer/index/v2.idx"), b"junk").unwrap();
+        write_snapshot(&ix, &cache, 7);
+        assert!(
+            cd.stamp().is_some_and(|s| s.0 > 4),
+            "written again over the damage"
+        );
     }
 
     #[test]

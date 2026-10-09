@@ -105,7 +105,13 @@ pub fn segments(url: &str, home: &str) -> Vec<Segment> {
         } else {
             display_name(&decode(host))
         };
-        (format!("{scheme}://{auth}"), label)
+        (
+            format!(
+                "{scheme}://{}",
+                crate::launch::authority_without_password(auth)
+            ),
+            label,
+        )
     } else {
         let label = match scheme_lc.as_str() {
             "trash" => "Trash".to_string(),

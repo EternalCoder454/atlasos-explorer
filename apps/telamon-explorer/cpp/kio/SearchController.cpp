@@ -245,7 +245,10 @@ void SearchService::search(const QString &query, uint limit, const QVariantMap &
         QList<FolderModel::SearchHit> hits;
         const QDBusArgument arg = reply.arguments().first().value<QDBusArgument>();
         arg.beginArray();
-        while (!arg.atEnd()) {
+        // The service answers at most 500 (its own limit); an answer from
+        // anything else on that name is read no further than that.
+        constexpr int MaxHits = 500;
+        while (!arg.atEnd() && hits.size() < MaxHits) {
             QString uri, name, kind, mime, icon;
             qlonglong mtime = 0;
             qulonglong size = 0;

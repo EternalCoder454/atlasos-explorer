@@ -75,7 +75,7 @@ pub fn measure(
             if path != *root {
                 t.folders += 1;
             }
-            t.on_disk += md.blocks() * 512;
+            t.on_disk = t.on_disk.saturating_add(md.blocks().saturating_mul(512));
             match fs::read_dir(&path) {
                 Ok(rd) => stack.extend(rd.flatten().map(|e| e.path())),
                 Err(_) => t.unreadable += 1,
@@ -87,9 +87,9 @@ pub fn measure(
             }
             t.files += 1;
             if md.is_file() {
-                t.bytes += md.len();
+                t.bytes = t.bytes.saturating_add(md.len());
             }
-            t.on_disk += md.blocks() * 512;
+            t.on_disk = t.on_disk.saturating_add(md.blocks().saturating_mul(512));
         }
     }
     progress(&t);

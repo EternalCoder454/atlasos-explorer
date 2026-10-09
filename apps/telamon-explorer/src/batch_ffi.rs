@@ -72,67 +72,69 @@ pub unsafe extern "C" fn telamon_batch_plan(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    if spec.is_null() {
-        return 0;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let (spec, items) = unsafe { (&*spec, bytes(items, items_len)) };
-    let Some(parsed) = items_of(items) else {
-        return 0;
-    };
-    // SAFETY: forwarded from this function's contract.
-    let (first, second) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(spec.first, spec.first_len)).into_owned(),
-            String::from_utf8_lossy(bytes(spec.second, spec.second_len)).into_owned(),
-        )
-    };
-    let at = if spec.at_end { Edge::End } else { Edge::Start };
-    let op = match spec.mode {
-        0 => Op::Replace {
-            find: &first,
-            with: &second,
-            match_case: spec.match_case,
-            regex: spec.regex,
-        },
-        1 => Op::Number {
-            start: spec.start,
-            step: spec.step,
-            padding: spec.padding as usize,
-            at,
-            separator: &first,
-        },
-        2 => match CaseMode::from_code(spec.case_mode) {
-            Some(m) => Op::Case(m),
-            None => return 0,
-        },
-        3 => Op::AddText { text: &first, at },
-        _ => return 0,
-    };
-    let list: Vec<Item> = parsed
-        .iter()
-        .map(|(name, is_dir)| Item {
-            name,
-            is_dir: *is_dir,
-        })
-        .collect();
-    let plan = batch::plan(&list, &op, |name| match exists {
-        // SAFETY: the callback is valid for `ctx` and any name, as promised.
-        Some(f) => unsafe { f(ctx, name.as_ptr(), name.len()) },
-        None => false,
-    });
-    let mut data = Vec::new();
-    data.push(plan.can_apply() as u8);
-    data.extend_from_slice(&(plan.changed as u32).to_le_bytes());
-    data.extend_from_slice(&(plan.blocked as u32).to_le_bytes());
-    push_text(&mut data, &plan.problem);
-    for row in &plan.rows {
-        data.push(row.check.code());
-        push_text(&mut data, &row.new);
-        push_text(&mut data, &row.check.describe());
-    }
-    // SAFETY: `out` as promised above.
-    unsafe { put(&data, out, cap) }
+    crate::ffi::guarded(0, || {
+        if spec.is_null() {
+            return 0;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let (spec, items) = unsafe { (&*spec, bytes(items, items_len)) };
+        let Some(parsed) = items_of(items) else {
+            return 0;
+        };
+        // SAFETY: forwarded from this function's contract.
+        let (first, second) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(spec.first, spec.first_len)).into_owned(),
+                String::from_utf8_lossy(bytes(spec.second, spec.second_len)).into_owned(),
+            )
+        };
+        let at = if spec.at_end { Edge::End } else { Edge::Start };
+        let op = match spec.mode {
+            0 => Op::Replace {
+                find: &first,
+                with: &second,
+                match_case: spec.match_case,
+                regex: spec.regex,
+            },
+            1 => Op::Number {
+                start: spec.start,
+                step: spec.step,
+                padding: spec.padding as usize,
+                at,
+                separator: &first,
+            },
+            2 => match CaseMode::from_code(spec.case_mode) {
+                Some(m) => Op::Case(m),
+                None => return 0,
+            },
+            3 => Op::AddText { text: &first, at },
+            _ => return 0,
+        };
+        let list: Vec<Item> = parsed
+            .iter()
+            .map(|(name, is_dir)| Item {
+                name,
+                is_dir: *is_dir,
+            })
+            .collect();
+        let plan = batch::plan(&list, &op, |name| match exists {
+            // SAFETY: the callback is valid for `ctx` and any name, as promised.
+            Some(f) => unsafe { f(ctx, name.as_ptr(), name.len()) },
+            None => false,
+        });
+        let mut data = Vec::new();
+        data.push(plan.can_apply() as u8);
+        data.extend_from_slice(&(plan.changed as u32).to_le_bytes());
+        data.extend_from_slice(&(plan.blocked as u32).to_le_bytes());
+        push_text(&mut data, &plan.problem);
+        for row in &plan.rows {
+            data.push(row.check.code());
+            push_text(&mut data, &row.new);
+            push_text(&mut data, &row.check.describe());
+        }
+        // SAFETY: `out` as promised above.
+        unsafe { put(&data, out, cap) }
+    })
 }
 
 /// How many bytes at the start of `name` an in-place rename selects first
@@ -142,9 +144,11 @@ pub unsafe extern "C" fn telamon_batch_plan(
 /// `name` points to `len` readable bytes (or is null with `len` 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_name_stem_len(name: *const u8, len: usize, is_dir: bool) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let name = String::from_utf8_lossy(unsafe { bytes(name, len) }).into_owned();
-    atlas_explorer_core::names::stem_len(&name, is_dir)
+    crate::ffi::guarded(len, || {
+        // SAFETY: forwarded from this function's contract.
+        let name = String::from_utf8_lossy(unsafe { bytes(name, len) }).into_owned();
+        atlas_explorer_core::names::stem_len(&name, is_dir)
+    })
 }
 
 #[cfg(test)]

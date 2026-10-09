@@ -82,23 +82,25 @@ pub unsafe extern "C" fn telamon_trash_purge(
     len: usize,
     out: *mut TelamonTrashReport,
 ) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    // SAFETY: forwarded from this function's contract.
-    let home = unsafe { bytes(data_home, len) };
-    if home.is_empty() || home.first() != Some(&b'/') || days < trash::MIN_DAYS || mode > 2 {
-        return false;
-    }
-    let dirs = known_trash_dirs(Path::new(std::ffi::OsStr::from_bytes(home)));
-    let report = trash::purge_all(&dirs, now_local, days, mode == 2);
-    // What the journal keeps of a run: counts only, never names.
-    if mode == 2 || (mode == 1 && report.removed == 0) {
-        log::info!("{}", trash::log_line(&report, days, true));
-    }
-    if !out.is_null() {
-        // SAFETY: `out` is a writable report (contract above).
-        unsafe { *out = report.into() };
-    }
-    true
+    crate::ffi::guarded(false, || {
+        use std::os::unix::ffi::OsStrExt;
+        // SAFETY: forwarded from this function's contract.
+        let home = unsafe { bytes(data_home, len) };
+        if home.is_empty() || home.first() != Some(&b'/') || days < trash::MIN_DAYS || mode > 2 {
+            return false;
+        }
+        let dirs = known_trash_dirs(Path::new(std::ffi::OsStr::from_bytes(home)));
+        let report = trash::purge_all(&dirs, now_local, days, mode == 2);
+        // What the journal keeps of a run: counts only, never names.
+        if mode == 2 || (mode == 1 && report.removed == 0) {
+            log::info!("{}", trash::log_line(&report, days, true));
+        }
+        if !out.is_null() {
+            // SAFETY: `out` is a writable report (contract above).
+            unsafe { *out = report.into() };
+        }
+        true
+    })
 }
 
 /// The line the journal gets for a report.
@@ -121,6 +123,32 @@ pub unsafe extern "C" fn telamon_trash_log_line(
     let line = trash::log_line(&r, days, applied);
     // SAFETY: forwarded from this function's contract.
     unsafe { put(line.as_bytes(), out, cap) }
+}
+
+/// Whether an item of the Trash may be put back at `target` (see
+/// `trash::restore_allowed`); `from_home_trash` is true for the home folder's
+/// own Trash.
+///
+/// # Safety
+/// Each pointer pair covers its length (or is null with length 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn telamon_trash_restore_allowed(
+    from_home_trash: bool,
+    target: *const u8,
+    target_len: usize,
+    home: *const u8,
+    home_len: usize,
+) -> bool {
+    crate::ffi::guarded(false, || {
+        // SAFETY: forwarded from this function's contract.
+        unsafe {
+            trash::restore_allowed(
+                from_home_trash,
+                bytes(target, target_len),
+                bytes(home, home_len),
+            )
+        }
+    })
 }
 
 /// Brings a number of days into the limits.
@@ -146,12 +174,14 @@ pub extern "C" fn telamon_trash_limit(which: u32) -> u32 {
 /// `text` points to `len` readable bytes (or is null with length 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_trash_parse_date(text: *const u8, len: usize) -> i64 {
-    // SAFETY: forwarded from this function's contract.
-    let t = unsafe { bytes(text, len) };
-    std::str::from_utf8(t)
-        .ok()
-        .and_then(trash::parse_date)
-        .unwrap_or(0)
+    crate::ffi::guarded(-1, || {
+        // SAFETY: forwarded from this function's contract.
+        let t = unsafe { bytes(text, len) };
+        std::str::from_utf8(t)
+            .ok()
+            .and_then(trash::parse_date)
+            .unwrap_or(0)
+    })
 }
 
 /// Texts. `which`: 0 the title and 1 the text of the question before missing
@@ -171,23 +201,25 @@ pub unsafe extern "C" fn telamon_trash_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let a = String::from_utf8_lossy(unsafe { bytes(a, a_len) }).into_owned();
-    let text = match which {
-        0 | 1 => {
-            let folders: Vec<String> = a
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect();
-            let (title, text) = trash::recreate_question(&folders, n as usize);
-            if which == 0 { title } else { text }
-        }
-        2 => trash::auto_empty_question((n & 0xFFFF_FFFF) as u32, (n >> 32) as usize),
-        _ => String::new(),
-    };
-    // SAFETY: forwarded from this function's contract.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let a = String::from_utf8_lossy(unsafe { bytes(a, a_len) }).into_owned();
+        let text = match which {
+            0 | 1 => {
+                let folders: Vec<String> = a
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                let (title, text) = trash::recreate_question(&folders, n as usize);
+                if which == 0 { title } else { text }
+            }
+            2 => trash::auto_empty_question((n & 0xFFFF_FFFF) as u32, (n >> 32) as usize),
+            _ => String::new(),
+        };
+        // SAFETY: forwarded from this function's contract.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 #[cfg(test)]

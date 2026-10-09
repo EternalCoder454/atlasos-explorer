@@ -28,6 +28,21 @@ pub struct TelamonSortRow {
     pub is_dir: bool,
 }
 
+/// Runs `f`; if it panics, the panic stops here and `failure` is the answer.
+/// A panic that crosses an `extern "C"` function ends the whole program (and
+/// with it the operations queued), and these functions read file names, file
+/// contents, settings text and other programs' arguments: all untrusted. The
+/// message never holds the input.
+pub(crate) fn guarded<T>(failure: T, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => {
+            log::error!("an internal error was contained while reading untrusted input");
+            failure
+        }
+    }
+}
+
 /// # Safety
 /// `ptr` is null or points to `len` readable bytes.
 pub(crate) unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
@@ -64,11 +79,13 @@ pub unsafe extern "C" fn telamon_display_name(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    unsafe {
-        let s = display_name(bytes(name, len));
-        put(s.as_bytes(), out, cap)
-    }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        unsafe {
+            let s = display_name(bytes(name, len));
+            put(s.as_bytes(), out, cap)
+        }
+    })
 }
 
 /// The natural sort key of a file name.
@@ -82,11 +99,13 @@ pub unsafe extern "C" fn telamon_name_key(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    unsafe {
-        let k = name_key(bytes(name, len));
-        put(&k, out, cap)
-    }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        unsafe {
+            let k = name_key(bytes(name, len));
+            put(&k, out, cap)
+        }
+    })
 }
 
 /// Sorts `n` rows by `column` (0 Name, 1 Size, 2 Type, 3 Modified, 4 Created,
@@ -163,24 +182,26 @@ pub unsafe extern "C" fn telamon_validate_name(
     cap: usize,
     text_len: *mut usize,
 ) -> i32 {
-    if text_len.is_null() {
-        return 1;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let name = String::from_utf8_lossy(unsafe { bytes(name, len) }).into_owned();
-    let (code, text) = match names::validate(&name) {
-        Ok(w) => (
-            0,
-            w.iter()
-                .map(|w| w.describe())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        Err(e) => (1, e.describe().to_string()),
-    };
-    // SAFETY: `out` and `text_len` as promised above.
-    unsafe { *text_len = put(text.as_bytes(), out, cap) };
-    code
+    crate::ffi::guarded(1, || {
+        if text_len.is_null() {
+            return 1;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let name = String::from_utf8_lossy(unsafe { bytes(name, len) }).into_owned();
+        let (code, text) = match names::validate(&name) {
+            Ok(w) => (
+                0,
+                w.iter()
+                    .map(|w| w.describe())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            Err(e) => (1, e.describe().to_string()),
+        };
+        // SAFETY: `out` and `text_len` as promised above.
+        unsafe { *text_len = put(text.as_bytes(), out, cap) };
+        code
+    })
 }
 
 /// Reads typed address text. Returns 0 and the URL in `out`, or 1 and the
@@ -202,24 +223,26 @@ pub unsafe extern "C" fn telamon_parse_address(
     cap: usize,
     text_len: *mut usize,
 ) -> i32 {
-    if text_len.is_null() {
-        return 1;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let (text, current, home) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(text, len)).into_owned(),
-            String::from_utf8_lossy(bytes(current, current_len)).into_owned(),
-            String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
-        )
-    };
-    let (code, msg) = match address::parse(&text, &current, std::path::Path::new(&home)) {
-        Ok(url) => (0, url),
-        Err(why) => (1, why.to_string()),
-    };
-    // SAFETY: `out` and `text_len` as promised above.
-    unsafe { *text_len = put(msg.as_bytes(), out, cap) };
-    code
+    crate::ffi::guarded(1, || {
+        if text_len.is_null() {
+            return 1;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let (text, current, home) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(text, len)).into_owned(),
+                String::from_utf8_lossy(bytes(current, current_len)).into_owned(),
+                String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
+            )
+        };
+        let (code, msg) = match address::parse(&text, &current, std::path::Path::new(&home)) {
+            Ok(url) => (0, url),
+            Err(why) => (1, why.to_string()),
+        };
+        // SAFETY: `out` and `text_len` as promised above.
+        unsafe { *text_len = put(msg.as_bytes(), out, cap) };
+        code
+    })
 }
 
 /// The clickable parts of a location, for the path bar: one line per segment,
@@ -240,20 +263,22 @@ pub unsafe extern "C" fn telamon_path_segments(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let (url, home) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(url, len)).into_owned(),
-            String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
-        )
-    };
-    let text = location::segments(&url, &home)
-        .into_iter()
-        .map(|s| format!("{}\t{}", s.label, s.url))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let (url, home) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(url, len)).into_owned(),
+                String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
+            )
+        };
+        let text = location::segments(&url, &home)
+            .into_iter()
+            .map(|s| format!("{}\t{}", s.label, s.url))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Splits typed address text for completion: the folder to list (a URL) and
@@ -277,25 +302,27 @@ pub unsafe extern "C" fn telamon_split_for_completion(
     cap: usize,
     text_len: *mut usize,
 ) -> i32 {
-    if text_len.is_null() {
-        return 1;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let (text, current, home) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(text, len)).into_owned(),
-            String::from_utf8_lossy(bytes(current, current_len)).into_owned(),
-            String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
-        )
-    };
-    let (code, msg) =
-        match address::split_for_completion(&text, &current, std::path::Path::new(&home)) {
-            Ok((dir, prefix)) => (0, format!("{dir}\n{prefix}")),
-            Err(why) => (1, why.to_string()),
+    crate::ffi::guarded(1, || {
+        if text_len.is_null() {
+            return 1;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let (text, current, home) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(text, len)).into_owned(),
+                String::from_utf8_lossy(bytes(current, current_len)).into_owned(),
+                String::from_utf8_lossy(bytes(home, home_len)).into_owned(),
+            )
         };
-    // SAFETY: `out` and `text_len` as promised above.
-    unsafe { *text_len = put(msg.as_bytes(), out, cap) };
-    code
+        let (code, msg) =
+            match address::split_for_completion(&text, &current, std::path::Path::new(&home)) {
+                Ok((dir, prefix)) => (0, format!("{dir}\n{prefix}")),
+                Err(why) => (1, why.to_string()),
+            };
+        // SAFETY: `out` and `text_len` as promised above.
+        unsafe { *text_len = put(msg.as_bytes(), out, cap) };
+        code
+    })
 }
 
 /// Ranks the names of a folder. `entries` holds one record per name: a flag
@@ -320,34 +347,36 @@ pub unsafe extern "C" fn telamon_rank_names(
     out: *mut u32,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let (prefix, entries) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(prefix, prefix_len)).into_owned(),
-            bytes(entries, entries_len),
-        )
-    };
-    let candidates: Vec<address::Candidate> = entries
-        .split(|&b| b == 0)
-        .filter(|r| !r.is_empty())
-        .map(|r| address::Candidate {
-            name: String::from_utf8_lossy(&r[1..]).into_owned(),
-            is_dir: r[0] & 1 != 0,
-            hidden: r[0] & 2 != 0,
-        })
-        .collect();
-    let chosen = match mode {
-        0 => address::rank_completions(&prefix, &candidates),
-        1 => location::subfolder_order(&candidates, show_hidden),
-        _ => Vec::new(),
-    };
-    if chosen.len() <= cap && !out.is_null() {
-        for (k, &i) in chosen.iter().enumerate() {
-            // SAFETY: `out` has `cap >= chosen.len()` writable slots.
-            unsafe { *out.add(k) = i as u32 };
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let (prefix, entries) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(prefix, prefix_len)).into_owned(),
+                bytes(entries, entries_len),
+            )
+        };
+        let candidates: Vec<address::Candidate> = entries
+            .split(|&b| b == 0)
+            .filter(|r| !r.is_empty())
+            .map(|r| address::Candidate {
+                name: String::from_utf8_lossy(&r[1..]).into_owned(),
+                is_dir: r[0] & 1 != 0,
+                hidden: r[0] & 2 != 0,
+            })
+            .collect();
+        let chosen = match mode {
+            0 => address::rank_completions(&prefix, &candidates),
+            1 => location::subfolder_order(&candidates, show_hidden),
+            _ => Vec::new(),
+        };
+        if chosen.len() <= cap && !out.is_null() {
+            for (k, &i) in chosen.iter().enumerate() {
+                // SAFETY: `out` has `cap >= chosen.len()` writable slots.
+                unsafe { *out.add(k) = i as u32 };
+            }
         }
-    }
-    chosen.len()
+        chosen.len()
+    })
 }
 
 /// The address bar's text after a completion is taken, `dir` being the folder
@@ -368,17 +397,19 @@ pub unsafe extern "C" fn telamon_completion_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let (typed, name, dir) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(typed, len)).into_owned(),
-            String::from_utf8_lossy(bytes(name, name_len)).into_owned(),
-            String::from_utf8_lossy(bytes(dir, dir_len)).into_owned(),
-        )
-    };
-    let text = address::completion_text(&typed, &name, &dir);
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let (typed, name, dir) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(typed, len)).into_owned(),
+                String::from_utf8_lossy(bytes(name, name_len)).into_owned(),
+                String::from_utf8_lossy(bytes(dir, dir_len)).into_owned(),
+            )
+        };
+        let text = address::completion_text(&typed, &name, &dir);
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Limits of the path bar and the history menus: 0 rows of a subfolder menu,
@@ -508,27 +539,29 @@ pub unsafe extern "C" fn telamon_places_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let (a, b) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(a, a_len)).into_owned(),
-            String::from_utf8_lossy(bytes(b, b_len)).into_owned(),
-        )
-    };
-    let n_items = usize::try_from(n).unwrap_or(usize::MAX);
-    let text = match which {
-        0 => places::clean_label(&a).unwrap_or_default(),
-        1 => places::pin_label(&a, &b),
-        2 => places::trash_value(n_items),
-        3 => places::trash_tip(n_items),
-        4 => places::empty_trash_text(n_items, &a),
-        5 => places::unmounted_text(kind_from(n as u32), &a),
-        6 => places::DISKS_DESKTOP_IDS.join("\n"),
-        7 => places::DISKS_PROGRAMS.join("\n"),
-        _ => String::new(),
-    };
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let (a, b) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(a, a_len)).into_owned(),
+                String::from_utf8_lossy(bytes(b, b_len)).into_owned(),
+            )
+        };
+        let n_items = usize::try_from(n).unwrap_or(usize::MAX);
+        let text = match which {
+            0 => places::clean_label(&a).unwrap_or_default(),
+            1 => places::pin_label(&a, &b),
+            2 => places::trash_value(n_items),
+            3 => places::trash_tip(n_items),
+            4 => places::empty_trash_text(n_items, &a),
+            5 => places::unmounted_text(kind_from(n as u32), &a),
+            6 => places::DISKS_DESKTOP_IDS.join("\n"),
+            7 => places::DISKS_PROGRAMS.join("\n"),
+            _ => String::new(),
+        };
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// What a context menu offers. `kind` 0 is the menu of `count` items (`folders`
@@ -581,26 +614,28 @@ pub unsafe extern "C" fn telamon_menu_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let a = String::from_utf8_lossy(unsafe { bytes(a, a_len) }).into_owned();
-    let text = match which {
-        0 => menu::template_label(&a),
-        1 => menu::new_file_name(&a),
-        2 => {
-            let names: Vec<String> = a
-                .split('\0')
-                .filter(|n| !n.is_empty())
-                .map(str::to_string)
-                .collect();
-            menu::pick_templates(&names).join("\0")
-        }
-        3 => menu::NEW_TEXT_FILE.to_string(),
-        4 => menu::NEW_FOLDER.to_string(),
-        5 => menu::ARCHIVE_DESKTOP_IDS.join("\n"),
-        _ => String::new(),
-    };
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let a = String::from_utf8_lossy(unsafe { bytes(a, a_len) }).into_owned();
+        let text = match which {
+            0 => menu::template_label(&a),
+            1 => menu::new_file_name(&a),
+            2 => {
+                let names: Vec<String> = a
+                    .split('\0')
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                menu::pick_templates(&names).join("\0")
+            }
+            3 => menu::NEW_TEXT_FILE.to_string(),
+            4 => menu::NEW_FOLDER.to_string(),
+            5 => menu::ARCHIVE_DESKTOP_IDS.join("\n"),
+            _ => String::new(),
+        };
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Whether `scheme` is one of the archive worker's (`zip`, `tar`, `sevenz`, `ar`).
@@ -609,9 +644,11 @@ pub unsafe extern "C" fn telamon_menu_text(
 /// `scheme` points to `len` readable bytes (or is null with length 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_archive_is_scheme(scheme: *const u8, len: usize) -> bool {
-    // SAFETY: forwarded from this function's contract.
-    let s = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
-    archive::is_scheme(&s)
+    crate::ffi::guarded(false, || {
+        // SAFETY: forwarded from this function's contract.
+        let s = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
+        archive::is_scheme(&s)
+    })
 }
 
 /// Looks at what an archive lists before KIO copies anything out of it.
@@ -632,20 +669,22 @@ pub unsafe extern "C" fn telamon_archive_check(
     cap: usize,
     text_len: *mut usize,
 ) -> i32 {
-    if text_len.is_null() {
-        return 1;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let buf = unsafe { bytes(records, records_len) };
-    let report = archive::check_entries(archive::parse_records(buf));
-    let (code, text) = if report.ok() {
-        (0, String::new())
-    } else {
-        (1, archive::refusal_text(&report, archive_installed))
-    };
-    // SAFETY: `out` and `text_len` as promised above.
-    unsafe { *text_len = put(text.as_bytes(), out, cap) };
-    code
+    crate::ffi::guarded(1, || {
+        if text_len.is_null() {
+            return 1;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let buf = unsafe { bytes(records, records_len) };
+        let report = archive::check_entries(archive::parse_records(buf));
+        let (code, text) = if report.ok() {
+            (0, String::new())
+        } else {
+            (1, archive::refusal_text(&report, archive_installed))
+        };
+        // SAFETY: `out` and `text_len` as promised above.
+        unsafe { *text_len = put(text.as_bytes(), out, cap) };
+        code
+    })
 }
 
 /// What the last bytes of a file (`tail`, of a file `file_len` long) say about
@@ -664,29 +703,31 @@ pub unsafe extern "C" fn telamon_zip_end(
     file_len: u64,
     out: *mut u64,
 ) -> i32 {
-    if out.is_null() {
-        return -1;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let tail = unsafe { bytes(tail, len) };
-    // SAFETY (all writes): `out` has four writable u64s.
-    match archive::zip_end(tail, file_len) {
-        archive::ZipEnd::NotZip => 0,
-        archive::ZipEnd::Directory(d) => {
-            unsafe {
-                *out = d.offset;
-                *out.add(1) = d.size;
-                *out.add(2) = d.entries;
-                *out.add(3) = d.end_at;
+    crate::ffi::guarded(-1, || {
+        if out.is_null() {
+            return -1;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let tail = unsafe { bytes(tail, len) };
+        // SAFETY (all writes): `out` has four writable u64s.
+        match archive::zip_end(tail, file_len) {
+            archive::ZipEnd::NotZip => 0,
+            archive::ZipEnd::Directory(d) => {
+                unsafe {
+                    *out = d.offset;
+                    *out.add(1) = d.size;
+                    *out.add(2) = d.entries;
+                    *out.add(3) = d.end_at;
+                }
+                1
             }
-            1
+            archive::ZipEnd::Zip64At(at) => {
+                unsafe { *out = at };
+                2
+            }
+            archive::ZipEnd::Unreadable => 3,
         }
-        archive::ZipEnd::Zip64At(at) => {
-            unsafe { *out = at };
-            2
-        }
-        archive::ZipEnd::Unreadable => 3,
-    }
+    })
 }
 
 /// The directory a zip64 end record describes (`record` is what was read at
@@ -702,23 +743,25 @@ pub unsafe extern "C" fn telamon_zip64_directory(
     end_at: u64,
     out: *mut u64,
 ) -> bool {
-    if out.is_null() {
-        return false;
-    }
-    // SAFETY: forwarded from this function's contract.
-    match archive::zip64_directory(unsafe { bytes(record, len) }, end_at) {
-        Some(d) => {
-            // SAFETY: `out` has four writable u64s.
-            unsafe {
-                *out = d.offset;
-                *out.add(1) = d.size;
-                *out.add(2) = d.entries;
-                *out.add(3) = d.end_at;
-            }
-            true
+    crate::ffi::guarded(false, || {
+        if out.is_null() {
+            return false;
         }
-        None => false,
-    }
+        // SAFETY: forwarded from this function's contract.
+        match archive::zip64_directory(unsafe { bytes(record, len) }, end_at) {
+            Some(d) => {
+                // SAFETY: `out` has four writable u64s.
+                unsafe {
+                    *out = d.offset;
+                    *out.add(1) = d.size;
+                    *out.add(2) = d.entries;
+                    *out.add(3) = d.end_at;
+                }
+                true
+            }
+            None => false,
+        }
+    })
 }
 
 /// Whether any entry of a zip's central directory is marked encrypted.
@@ -727,8 +770,10 @@ pub unsafe extern "C" fn telamon_zip64_directory(
 /// `directory` points to `len` readable bytes (or is null with length 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_zip_encrypted(directory: *const u8, len: usize) -> bool {
-    // SAFETY: forwarded from this function's contract.
-    archive::zip_directory_encrypted(unsafe { bytes(directory, len) })
+    crate::ffi::guarded(true, || {
+        // SAFETY: forwarded from this function's contract.
+        archive::zip_directory_encrypted(unsafe { bytes(directory, len) })
+    })
 }
 
 /// Where a location in an archive is: five lines, the archive file's URL,
@@ -745,22 +790,24 @@ pub unsafe extern "C" fn telamon_archive_locate(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let url = String::from_utf8_lossy(unsafe { bytes(url, len) }).into_owned();
-    let text = archive::locate(&url)
-        .map(|l| {
-            format!(
-                "{}\n{}\n{}\n{}\n{}",
-                l.file_url,
-                l.root_url,
-                l.inner,
-                l.name.replace('\n', " "),
-                l.folder_name.replace('\n', " ")
-            )
-        })
-        .unwrap_or_default();
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let url = String::from_utf8_lossy(unsafe { bytes(url, len) }).into_owned();
+        let text = archive::locate(&url)
+            .map(|l| {
+                format!(
+                    "{}\n{}\n{}\n{}\n{}",
+                    l.file_url,
+                    l.root_url,
+                    l.inner,
+                    l.name.replace('\n', " "),
+                    l.folder_name.replace('\n', " ")
+                )
+            })
+            .unwrap_or_default();
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Where Up goes from a location in an archive (empty: `url` isn't one).
@@ -774,11 +821,13 @@ pub unsafe extern "C" fn telamon_archive_parent(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let url = String::from_utf8_lossy(unsafe { bytes(url, len) }).into_owned();
-    let text = archive::parent(&url).unwrap_or_default();
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let url = String::from_utf8_lossy(unsafe { bytes(url, len) }).into_owned();
+        let text = archive::parent(&url).unwrap_or_default();
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The first free name out of `wanted`, "wanted (2)"...: `exists(ctx, name,
@@ -829,34 +878,36 @@ pub unsafe extern "C" fn telamon_menu_hidden(
     cap: usize,
     text_len: *mut usize,
 ) -> i32 {
-    if text_len.is_null() {
-        return 2;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let (content, names) = unsafe {
-        (
-            String::from_utf8_lossy(bytes(content, content_len)).into_owned(),
-            String::from_utf8_lossy(bytes(names, names_len)).into_owned(),
-        )
-    };
-    let names: Vec<String> = names
-        .split('\0')
-        .filter(|n| !n.is_empty())
-        .map(str::to_string)
-        .collect();
-    let result = if add {
-        menu::hidden_add(&content, &names)
-    } else {
-        menu::hidden_remove(&content, &names)
-    };
-    let (code, text) = match result {
-        Ok(Some(t)) => (0, t),
-        Ok(None) => (1, String::new()),
-        Err(e) => (2, e.describe().to_string()),
-    };
-    // SAFETY: `out` and `text_len` as promised above.
-    unsafe { *text_len = put(text.as_bytes(), out, cap) };
-    code
+    crate::ffi::guarded(2, || {
+        if text_len.is_null() {
+            return 2;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let (content, names) = unsafe {
+            (
+                String::from_utf8_lossy(bytes(content, content_len)).into_owned(),
+                String::from_utf8_lossy(bytes(names, names_len)).into_owned(),
+            )
+        };
+        let names: Vec<String> = names
+            .split('\0')
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .collect();
+        let result = if add {
+            menu::hidden_add(&content, &names)
+        } else {
+            menu::hidden_remove(&content, &names)
+        };
+        let (code, text) = match result {
+            Ok(Some(t)) => (0, t),
+            Ok(None) => (1, String::new()),
+            Err(e) => (2, e.describe().to_string()),
+        };
+        // SAFETY: `out` and `text_len` as promised above.
+        unsafe { *text_len = put(text.as_bytes(), out, cap) };
+        code
+    })
 }
 
 /// The disk usage percentage at which a drive is shown as nearly full.
@@ -938,20 +989,34 @@ pub unsafe extern "C" fn telamon_tabs_restore(
     cap: usize,
     current_out: *mut usize,
 ) -> usize {
-    if current_out.is_null() {
-        return 0;
+    crate::ffi::guarded(0, || {
+        if current_out.is_null() {
+            return 0;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let text = String::from_utf8_lossy(unsafe { bytes(saved, len) }).into_owned();
+        let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+        let Some(session) = tabs::restore(&lines, current) else {
+            return 0;
+        };
+        // SAFETY: `current_out` is writable (contract).
+        unsafe { *current_out = session.current };
+        let joined = session.urls.join("\n");
+        // SAFETY: `out` as promised above.
+        unsafe { put(joined.as_bytes(), out, cap) }
+    })
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::guarded;
+
+    #[test]
+    fn a_panic_is_contained_and_gives_the_failure_value() {
+        assert_eq!(guarded(7usize, || panic!("boom")), 7);
+        assert!(guarded(true, || -> bool { panic!("boom") }));
+        assert_eq!(guarded(0usize, || 42), 42);
     }
-    // SAFETY: forwarded from this function's contract.
-    let text = String::from_utf8_lossy(unsafe { bytes(saved, len) }).into_owned();
-    let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-    let Some(session) = tabs::restore(&lines, current) else {
-        return 0;
-    };
-    // SAFETY: `current_out` is writable (contract).
-    unsafe { *current_out = session.current };
-    let joined = session.urls.join("\n");
-    // SAFETY: `out` as promised above.
-    unsafe { put(joined.as_bytes(), out, cap) }
 }
 
 #[cfg(test)]

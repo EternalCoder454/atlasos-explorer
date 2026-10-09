@@ -119,6 +119,7 @@ size_t telamon_trash_log_line(const TelamonTrashReport *report, uint32_t days, b
 uint32_t telamon_trash_clamp_days(int64_t days);
 uint32_t telamon_trash_limit(uint32_t which);
 int64_t telamon_trash_parse_date(const uint8_t *text, size_t len);
+bool telamon_trash_restore_allowed(bool from_home_trash, const uint8_t *target, size_t target_len, const uint8_t *home, size_t home_len);
 size_t telamon_trash_text(uint32_t which, const uint8_t *a, size_t aLen, uint64_t n, uint8_t *out, size_t cap);
 
 // ---- Batch Rename (src/batch_ffi.rs) ----

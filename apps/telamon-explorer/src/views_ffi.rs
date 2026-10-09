@@ -137,17 +137,19 @@ pub unsafe extern "C" fn telamon_views_get(
     key_len: usize,
     out: *mut TelamonViewPrefs,
 ) -> bool {
-    if out.is_null() {
-        return false;
-    }
-    match list(saved, saved_len).get(&key_of(key, key_len)) {
-        Some(p) => {
-            // SAFETY: `out` is writable (contract).
-            unsafe { *out = TelamonViewPrefs::from_core(p) };
-            true
+    crate::ffi::guarded(false, || {
+        if out.is_null() {
+            return false;
         }
-        None => false,
-    }
+        match list(saved, saved_len).get(&key_of(key, key_len)) {
+            Some(p) => {
+                // SAFETY: `out` is writable (contract).
+                unsafe { *out = TelamonViewPrefs::from_core(p) };
+                true
+            }
+            None => false,
+        }
+    })
 }
 
 /// The saved list with `key` remembered as most recent. A key that cannot be
@@ -166,14 +168,16 @@ pub unsafe extern "C" fn telamon_views_set(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut v = list(saved, saved_len);
-    if !prefs.is_null() {
-        // SAFETY: `prefs` is readable (contract).
-        let p = unsafe { *prefs }.to_core();
-        v.set(&key_of(key, key_len), p);
-    }
-    // SAFETY: `out` as promised.
-    unsafe { put(v.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut v = list(saved, saved_len);
+        if !prefs.is_null() {
+            // SAFETY: `prefs` is readable (contract).
+            let p = unsafe { *prefs }.to_core();
+            v.set(&key_of(key, key_len), p);
+        }
+        // SAFETY: `out` as promised.
+        unsafe { put(v.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// The saved list without `key`.
@@ -189,10 +193,12 @@ pub unsafe extern "C" fn telamon_views_forget(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let mut v = list(saved, saved_len);
-    v.forget(&key_of(key, key_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(v.to_text().as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let mut v = list(saved, saved_len);
+        v.forget(&key_of(key, key_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(v.to_text().as_bytes(), out, cap) }
+    })
 }
 
 /// Whether `key` can be a folder's key.

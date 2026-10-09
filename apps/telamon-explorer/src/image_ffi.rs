@@ -82,41 +82,43 @@ pub unsafe extern "C" fn telamon_image_names(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let Some(action) = Action::from_code(action) else {
-        return 0;
-    };
-    if kinds.is_null() || count == 0 || count > imageops::MAX_ITEMS {
-        return 0;
-    }
-    // SAFETY: forwarded from this function's contract.
-    let (kinds, names) = unsafe {
-        (
-            std::slice::from_raw_parts(kinds, count),
-            bytes(names, names_len),
-        )
-    };
-    // The names, each ended by a 0 byte: exactly `count` of them, none empty.
-    let mut parts: Vec<&[u8]> = names.split(|b| *b == 0).collect();
-    if names.last() == Some(&0) {
-        parts.pop();
-    }
-    if parts.len() != count || parts.iter().any(|p| p.is_empty()) {
-        return 0;
-    }
-    let mut inputs = Vec::with_capacity(count);
-    for (k, name) in kinds.iter().zip(parts) {
-        let Some(kind) = kind_from(*k) else {
+    crate::ffi::guarded(0, || {
+        let Some(action) = Action::from_code(action) else {
             return 0;
         };
-        inputs.push((kind, String::from_utf8_lossy(name).into_owned()));
-    }
-    let mut joined = Vec::new();
-    for n in imageops::output_names(action, &inputs) {
-        joined.extend_from_slice(n.as_bytes());
-        joined.push(0);
-    }
-    // SAFETY: forwarded from this function's contract.
-    unsafe { put(&joined, out, cap) }
+        if kinds.is_null() || count == 0 || count > imageops::MAX_ITEMS {
+            return 0;
+        }
+        // SAFETY: forwarded from this function's contract.
+        let (kinds, names) = unsafe {
+            (
+                std::slice::from_raw_parts(kinds, count),
+                bytes(names, names_len),
+            )
+        };
+        // The names, each ended by a 0 byte: exactly `count` of them, none empty.
+        let mut parts: Vec<&[u8]> = names.split(|b| *b == 0).collect();
+        if names.last() == Some(&0) {
+            parts.pop();
+        }
+        if parts.len() != count || parts.iter().any(|p| p.is_empty()) {
+            return 0;
+        }
+        let mut inputs = Vec::with_capacity(count);
+        for (k, name) in kinds.iter().zip(parts) {
+            let Some(kind) = kind_from(*k) else {
+                return 0;
+            };
+            inputs.push((kind, String::from_utf8_lossy(name).into_owned()));
+        }
+        let mut joined = Vec::new();
+        for n in imageops::output_names(action, &inputs) {
+            joined.extend_from_slice(n.as_bytes());
+            joined.push(0);
+        }
+        // SAFETY: forwarded from this function's contract.
+        unsafe { put(&joined, out, cap) }
+    })
 }
 
 /// The limits: 0 files per action, 1 bytes of one file, 2 pixels of one picture.
@@ -142,11 +144,13 @@ pub unsafe extern "C" fn telamon_image_check_input(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    match imageops::check_input(size, pixels) {
-        Ok(()) => 0,
-        // SAFETY: forwarded from this function's contract.
-        Err(why) => unsafe { put(why.as_bytes(), out, cap) },
-    }
+    crate::ffi::guarded(0, || {
+        match imageops::check_input(size, pixels) {
+            Ok(()) => 0,
+            // SAFETY: forwarded from this function's contract.
+            Err(why) => unsafe { put(why.as_bytes(), out, cap) },
+        }
+    })
 }
 
 /// The EXIF orientation of a JPEG (1 to 8; 1 for none).
@@ -155,8 +159,10 @@ pub unsafe extern "C" fn telamon_image_check_input(
 /// `data` points to `len` readable bytes (or is null with `len` 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_jpeg_orientation(data: *const u8, len: usize) -> u32 {
-    // SAFETY: forwarded from this function's contract.
-    u32::from(imageops::exif_orientation(unsafe { bytes(data, len) }))
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        u32::from(imageops::exif_orientation(unsafe { bytes(data, len) }))
+    })
 }
 
 /// Writes orientation 1 into the EXIF data of a JPEG, in place; whether there
@@ -166,11 +172,13 @@ pub unsafe extern "C" fn telamon_jpeg_orientation(data: *const u8, len: usize) -
 /// `data` points to `len` readable and writable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_jpeg_reset_orientation(data: *mut u8, len: usize) -> bool {
-    if data.is_null() || len == 0 {
-        return false;
-    }
-    // SAFETY: the caller promises `len` readable and writable bytes.
-    imageops::reset_exif_orientation(unsafe { std::slice::from_raw_parts_mut(data, len) })
+    crate::ffi::guarded(false, || {
+        if data.is_null() || len == 0 {
+            return false;
+        }
+        // SAFETY: the caller promises `len` readable and writable bytes.
+        imageops::reset_exif_orientation(unsafe { std::slice::from_raw_parts_mut(data, len) })
+    })
 }
 
 /// The libjpeg-turbo transform (`TJXOP_*`) that turns a JPEG of this EXIF
@@ -200,46 +208,48 @@ pub unsafe extern "C" fn telamon_pdf_merge(
     pages: *mut u32,
     bad: *mut u32,
 ) -> i32 {
-    use std::os::unix::ffi::OsStrExt;
-    static NEVER: AtomicBool = AtomicBool::new(false);
-    // SAFETY: forwarded from this function's contract.
-    let (paths, output) = unsafe { (bytes(paths, paths_len), bytes(output, output_len)) };
-    let inputs: Vec<PathBuf> = paths
-        .split(|b| *b == 0)
-        .filter(|p| !p.is_empty())
-        .map(|p| PathBuf::from(std::ffi::OsStr::from_bytes(p)))
-        .collect();
-    let output = PathBuf::from(std::ffi::OsStr::from_bytes(output));
-    // SAFETY: an `AtomicBool` is one byte; the caller's flag lives through the call.
-    let flag: &AtomicBool = if cancel.is_null() {
-        &NEVER
-    } else {
-        unsafe { &*(cancel as *const AtomicBool) }
-    };
-    if !pages.is_null() {
-        // SAFETY: writable, per the contract.
-        unsafe { *pages = 0 };
-    }
-    if !bad.is_null() {
-        // SAFETY: writable, per the contract.
-        unsafe { *bad = u32::MAX };
-    }
-    match pdfmerge::merge(&inputs, &output, flag) {
-        Ok(n) => {
-            if !pages.is_null() {
-                // SAFETY: writable, per the contract.
-                unsafe { *pages = u32::try_from(n).unwrap_or(u32::MAX) };
-            }
-            0
+    crate::ffi::guarded(1, || {
+        use std::os::unix::ffi::OsStrExt;
+        static NEVER: AtomicBool = AtomicBool::new(false);
+        // SAFETY: forwarded from this function's contract.
+        let (paths, output) = unsafe { (bytes(paths, paths_len), bytes(output, output_len)) };
+        let inputs: Vec<PathBuf> = paths
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| PathBuf::from(std::ffi::OsStr::from_bytes(p)))
+            .collect();
+        let output = PathBuf::from(std::ffi::OsStr::from_bytes(output));
+        // SAFETY: an `AtomicBool` is one byte; the caller's flag lives through the call.
+        let flag: &AtomicBool = if cancel.is_null() {
+            &NEVER
+        } else {
+            unsafe { &*(cancel as *const AtomicBool) }
+        };
+        if !pages.is_null() {
+            // SAFETY: writable, per the contract.
+            unsafe { *pages = 0 };
         }
-        Err(e) => {
-            if let (Some(i), false) = (e.input, bad.is_null()) {
-                // SAFETY: writable, per the contract.
-                unsafe { *bad = u32::try_from(i).unwrap_or(u32::MAX) };
-            }
-            e.code()
+        if !bad.is_null() {
+            // SAFETY: writable, per the contract.
+            unsafe { *bad = u32::MAX };
         }
-    }
+        match pdfmerge::merge(&inputs, &output, flag) {
+            Ok(n) => {
+                if !pages.is_null() {
+                    // SAFETY: writable, per the contract.
+                    unsafe { *pages = u32::try_from(n).unwrap_or(u32::MAX) };
+                }
+                0
+            }
+            Err(e) => {
+                if let (Some(i), false) = (e.input, bad.is_null()) {
+                    // SAFETY: writable, per the contract.
+                    unsafe { *bad = u32::try_from(i).unwrap_or(u32::MAX) };
+                }
+                e.code()
+            }
+        }
+    })
 }
 
 #[cfg(test)]

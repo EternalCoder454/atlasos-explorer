@@ -779,7 +779,12 @@ mod tests {
                     continue;
                 }
                 let n = row.new.as_str();
-                prop_assert!(!n.contains('/') && !n.contains('\0'), "{:?} from {:?}", n, item.name);
+                prop_assert!(
+                    !n.contains('/') && !n.contains('\0'),
+                    "{:?} from {:?}",
+                    n,
+                    item.name
+                );
                 prop_assert!(!n.is_empty() && n != "." && n != "..", "{:?}", n);
                 prop_assert!(n.len() <= 255, "{}", n.len());
             }

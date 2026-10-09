@@ -1543,6 +1543,16 @@ void OperationQueue::askDelete(OperationAsker *asker, quint64 opId, const QList<
 
 void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUrl &destination, std::function<void(bool)> done)
 {
+    // Anything can fill the clipboard or a drop with URLs (another program, a
+    // hostile page): a list no person selected is refused, not worked through
+    // on the window's thread.
+    if (sourcesIn.size() > MaxItemsPerOperation) {
+        Q_EMIT refused(tr("Too Many Items"), tr("Files can move, copy or link up to %1 items at once. Do it in smaller parts.").arg(MaxItemsPerOperation));
+        if (done) {
+            done(false);
+        }
+        return;
+    }
     QList<QUrl> sources;
     QSet<QString> seen;
     for (const QUrl &u : sourcesIn) {
@@ -1647,6 +1657,10 @@ void OperationQueue::transfer(Kind kind, const QList<QUrl> &sourcesIn, const QUr
 void OperationQueue::trash(const QList<QUrl> &urls)
 {
     if (urls.isEmpty()) {
+        return;
+    }
+    if (urls.size() > MaxItemsPerOperation) {
+        Q_EMIT refused(tr("Too Many Items"), tr("Files can move up to %1 items to the Trash at once. Do it in smaller parts.").arg(MaxItemsPerOperation));
         return;
     }
     Work w;

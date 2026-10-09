@@ -201,6 +201,10 @@ public:
     void askProblem(OperationAsker *asker, quint64 opId, KJob *job, KIO::SkipDialog_Options options, const QString &text);
     void askDelete(OperationAsker *asker, quint64 opId, const QList<QUrl> &urls, KIO::AskUserActionInterface::DeletionType type);
 
+    // The most items one copy, move, link or trash takes (a list from the
+    // clipboard or a drop is not trusted to be a person's selection).
+    static constexpr int MaxItemsPerOperation = 100000;
+
 Q_SIGNALS:
     void summaryChanged();
     void historyChanged();

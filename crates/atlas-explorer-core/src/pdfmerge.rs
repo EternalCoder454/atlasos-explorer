@@ -22,6 +22,8 @@ pub const MAX_FILES: usize = 500;
 pub const MAX_PAGES: usize = 5_000;
 /// The largest single PDF read.
 pub const MAX_FILE_BYTES: u64 = 256 << 20;
+/// Most objects one input document may hold once loaded.
+pub const MAX_OBJECTS: usize = 2_000_000;
 /// The most all the inputs hold together.
 pub const MAX_TOTAL_BYTES: u64 = 1 << 30;
 /// What one compressed stream may inflate to while a file is read.
@@ -194,6 +196,11 @@ pub fn merge(inputs: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Result<u
         if doc.is_encrypted() || doc.was_encrypted() {
             return Err(MergeError::at(n, Failure::Protected));
         }
+        // Each stream is capped, the document as a whole is not: a file that
+        // is small on the disk can still hold millions of objects.
+        if doc.objects.len() > MAX_OBJECTS {
+            return Err(MergeError::at(n, Failure::TooBig));
+        }
         doc.renumber_objects_with(max_id);
         max_id = doc.max_id + 1;
 
@@ -257,7 +264,23 @@ pub fn merge(inputs: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Result<u
     out.prune_objects();
 
     let mut write = || -> std::io::Result<()> {
-        let file = File::create(output)?;
+        // What is at the path is removed first (a link there is removed, not
+        // followed), then the file is made new and not through a link: a path
+        // someone planted is never written through.
+        match std::fs::remove_file(output) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(output)?
+        };
         let mut w = BufWriter::new(file);
         out.save_to(&mut w)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -440,6 +463,21 @@ mod tests {
         let n = merge(&[a.clone(), a], &out, &AtomicBool::new(false)).unwrap();
         assert_eq!(n, 4);
         assert_eq!(texts_of(&out), ["x", "y", "x", "y"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_link_planted_at_the_output_path_is_replaced_not_written_through() {
+        let d = scratch("planted");
+        make(&d.join("a.pdf"), &["x"], false, [0, 0, 200, 200]);
+        let victim = d.join("victim.txt");
+        std::fs::write(&victim, b"keep me").unwrap();
+        let out = d.join("out.pdf");
+        std::os::unix::fs::symlink(&victim, &out).unwrap();
+        merge(&[d.join("a.pdf")], &out, &AtomicBool::new(false)).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        assert!(!std::fs::symlink_metadata(&out).unwrap().is_symlink());
+        assert_eq!(texts_of(&out), ["x"]);
         let _ = std::fs::remove_dir_all(&d);
     }
 
