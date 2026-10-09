@@ -220,9 +220,10 @@ fn plain_host(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
         && !host.starts_with('-')
+        // letters of any language, as Connect to Server takes them
         && host
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'))
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 /// A server URL as Files opens it: the user information and the host are
@@ -235,7 +236,8 @@ pub(crate) fn clean_server_url(url: &str) -> Result<String, &'static str> {
     let colon = url.find(':').ok_or("not a server address")?;
     let (scheme, rest) = (&url[..colon], &url[colon + 1..]);
     let Some(rest) = rest.strip_prefix("//") else {
-        return Err("not a server address");
+        // `smb:/` and `sftp:/path`: no authority, so nothing to check
+        return Ok(url.to_string());
     };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(end);
@@ -266,6 +268,10 @@ pub(crate) fn clean_server_url(url: &str) -> Result<String, &'static str> {
         {
             return Err("not a valid server address");
         }
+        // only a port may follow the bracket
+        if !after.is_empty() && !after.starts_with(':') {
+            return Err("not a valid server address");
+        }
         (format!("[{addr}]"), after.strip_prefix(':'))
     } else {
         match hostport.split_once(':') {
@@ -279,7 +285,7 @@ pub(crate) fn clean_server_url(url: &str) -> Result<String, &'static str> {
     if !host.starts_with('[') && !plain_host(&host) {
         return Err("not a valid server name");
     }
-    if let Some(p) = port
+    if let Some(p) = port.filter(|p| !p.is_empty())
         && !(p.len() <= 5
             && p.bytes().all(|c| c.is_ascii_digit())
             && matches!(p.parse::<u32>(), Ok(1..=65535)))

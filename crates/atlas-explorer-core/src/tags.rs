@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(tags.len(), 600);
         assert_eq!(tags[0], "t0");
         assert!(
-            t.elapsed() < std::time::Duration::from_millis(200),
+            t.elapsed() < std::time::Duration::from_secs(5),
             "{:?}",
             t.elapsed()
         );

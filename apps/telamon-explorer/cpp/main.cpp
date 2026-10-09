@@ -12,6 +12,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDBusConnection>
 #include <QDir>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
@@ -88,6 +89,12 @@ int main(int argc, char *argv[])
     // One instance per session. A second launch's arguments come here through
     // activateRequested; without a session bus each launch runs on its own.
     KDBusService service(KDBusService::Unique | KDBusService::NoExitOnFailure);
+    // KDBusService also exports the whole application object at
+    // /MainApplication, with its slots and properties: any process on the bus
+    // could call quit() and closeAllWindows() (ending a copy half way) or set
+    // the style sheet. Nothing needs that path: org.freedesktop.Application
+    // is served at the application's own path.
+    QDBusConnection::sessionBus().unregisterObject(QStringLiteral("/MainApplication"));
 
     // The backend outlives the engine: the window's bindings read it until
     // the engine is gone.

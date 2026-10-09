@@ -125,47 +125,50 @@ pub unsafe extern "C" fn telamon_sort_permutation(
     groups_reversed: bool,
     out: *mut u32,
 ) -> bool {
-    if n == 0 {
-        return true;
-    }
-    if rows.is_null() || out.is_null() || n > u32::MAX as usize {
-        return false;
-    }
-    let column = match column {
-        0 => Column::Name,
-        1 => Column::Size,
-        2 => Column::Type,
-        3 => Column::Modified,
-        4 => Column::Created,
-        5 => Column::Accessed,
-        7 => Column::Original,
-        8 => Column::Deleted,
-        _ => return false,
-    };
-    // SAFETY: `rows` has `n` valid rows (contract above).
-    let rows = unsafe { std::slice::from_raw_parts(rows, n) };
-    let rows: Vec<SortRow> = rows
-        .iter()
-        .map(|r| SortRow {
-            // SAFETY: each row's pointers cover their lengths (contract).
-            key: unsafe { bytes(r.key, r.key_len) }.to_vec(),
-            kind: String::from_utf8_lossy(unsafe { bytes(r.kind, r.kind_len) }).into_owned(),
-            // SAFETY: as for the key and the kind.
-            group: unsafe { bytes(r.group, r.group_len) }.to_vec(),
-            // SAFETY: as for the key.
-            origin: unsafe { bytes(r.origin, r.origin_len) }.to_vec(),
-            deleted: r.deleted,
-            is_dir: r.is_dir,
-            size: r.size,
-            mtime: r.mtime,
-            ctime: r.ctime,
-            atime: r.atime,
-        })
-        .collect();
-    let perm = sort_permutation_grouped(&rows, column, descending, folders_first, groups_reversed);
-    // SAFETY: `out` has `n` writable u32s and `perm.len() == n`.
-    unsafe { std::ptr::copy_nonoverlapping(perm.as_ptr(), out, perm.len()) };
-    true
+    crate::ffi::guarded(false, || {
+        if n == 0 {
+            return true;
+        }
+        if rows.is_null() || out.is_null() || n > u32::MAX as usize {
+            return false;
+        }
+        let column = match column {
+            0 => Column::Name,
+            1 => Column::Size,
+            2 => Column::Type,
+            3 => Column::Modified,
+            4 => Column::Created,
+            5 => Column::Accessed,
+            7 => Column::Original,
+            8 => Column::Deleted,
+            _ => return false,
+        };
+        // SAFETY: `rows` has `n` valid rows (contract above).
+        let rows = unsafe { std::slice::from_raw_parts(rows, n) };
+        let rows: Vec<SortRow> = rows
+            .iter()
+            .map(|r| SortRow {
+                // SAFETY: each row's pointers cover their lengths (contract).
+                key: unsafe { bytes(r.key, r.key_len) }.to_vec(),
+                kind: String::from_utf8_lossy(unsafe { bytes(r.kind, r.kind_len) }).into_owned(),
+                // SAFETY: as for the key and the kind.
+                group: unsafe { bytes(r.group, r.group_len) }.to_vec(),
+                // SAFETY: as for the key.
+                origin: unsafe { bytes(r.origin, r.origin_len) }.to_vec(),
+                deleted: r.deleted,
+                is_dir: r.is_dir,
+                size: r.size,
+                mtime: r.mtime,
+                ctime: r.ctime,
+                atime: r.atime,
+            })
+            .collect();
+        let perm =
+            sort_permutation_grouped(&rows, column, descending, folders_first, groups_reversed);
+        // SAFETY: `out` has `n` writable u32s and `perm.len() == n`.
+        unsafe { std::ptr::copy_nonoverlapping(perm.as_ptr(), out, perm.len()) };
+        true
+    })
 }
 
 /// Checks a new file or folder name. Returns 0 when it is fine (the text, if
@@ -504,9 +507,11 @@ pub extern "C" fn telamon_places_reorder_row(src: usize, dst: usize) -> i64 {
 /// `scheme` points to `len` readable bytes (or is null with `len` 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_places_pinnable(scheme: *const u8, len: usize) -> bool {
-    // SAFETY: forwarded from this function's contract.
-    let scheme = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
-    places::pinnable(&scheme)
+    crate::ffi::guarded(false, || {
+        // SAFETY: forwarded from this function's contract.
+        let scheme = String::from_utf8_lossy(unsafe { bytes(scheme, len) }).into_owned();
+        places::pinnable(&scheme)
+    })
 }
 
 /// How full a disk is, in whole percent; -1 when not known.
@@ -581,14 +586,16 @@ pub unsafe extern "C" fn telamon_menu_state(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let entries = if kind == 0 {
-        menu::item_menu(count, folders, flags)
-    } else {
-        menu::background_menu(flags)
-    };
-    let text = menu::state_text(&entries);
-    // SAFETY: `out` as promised above.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let entries = if kind == 0 {
+            menu::item_menu(count, folders, flags)
+        } else {
+            menu::background_menu(flags)
+        };
+        let text = menu::state_text(&entries);
+        // SAFETY: `out` as promised above.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Whether Paste in the menu of items pastes into the one folder selected.
@@ -847,15 +854,17 @@ pub unsafe extern "C" fn telamon_menu_free_name(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: forwarded from this function's contract.
-    let wanted = String::from_utf8_lossy(unsafe { bytes(wanted, wanted_len) }).into_owned();
-    let free = match exists {
-        // SAFETY: the callback is valid for `ctx` and any name, as promised.
-        Some(f) => menu::free_name(&wanted, |n| unsafe { f(ctx, n.as_ptr(), n.len()) }),
-        None => wanted,
-    };
-    // SAFETY: `out` as promised above.
-    unsafe { put(free.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: forwarded from this function's contract.
+        let wanted = String::from_utf8_lossy(unsafe { bytes(wanted, wanted_len) }).into_owned();
+        let free = match exists {
+            // SAFETY: the callback is valid for `ctx` and any name, as promised.
+            Some(f) => menu::free_name(&wanted, |n| unsafe { f(ctx, n.as_ptr(), n.len()) }),
+            None => wanted,
+        };
+        // SAFETY: `out` as promised above.
+        unsafe { put(free.as_bytes(), out, cap) }
+    })
 }
 
 /// Adds (`add`) or removes the NUL-separated `names` in the text of a

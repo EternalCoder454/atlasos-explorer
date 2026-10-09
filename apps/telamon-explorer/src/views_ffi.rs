@@ -31,31 +31,33 @@ pub unsafe extern "C" fn telamon_group_of(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let Some(by) = GroupBy::from_code(by).filter(|b| *b != GroupBy::None) else {
-        return 0;
-    };
-    // SAFETY: forwarded from this function's contract.
-    let (key, kind) = unsafe { (bytes(key, key_len), bytes(kind, kind_len)) };
-    let kind = String::from_utf8_lossy(kind);
-    let input = GroupInput {
-        key,
-        is_dir,
-        kind: &kind,
-        mtime,
-    };
-    let (mut order, label) = group::group_of(
-        by,
-        &input,
-        Clock {
-            now,
-            tz,
-            week_start,
-        },
-    );
-    order.push(0);
-    order.extend_from_slice(label.as_bytes());
-    // SAFETY: forwarded from this function's contract.
-    unsafe { put(&order, out, cap) }
+    crate::ffi::guarded(0, || {
+        let Some(by) = GroupBy::from_code(by).filter(|b| *b != GroupBy::None) else {
+            return 0;
+        };
+        // SAFETY: forwarded from this function's contract.
+        let (key, kind) = unsafe { (bytes(key, key_len), bytes(kind, kind_len)) };
+        let kind = String::from_utf8_lossy(kind);
+        let input = GroupInput {
+            key,
+            is_dir,
+            kind: &kind,
+            mtime,
+        };
+        let (mut order, label) = group::group_of(
+            by,
+            &input,
+            Clock {
+                now,
+                tz,
+                week_start,
+            },
+        );
+        order.push(0);
+        order.extend_from_slice(label.as_bytes());
+        // SAFETY: forwarded from this function's contract.
+        unsafe { put(&order, out, cap) }
+    })
 }
 
 /// Whether the groups come in the opposite order of their keys for this sort
@@ -226,11 +228,13 @@ pub extern "C" fn telamon_views_limit(which: u32) -> usize {
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_views_mode_name(mode: u32, out: *mut u8, cap: usize) -> usize {
-    match Mode::from_code(mode) {
-        // SAFETY: `out` as promised.
-        Some(m) => unsafe { put(m.name().as_bytes(), out, cap) },
-        None => 0,
-    }
+    crate::ffi::guarded(0, || {
+        match Mode::from_code(mode) {
+            // SAFETY: `out` as promised.
+            Some(m) => unsafe { put(m.name().as_bytes(), out, cap) },
+            None => 0,
+        }
+    })
 }
 
 /// The code of a view mode's name; -1 for a name that is none.

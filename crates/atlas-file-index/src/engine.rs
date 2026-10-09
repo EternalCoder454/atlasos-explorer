@@ -481,7 +481,9 @@ fn write_snapshot(index: &Index, cache_home: &Path, excl_hash: u32) {
     // process on the bus may send them) would otherwise rewrite and sync the
     // whole file over and over: an index that is what was saved is not saved
     // again. The body checksum is at bytes 40..44 and does not cover the time.
-    static LAST: Mutex<Option<(PathBuf, u32, (u64, i128))>> = Mutex::new(None);
+    /// The cache folder, the body checksum and the file's size and time as written.
+    type Saved = (PathBuf, u32, (u64, i128));
+    static LAST: Mutex<Option<Saved>> = Mutex::new(None);
     let body = bytes
         .get(40..44)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));

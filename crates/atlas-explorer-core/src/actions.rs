@@ -573,8 +573,9 @@ fn has_placeholder(word: &str) -> bool {
     false
 }
 
-/// `Some` when `program` is an interpreter and a placeholder sits in the word
-/// it is told to run as code (`-c`, `-e`... then the next word, or the same
+/// A check that catches the usual ways (it is not a parser for every
+/// interpreter): `Some` when `program` is an interpreter and a placeholder
+/// sits in the word it is told to run as code (`-c`, `-e`... then the next word, or the same
 /// word for `--eval=...` and `-ecode`).
 fn placeholder_in_code(program: &str, args: &str) -> Option<Problem> {
     let base = Path::new(program.trim())
@@ -586,8 +587,28 @@ fn placeholder_in_code(program: &str, args: &str) -> Option<Problem> {
         return None;
     }
     let words = split_words(args).ok()?;
+    // awk's program is its first word that is not an option.
+    if matches!(stem, "awk" | "gawk" | "mawk")
+        && words
+            .iter()
+            .find(|w| !w.starts_with('-'))
+            .is_some_and(|w| has_placeholder(w))
+    {
+        return Some(Problem::PlaceholderInCode);
+    }
     let mut code_next = false;
     for w in &words {
+        // `-lane`, `-Sc`: a cluster of short options ending in the one that
+        // takes the code makes the next word code
+        let cluster_code = w.len() > 2
+            && w.starts_with('-')
+            && !w.starts_with("--")
+            && w[1..].bytes().all(|b| b.is_ascii_alphabetic())
+            && matches!(w.as_bytes()[w.len() - 1], b'c' | b'e' | b'E' | b'r');
+        if cluster_code {
+            code_next = true;
+            continue;
+        }
         if code_next && has_placeholder(w) {
             return Some(Problem::PlaceholderInCode);
         }
@@ -1040,6 +1061,19 @@ mod tests {
             None
         );
         assert_eq!(placeholder_in_code("python3", "script.py %F"), None);
+        for (prog, args) in [
+            ("perl", "-lane 'system(\"%f\")'"),
+            ("python3", "-Sc 'x=\"%f\"'"),
+            ("gawk", "'{ system(\"%f\") }'"),
+            ("awk", "-F: '{print \"%f\"}'"),
+        ] {
+            assert_eq!(
+                placeholder_in_code(prog, args),
+                Some(Problem::PlaceholderInCode),
+                "{prog} {args}"
+            );
+        }
+        assert_eq!(placeholder_in_code("awk", "'{print $1}' %f"), None);
         assert_eq!(placeholder_in_code("python3", "-c '100%%'"), None);
         assert_eq!(placeholder_in_code("convert", "-c %f"), None);
     }

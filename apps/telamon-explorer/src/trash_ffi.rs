@@ -115,14 +115,16 @@ pub unsafe extern "C" fn telamon_trash_log_line(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    if report.is_null() {
-        return 0;
-    }
-    // SAFETY: `report` points to a report (contract above).
-    let r: Report = unsafe { &*report }.into();
-    let line = trash::log_line(&r, days, applied);
-    // SAFETY: forwarded from this function's contract.
-    unsafe { put(line.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        if report.is_null() {
+            return 0;
+        }
+        // SAFETY: `report` points to a report (contract above).
+        let r: Report = unsafe { &*report }.into();
+        let line = trash::log_line(&r, days, applied);
+        // SAFETY: forwarded from this function's contract.
+        unsafe { put(line.as_bytes(), out, cap) }
+    })
 }
 
 /// Whether an item of the Trash may be put back at `target` (see

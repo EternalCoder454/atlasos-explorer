@@ -305,8 +305,32 @@ void FileActions::restore(const QList<QUrl> &urls)
         // Its items are `trash:/<id>-name`, id 0 being the home Trash.
         const QString target = QDir::cleanPath(original);
         const bool fromHome = u.path().startsWith(QLatin1String("/0-"));
-        const QByteArray t = QFile::encodeName(target), h = QFile::encodeName(QDir::homePath());
-        if (!telamon_trash_restore_allowed(fromHome, reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), reinterpret_cast<const uint8_t *>(h.constData()), size_t(h.size()))) {
+        // The rule is about places, and a place has more than one spelling:
+        // `/home/u` is `/var/home/u` here, and a link on the drive can lead
+        // to the home folder. The target is checked as written and with the
+        // links in its existing part resolved, against the home folder as
+        // both spellings.
+        bool allowed = true;
+        if (!fromHome) {
+            QString resolved = target;
+            QString tail;
+            QString probe = target;
+            while (!probe.isEmpty() && !QFileInfo::exists(probe) && probe != QLatin1String("/")) {
+                tail = QLatin1Char('/') + QFileInfo(probe).fileName() + tail;
+                probe = QFileInfo(probe).path();
+            }
+            const QString real = QFileInfo(probe).canonicalFilePath();
+            if (!real.isEmpty()) {
+                resolved = QDir::cleanPath(real + tail);
+            }
+            for (const QString &home : {QDir::homePath(), QFileInfo(QDir::homePath()).canonicalFilePath()}) {
+                for (const QString &place : {target, resolved}) {
+                    const QByteArray t = QFile::encodeName(place), h = QFile::encodeName(home);
+                    allowed = allowed && telamon_trash_restore_allowed(false, reinterpret_cast<const uint8_t *>(t.constData()), size_t(t.size()), reinterpret_cast<const uint8_t *>(h.constData()), size_t(h.size()));
+                }
+            }
+        }
+        if (!allowed) {
             ++unsafePlaces;
             continue;
         }

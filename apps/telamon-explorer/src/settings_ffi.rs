@@ -399,8 +399,10 @@ pub unsafe extern "C" fn telamon_menuprefs_set(
 /// `out` points to `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_menuprefs_builtin(out: *mut u8, cap: usize) -> usize {
-    // SAFETY: `out` as promised.
-    unsafe { put(menuprefs::builtin_keys().join("\n").as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: `out` as promised.
+        unsafe { put(menuprefs::builtin_keys().join("\n").as_bytes(), out, cap) }
+    })
 }
 
 /// The names of the hidden service-menu actions and plugins, one a line (for
@@ -415,9 +417,11 @@ pub unsafe extern "C" fn telamon_menuprefs_excluded(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let h = Hidden::parse(&text_of(list, list_len));
-    // SAFETY: `out` as promised.
-    unsafe { put(h.excluded_services().join("\n").as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let h = Hidden::parse(&text_of(list, list_len));
+        // SAFETY: `out` as promised.
+        unsafe { put(h.excluded_services().join("\n").as_bytes(), out, cap) }
+    })
 }
 
 /// What a context menu offers (as `telamon_menu_state`) without the entries
@@ -437,15 +441,17 @@ pub unsafe extern "C" fn telamon_menu_state_hiding(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let entries = if kind == 0 {
-        menu::item_menu(count, folders, flags)
-    } else {
-        menu::background_menu(flags)
-    };
-    let h = Hidden::parse(&text_of(hidden, hidden_len));
-    let text = menu::state_text(&h.filter(entries));
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let entries = if kind == 0 {
+            menu::item_menu(count, folders, flags)
+        } else {
+            menu::background_menu(flags)
+        };
+        let h = Hidden::parse(&text_of(hidden, hidden_len));
+        let text = menu::state_text(&h.filter(entries));
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 // ---- Git status badges ----

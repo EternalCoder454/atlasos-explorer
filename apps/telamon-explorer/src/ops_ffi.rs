@@ -420,31 +420,33 @@ pub unsafe extern "C" fn telamon_ops_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: contract.
-    let Some(e) = (unsafe { engine(h) }) else {
-        return 0;
-    };
-    let Some(o) = e.queue.get(id) else {
-        return 0;
-    };
-    let now = e.now();
-    let text = match which {
-        0 => o.label.clone(),
-        1 => match &o.state {
-            State::Failed(why) => why.clone(),
-            _ => String::new(),
-        },
-        _ => optext::progress_line(
-            o.bytes_done,
-            o.bytes_total,
-            o.items_done,
-            o.items_total,
-            o.speed(now),
-            o.time_left(now),
-        ),
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: contract.
+        let Some(e) = (unsafe { engine(h) }) else {
+            return 0;
+        };
+        let Some(o) = e.queue.get(id) else {
+            return 0;
+        };
+        let now = e.now();
+        let text = match which {
+            0 => o.label.clone(),
+            1 => match &o.state {
+                State::Failed(why) => why.clone(),
+                _ => String::new(),
+            },
+            _ => optext::progress_line(
+                o.bytes_done,
+                o.bytes_total,
+                o.items_done,
+                o.items_total,
+                o.speed(now),
+                o.time_left(now),
+            ),
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// Removes a finished operation from the list (1), or every finished one (0
@@ -515,13 +517,15 @@ pub unsafe extern "C" fn telamon_hist_titles(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: contract.
-    let Some(e) = (unsafe { engine(h) }) else {
-        return 0;
-    };
-    let text = e.history.titles(side_from(side)).join("\n");
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: contract.
+        let Some(e) = (unsafe { engine(h) }) else {
+            return 0;
+        };
+        let text = e.history.titles(side_from(side)).join("\n");
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The paths to look at before `telamon_hist_plan` (`after` 0), or before
@@ -537,19 +541,21 @@ pub unsafe extern "C" fn telamon_hist_paths(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: contract.
-    let Some(e) = (unsafe { engine(h) }) else {
-        return 0;
-    };
-    let side = side_from(side);
-    let paths = if after {
-        e.history.paths_after(side)
-    } else {
-        e.history.paths(side)
-    };
-    let text = paths.join("\n");
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: contract.
+        let Some(e) = (unsafe { engine(h) }) else {
+            return 0;
+        };
+        let side = side_from(side);
+        let paths = if after {
+            e.history.paths_after(side)
+        } else {
+            e.history.paths(side)
+        };
+        let text = paths.join("\n");
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// What the next undo (`side` 0) or redo (1) would do, given how the paths
@@ -624,22 +630,24 @@ pub unsafe extern "C" fn telamon_hist_complete(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: contract.
-    let Some(e) = (unsafe { engine(h) }) else {
-        return 0;
-    };
-    let states = undo::parse_states(&string(states, states_len));
-    let trash_urls: HashMap<String, String> = string(trashes, trashes_len)
-        .lines()
-        .filter_map(|l| l.split_once('\t'))
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect();
-    let title = e
-        .history
-        .complete(side_from(side), &states, &trash_urls)
-        .unwrap_or_default();
-    // SAFETY: `out` as promised.
-    unsafe { put(title.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: contract.
+        let Some(e) = (unsafe { engine(h) }) else {
+            return 0;
+        };
+        let states = undo::parse_states(&string(states, states_len));
+        let trash_urls: HashMap<String, String> = string(trashes, trashes_len)
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        let title = e
+            .history
+            .complete(side_from(side), &states, &trash_urls)
+            .unwrap_or_default();
+        // SAFETY: `out` as promised.
+        unsafe { put(title.as_bytes(), out, cap) }
+    })
 }
 
 /// The undo or redo failed or can't run any more: the entry is dropped.
@@ -679,29 +687,31 @@ pub unsafe extern "C" fn telamon_op_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let Some(kind) = kind_from(kind) else {
-        return 0;
-    };
-    let names: Vec<String> = string(names, names_len)
-        .lines()
-        .map(str::to_string)
-        .collect();
-    let to = string(to, to_len);
-    let new_name = string(new_name, new_len);
-    let about = About {
-        kind,
-        names: &names,
-        count,
-        to: (!to.is_empty()).then_some(to.as_str()),
-        new_name: (!new_name.is_empty()).then_some(new_name.as_str()),
-    };
-    let text = if which == 0 {
-        optext::title(&about)
-    } else {
-        optext::running(&about)
-    };
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let Some(kind) = kind_from(kind) else {
+            return 0;
+        };
+        let names: Vec<String> = string(names, names_len)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let to = string(to, to_len);
+        let new_name = string(new_name, new_len);
+        let about = About {
+            kind,
+            names: &names,
+            count,
+            to: (!to.is_empty()).then_some(to.as_str()),
+            new_name: (!new_name.is_empty()).then_some(new_name.as_str()),
+        };
+        let text = if which == 0 {
+            optext::title(&about)
+        } else {
+            optext::running(&about)
+        };
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// A size in words ("4.2 GiB").
@@ -710,8 +720,10 @@ pub unsafe extern "C" fn telamon_op_text(
 /// `out` has `cap` writable bytes (or is null).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn telamon_format_size(bytes: u64, out: *mut u8, cap: usize) -> usize {
-    // SAFETY: `out` as promised.
-    unsafe { put(optext::format_size(bytes).as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: `out` as promised.
+        unsafe { put(optext::format_size(bytes).as_bytes(), out, cap) }
+    })
 }
 
 /// The buttons a conflict offers: bit 0 replace, 1 merge, 2 keep both, 3 skip,
@@ -796,16 +808,18 @@ pub unsafe extern "C" fn telamon_keep_both(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    // SAFETY: contract.
-    let (dir, name) = unsafe { (bytes(dir, dir_len), bytes(name, name_len)) };
-    let name = String::from_utf8_lossy(name).into_owned();
-    let dir = (!dir.is_empty()).then(|| PathBuf::from(std::ffi::OsStr::from_bytes(dir)));
-    let kept = atlas_explorer_core::names::keep_both_name(&name, |candidate| {
-        dir.as_ref()
-            .is_some_and(|d| std::fs::symlink_metadata(d.join(candidate)).is_ok())
-    });
-    // SAFETY: `out` as promised.
-    unsafe { put(kept.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        // SAFETY: contract.
+        let (dir, name) = unsafe { (bytes(dir, dir_len), bytes(name, name_len)) };
+        let name = String::from_utf8_lossy(name).into_owned();
+        let dir = (!dir.is_empty()).then(|| PathBuf::from(std::ffi::OsStr::from_bytes(dir)));
+        let kept = atlas_explorer_core::names::keep_both_name(&name, |candidate| {
+            dir.as_ref()
+                .is_some_and(|d| std::fs::symlink_metadata(d.join(candidate)).is_ok())
+        });
+        // SAFETY: `out` as promised.
+        unsafe { put(kept.as_bytes(), out, cap) }
+    })
 }
 
 /// Whether URL or path `dest` is `source` or inside it (text compare of clean,
@@ -820,7 +834,9 @@ pub unsafe extern "C" fn telamon_is_inside(
     dest: *const u8,
     dest_len: usize,
 ) -> bool {
-    preflight::is_inside(&string(source, source_len), &string(dest, dest_len))
+    crate::ffi::guarded(true, || {
+        preflight::is_inside(&string(source, source_len), &string(dest, dest_len))
+    })
 }
 
 /// The refusal for a folder into itself, in plain words. `transfer` 0 copy,
@@ -840,19 +856,21 @@ pub unsafe extern "C" fn telamon_into_itself_text(
     out: *mut u8,
     cap: usize,
 ) -> usize {
-    let t = if transfer == 0 {
-        Transfer::Copy
-    } else {
-        Transfer::Move
-    };
-    let text = preflight::into_itself_text(
-        t,
-        &string(folder, folder_len),
-        &string(dest, dest_len),
-        same,
-    );
-    // SAFETY: `out` as promised.
-    unsafe { put(text.as_bytes(), out, cap) }
+    crate::ffi::guarded(0, || {
+        let t = if transfer == 0 {
+            Transfer::Copy
+        } else {
+            Transfer::Move
+        };
+        let text = preflight::into_itself_text(
+            t,
+            &string(folder, folder_len),
+            &string(dest, dest_len),
+            same,
+        );
+        // SAFETY: `out` as promised.
+        unsafe { put(text.as_bytes(), out, cap) }
+    })
 }
 
 /// The checks before a local copy (`transfer` 0) or move (1): a folder into
