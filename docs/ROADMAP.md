@@ -526,11 +526,12 @@ Needs: Wave 7 (menu), others for content.
 
 Gathered from the 16 waves' rows. Functionable is done; this list drives the next phases.
 
-**Secure**
-- Archives are parsed inside the Files process by kio-extras (W9); untrusted-file parsers in process: `lopdf`, JPEG rotation, KFileMetaData, the content reader. Fuzz them, or move them to a helper process; run `pdftotext` (W15) and `git` (W16) under landlock or bwrap.
-- Custom actions (W16): shells are refused by name, interpreters with `-c`/`-e` are not; consider a reduced environment and showing the real command.
-- D-Bus: `FileManager1` and `Search1` take any process of the user; `Reload()` (W16) lets one end the index service. Decide what to restrict.
-- Servers (W11): SMB isn't marked "Not encrypted"; "Preview Files on Servers" downloads up to 5 MB per file. Bound every flat settings key, as the lists already are. Audit and pin `lopdf`, `regex`, `zbus`.
+**Secure** (done in the Secure phase, `docs/SECURITY.md`; what is left)
+- Untrusted-file parsers still in the Files process: KFileMetaData (Details columns, Properties), `QImageReader::size`, `lopdf` and the JPEG rotation (bounded and panic-contained), archives opened as folders by kio-extras. Move them to a helper process with a seccomp/Landlock profile; run `pdftotext` and `git` under Landlock or bubblewrap (they have resource limits and a process group now).
+- Files extracted from an archive through KIO keep the archive's mode bits (setuid, setgid) and the room check trusts the declared sizes.
+- D-Bus: `Search1` (`Refresh`, `NotifyChanged`, `Reload`), the Archive1 and Search1 well-known names are not authenticated (same-user squatting).
+- Recursive chmod resolves the parent path by name (the last component is opened without following links).
+- Bound every flat settings key, as the lists already are; keep `lopdf`, `regex`, `zbus` current (`cargo-deny` runs weekly).
 
 **Reliable**
 - No operation journal or crash recovery (W6); Replace/Merge and Hide can't be undone; Eject doesn't wait for the queue; the room check is once, local only.

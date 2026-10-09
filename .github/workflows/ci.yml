@@ -104,6 +104,11 @@ jobs:
       - name: QML lint
         run: qmllint-qt6 apps/telamon-explorer/qml/*.qml
 
+      # Names, paths, server answers and file content are untrusted: no text
+      # item reads them as markup.
+      - name: QML text is plain
+        run: python3 -I scripts/check-qml-plaintext.py apps/telamon-explorer/qml
+
       # atlas-framework's design rules (no default buttons, no QML file named
       # like a Telamon.Ui type), from the framework tag baked into the image.
       - name: Telamon design rules
@@ -112,7 +117,7 @@ jobs:
           "$ATLAS_FRAMEWORK/tools/check-app-names.sh" .
 
       - name: Shell scripts
-        run: shellcheck scripts/*.sh ci/*.sh packaging/*.sh
+        run: shellcheck scripts/*.sh ci/*.sh packaging/*.sh tests/gui/bus-surface.sh
 
       - name: Desktop files and metainfo
         run: |

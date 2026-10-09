@@ -1193,7 +1193,11 @@ still opens tabs until multiple windows exist) and raises it with the launcher's
 activation token. Arguments are parsed in Rust (`atlas_explorer_core::launch`):
 at most 64 read, local paths resolved against the caller's working directory,
 URLs must have a scheme KIO knows (`KProtocolInfo::isKnownProtocol`) and no
-control or bidi characters. Anything else is refused and shown as plain text.
+control or bidi characters (percent-encoded ones included). Anything else is
+refused and shown as plain text. A server address (`smb`, `sftp`, `fish`,
+`ftp`, `webdav`, `nfs`) has its password taken out and its user and host
+checked. `--bus` (put first by the code that takes a D-Bus call; harmless
+from a shell) additionally refuses servers and devices.
 
 ### org.freedesktop.FileManager1
 
@@ -1812,6 +1816,9 @@ its copy succeeded. What Explorer adds:
 
 ## Trust
 
+The threat model, the defences and their tests are in `docs/SECURITY.md`; this
+is the rule list the code is held to.
+
 Untrusted input, checked where it enters:
 
 - **File names** from any filesystem or server: shown through
@@ -1862,7 +1869,11 @@ Untrusted input, checked where it enters:
   the real place the Trash's worker reports for a `trash:` item; no other
   worker's answer is used as a path. Pictures are decoded by the thumbnailer
   process, only their header is read here (`QImageReader::size`, SVG
-  excepted). Audio and video play only when the user presses Play.
+  excepted). Audio and video are not opened until the user presses Play
+  (opening hands the file to the media library's demuxer): until then their
+  length and picture size are not known. The Details columns Dimensions,
+  Duration and Date Taken and the Properties dialog read KFileMetaData in this
+  process (a Secure-phase item that is left open: SECURITY.md).
 - **Search inside files:** the content of a file is read line by line by the
   core and never kept; the only thing that leaves the worker is one snippet a
   file, with controls, bidi and invisible characters made visible and shown
@@ -1872,11 +1883,26 @@ Untrusted input, checked where it enters:
   absolute path argument (a file named `-q.pdf` is a path), no shell, an empty
   environment and a time and output cap. Patterns are compiled by the linear
   `regex` engine with caps on length, size and nesting.
-- **D-Bus callers** (FileManager1, Window1, Search1): any process in the
-  session. Arguments are capped and parsed like launch arguments; nothing
-  they send is executed or opened with an app.
-- **Drops** from other apps: URL lists are validated; raw data (text,
-  images) is saved only after the user names the file.
+- **D-Bus callers** (FileManager1, `org.freedesktop.Application`, Search1):
+  any process in the session. Arguments are capped and parsed like launch
+  arguments, with `--bus` first: a caller gets no server (`smb`, `sftp`, `fish`,
+  `ftp`, `webdav`, `nfs`) and no device (`mtp`, `afc`) opened for it; nothing
+  they send is executed or opened with an app. KDBusService's
+  `/MainApplication` (the whole Qt application object: `quit()`,
+  `closeAllWindows()`, `setStyleSheet()`) is unregistered at start.
+- **Launch and address text**: a server address is rebuilt without its
+  password (KIO asks), a user or host that starts with `-`, holds `%` or is
+  not a plain name is refused, as are percent-encoded controls and direction
+  characters; the address bar takes only the schemes Files browses.
+- **Drops and the clipboard** from other apps: lists are capped at 100,000
+  items per operation; raw data (text, images) is saved only after the user
+  names the file.
+- **The Trash of another drive** puts nothing back into a hidden place of the
+  home folder (`trash::restore_allowed`): its `.trashinfo` is whatever the
+  drive holds.
+- **Children** (`pdftotext`, `git`): `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_CORE`,
+  `RLIMIT_NOFILE`, their own process group (`childlimits`).
+- **Panics** at the C ABI are contained (`ffi::guarded`).
 - **Remote servers:** credentials go through KIO's password server
   (kiod, KWallet); Explorer never stores or logs them. Connect to Server has
   no password field, builds its address from checked fields (hostile input is

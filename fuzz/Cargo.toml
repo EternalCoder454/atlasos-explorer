@@ -1,0 +1,66 @@
+[package]
+name = "telamon-explorer-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "cargo-fuzz targets for the parsers that read untrusted input (run: cargo fuzz run <target>)"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Not part of the app's workspace: libfuzzer-sys is built only for fuzzing.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+atlas-explorer-core = { path = "../crates/atlas-explorer-core" }
+atlas-file-index = { path = "../crates/atlas-file-index" }
+
+[profile.release]
+debug = true
+overflow-checks = true
+debug-assertions = true
+
+[[bin]]
+name = "archive_entries"
+path = "fuzz_targets/archive_entries.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trashinfo"
+path = "fuzz_targets/trashinfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "addresses"
+path = "fuzz_targets/addresses.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "names"
+path = "fuzz_targets/names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settings"
+path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot"
+path = "fuzz_targets/snapshot.rs"
+test = false
+doc = false
+bench = false
+
