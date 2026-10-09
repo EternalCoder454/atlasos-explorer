@@ -11,12 +11,15 @@ const MAX_ENTRIES: usize = 100_000;
 
 /// `(absolute path, last use as seconds since the epoch)`.
 pub fn load(path: &Path) -> Vec<(Vec<u8>, i64)> {
-    let f = match std::fs::File::open(path) {
+    let f = match crate::config::open_regular(path, true) {
         Ok(f) => f,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
                 log::warn!("recent files not read: {e}");
-                log::debug!("recent files file: {}", path.display());
+                log::debug!(
+                    "recent files file: {}",
+                    atlas_explorer_core::display::display_name(path)
+                );
             }
             return Vec::new();
         }
@@ -24,7 +27,10 @@ pub fn load(path: &Path) -> Vec<(Vec<u8>, i64)> {
     let mut buf = Vec::new();
     if let Err(e) = f.take(MAX_FILE).read_to_end(&mut buf) {
         log::warn!("recent files not read: {e}");
-        log::debug!("recent files file: {}", path.display());
+        log::debug!(
+            "recent files file: {}",
+            atlas_explorer_core::display::display_name(path)
+        );
         return Vec::new();
     }
     parse(&String::from_utf8_lossy(&buf))

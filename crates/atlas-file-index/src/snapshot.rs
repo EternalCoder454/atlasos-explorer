@@ -36,7 +36,7 @@
 //! the file is opened with `O_NOFOLLOW` and must be a regular file of the user's
 //! own; it is written to a temp file, synced, then renamed.
 
-use crate::index::{Index, MAX_ARENA, MAX_RECORDS, Record, TagRef, TagTable};
+use crate::index::{Index, MAX_ARENA, MAX_RECORDS, MAX_TAG_ARENA, Record, TagRef, TagTable};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
@@ -53,8 +53,10 @@ const FILE_NAME: &str = "v2.idx";
 const TMP_NAME: &str = "v2.idx.tmp";
 /// The names of the version before: removed when a snapshot is written.
 const OLD_NAMES: [&str; 2] = ["v1.idx", "v1.idx.tmp"];
-/// Largest snapshot file read or written.
-pub const MAX_FILE: u64 = 512 * 1024 * 1024;
+/// Largest snapshot file read or written: the records, the arena and the tags
+/// at their limits (see `index::MAX_ARENA`), and well below the service's
+/// memory ceiling when the file is read.
+pub const MAX_FILE: u64 = 384 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotError {
@@ -176,7 +178,8 @@ pub fn decode_with(
     let arena_len = le64(bytes, 24);
     let tag_n = le32(bytes, 48) as usize;
     let tag_arena_len = le32(bytes, 52) as usize;
-    if n > MAX_RECORDS || arena_len > MAX_ARENA as u64 || tag_n > n || tag_arena_len > MAX_ARENA {
+    if n > MAX_RECORDS || arena_len > MAX_ARENA as u64 || tag_n > n || tag_arena_len > MAX_TAG_ARENA
+    {
         return Err(Corrupt("counts out of range"));
     }
     let arena_len = arena_len as usize;
@@ -608,6 +611,13 @@ mod tests {
         });
         bad("tag arena length huge", &|b| {
             b[52..56].copy_from_slice(&u32::MAX.to_le_bytes())
+        });
+        // Under u32, but over what the service's memory allows.
+        bad("arena past the memory limit", &|b| {
+            b[24..32].copy_from_slice(&(MAX_ARENA as u64 + 1).to_le_bytes())
+        });
+        bad("tag arena past the memory limit", &|b| {
+            b[52..56].copy_from_slice(&(MAX_TAG_ARENA as u32 + 1).to_le_bytes())
         });
         bad("tag arena length short", &|b| {
             let n = le32(b, 52) - 1;

@@ -4,3 +4,8 @@
 
 # Benchmark log (kept on the machine, not in git)
 benchmarks.md
+
+# cargo-fuzz: build output, working corpora and crashing inputs
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/

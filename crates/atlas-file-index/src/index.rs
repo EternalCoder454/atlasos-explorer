@@ -17,8 +17,14 @@ pub const NONE: u32 = u32::MAX;
 pub const MAX_RECORDS: usize = 4_000_000;
 /// Most levels `path_of` and `fold_path_into` follow.
 const PATH_LEVELS: usize = 4096;
-/// Arena size limit: offsets are `u32`.
-pub const MAX_ARENA: usize = u32::MAX as usize - (1 << 20);
+/// Arena size limit. Offsets are `u32`, but the limit is set by memory: the
+/// service unit's `MemoryMax` is 1 GiB, and loading a snapshot holds the file,
+/// a copy of the arena and the records at once (about 650 MiB at these
+/// limits). A bigger index stops the scan as "full" instead of the kernel
+/// killing the service, which would repeat on every start.
+pub const MAX_ARENA: usize = 160 << 20;
+/// Limit of the tag text (tags are short and few).
+pub const MAX_TAG_ARENA: usize = 16 << 20;
 
 pub const FLAG_DIR: u8 = 1;
 pub const FLAG_HIDDEN: u8 = 2;
@@ -156,7 +162,7 @@ impl IndexBuilder {
         if text.is_empty()
             || id as usize >= self.recs.len()
             || self.tags.refs.last().is_some_and(|r| r.id >= id)
-            || self.tags.arena.len() + text.len() > MAX_ARENA
+            || self.tags.arena.len() + text.len() > MAX_TAG_ARENA
             || text.len() > usize::from(u16::MAX)
         {
             return;
@@ -319,7 +325,7 @@ impl Index {
         if recs.len() > MAX_RECORDS
             || arena.len() > MAX_ARENA
             || tag_table.refs.len() > recs.len()
-            || tag_table.arena.len() > MAX_ARENA
+            || tag_table.arena.len() > MAX_TAG_ARENA
         {
             return Err(Invalid("too large"));
         }

@@ -220,16 +220,7 @@ impl Search1 {
     /// D-Bus activation with the new folders. An addition to Search1; the
     /// Launcher does not call it.
     async fn reload(&self) {
-        let spawned = std::thread::Builder::new().name("reload".into()).spawn(|| {
-            // After the reply has gone out.
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            // SAFETY: kill on our own pid with a valid signal number; main
-            // waits for SIGTERM and shuts down in order.
-            unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
-        });
-        if spawned.is_err() {
-            log::warn!("Reload: could not start the thread that ends the service");
-        }
+        end_service_once();
     }
 
     #[zbus(signal)]
@@ -237,6 +228,27 @@ impl Search1 {
         emitter: &SignalEmitter<'_>,
         status: HashMap<String, OwnedValue>,
     ) -> zbus::Result<()>;
+}
+
+/// Ends the service a moment from now (after the reply has gone out), once:
+/// the process is going, so calls that arrive meanwhile start nothing more (a
+/// caller in a loop cannot pile up threads).
+fn end_service_once() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ENDING: AtomicBool = AtomicBool::new(false);
+    if ENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("reload".into()).spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        // SAFETY: kill on our own pid with a valid signal number; main
+        // waits for SIGTERM and shuts down in order.
+        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+    });
+    if spawned.is_err() {
+        ENDING.store(false, Ordering::Release);
+        log::warn!("Reload: could not start the thread that ends the service");
+    }
 }
 
 /// The same interface under its name before the rename

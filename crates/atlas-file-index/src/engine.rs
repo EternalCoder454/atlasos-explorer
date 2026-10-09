@@ -449,7 +449,10 @@ pub fn normalize_roots(configured: &[PathBuf]) -> Vec<PathBuf> {
             let inner = all.iter().any(|o| o != *r && r.starts_with(o));
             if inner {
                 log::info!("a folder to index is inside another one and is left out");
-                log::debug!("left out: {}", r.display());
+                log::debug!(
+                    "left out: {}",
+                    atlas_explorer_core::display::display_name(*r)
+                );
             }
             !inner
         })
@@ -474,13 +477,34 @@ fn wait_finished(h: &JoinHandle<()>, max: Duration) -> bool {
 fn write_snapshot(index: &Index, cache_home: &Path, excl_hash: u32) {
     let t0 = Instant::now();
     let bytes = snapshot::encode_with(index, now_secs(), excl_hash);
+    // A request to rescan or a hint about a folder that did not change (any
+    // process on the bus may send them) would otherwise rewrite and sync the
+    // whole file over and over: an index that is what was saved is not saved
+    // again. The body checksum is at bytes 40..44 and does not cover the time.
+    static LAST: Mutex<Option<(PathBuf, u32)>> = Mutex::new(None);
+    let body = bytes
+        .get(40..44)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if let Some(body) = body
+        && lock(&LAST)
+            .as_ref()
+            .is_some_and(|(p, c)| p == cache_home && *c == body)
+    {
+        log::debug!("snapshot unchanged, not saved again");
+        return;
+    }
     match CacheDir::open(cache_home, true) {
         Ok(Some(cd)) => match cd.write(&bytes) {
-            Ok(()) => log::debug!(
-                "snapshot saved: {} bytes in {} ms",
-                bytes.len(),
-                t0.elapsed().as_millis()
-            ),
+            Ok(()) => {
+                if let Some(body) = body {
+                    *lock(&LAST) = Some((cache_home.to_path_buf(), body));
+                }
+                log::debug!(
+                    "snapshot saved: {} bytes in {} ms",
+                    bytes.len(),
+                    t0.elapsed().as_millis()
+                )
+            }
             Err(e) => log::error!("snapshot not saved: {e}"),
         },
         Ok(None) => {}
@@ -848,7 +872,10 @@ impl Worker {
                         self.budget = self.id_to_wd.len();
                         break;
                     }
-                    Err(e) => log::debug!("no watch for {}: {e}", path.display()),
+                    Err(e) => log::debug!(
+                        "no watch for {}: {e}",
+                        atlas_explorer_core::display::display_name(&path)
+                    ),
                 }
             }
         }

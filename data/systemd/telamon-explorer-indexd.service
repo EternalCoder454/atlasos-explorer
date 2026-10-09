@@ -57,3 +57,8 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
 SystemCallErrorNumber=EPERM
 UMask=0077
+# No keyring of its own to share, no SysV IPC, and no core dump: one would hold
+# every indexed file name.
+KeyringMode=private
+PrivateIPC=yes
+LimitCORE=0
