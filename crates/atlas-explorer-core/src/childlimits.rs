@@ -116,8 +116,13 @@ mod tests {
         kill_group(child.id());
         let _ = child.wait();
         std::thread::sleep(std::time::Duration::from_millis(200));
-        // SAFETY: signal 0 only asks whether the process is there.
-        let alive = unsafe { libc::kill(grandchild, 0) } == 0;
-        assert!(!alive, "the grandchild outlived its group");
+        // A killed process nobody has reaped yet (in a container whose PID 1
+        // doesn't reap) is a zombie: signal 0 still finds it, but it is dead.
+        let stat = std::fs::read_to_string(format!("/proc/{grandchild}/stat")).unwrap_or_default();
+        let state = stat
+            .rsplit_once(") ")
+            .and_then(|(_, rest)| rest.chars().next());
+        let alive = matches!(state, Some(c) if c != 'Z' && c != 'X');
+        assert!(!alive, "the grandchild outlived its group ({stat})");
     }
 }
